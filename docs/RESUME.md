@@ -184,19 +184,20 @@ Three things it changed that are worth knowing before touching this code:
 - **Scope drift.** `merge_ops` refuses a pull request whose files are not all inside its task's
   declared `touches`. Empty `touches` refuses too: it means the question cannot be answered.
 
-1. **Next: D7**, and it is now the largest unknown. There is no retry, no reclaim and no stuck
-   detection, so an agent that opens no pull request leaves the task assigned and the board
-   reading `Dispatched` forever — a silent stall, which is the worst failure mode for something
-   that runs unattended. Every task in the sandbox has *succeeded*, so every failure path in this
-   system is unexercised, and every bug found so far was found by running it.
+**D7 shipped too.** A dispatch that produces no pull request within `retry.stall_after` is
+reclaimed by unassigning the agent — which is the whole retry, because assignment is the lock.
+`attempts` is derived from the issue's assignment history rather than read from a board field
+nothing ever wrote, so the budget can finally fire; it had been structurally stuck at zero since
+D4. `Stuck` is now a status, not just a label, or a spent task advertises itself as `Ready`
+forever. The *stale-heartbeat* half of D7 is still unbuilt, because it needs the daemon of D6.
 
-2. **Then D8 alerting**, which is worth little until D7 gives it something true to say.
+Immediately outstanding, neither a milestone:
 
-3. **Watch `encoding-fallback` finish.** It is `verify: human` with an open draft PR (#8);
-   merging it releases `json-output`, which is deferred behind it on `cli.py`. `stopwords` (#7)
-   is merged. `document-flags` is the remaining `verify: auto` task.
+1. **Watch `encoding-fallback` finish.** It is `verify: human` with an open draft PR (#8);
+   merging it releases `json-output`, which is deferred behind it on `cli.py`. `document-flags`
+   is the remaining `verify: auto` task, and the first end-to-end test of D9's two guardrails.
 
-4. **Decide on the `[WIP]` gap.** `encoding-fallback` reported `In Review` while its PR was still
+2. **Decide on the `[WIP]` gap.** `encoding-fallback` reported `In Review` while its PR was still
    titled `[WIP]` and the agent was still pushing to it. Nobody can review that. `draft` cannot
    separate it, since Copilot leaves finished PRs in draft too; the signal is the
    `copilot_work_finished` timeline event, which `STATE_QUERY` does not request.
@@ -281,28 +282,25 @@ Three things it changed that are worth knowing before touching this code:
 
 ## Roadmap
 
-**D7 shipped.** A dispatch that produces no pull request within `retry.stall_after` is reclaimed
-by unassigning the agent, which is the whole retry because assignment is the lock. `attempts` is
-now derived from the issue's assignment history rather than read from a board field nothing ever
-wrote — the budget had been structurally unable to fire since D4. `Stuck` is a status, so a task
-that has spent its budget stops advertising itself as `Ready`.
+Ordered, with the reasoning that put each where it is. Numbers are the design's own: the local
+daemon stays **D6**, deferred rather than renumbered, and alerting stays **D8**. New work starts
+at D10.
 
-
-Ordered, with the reasoning that put each where it is. Two of these start with a probe rather
-than an implementation, because the last two design claims that went unprobed — auto-merge
-semantics and "green means green" — were both wrong.
+Two of these open with a probe rather than an implementation, because the last two design claims
+that went unprobed — auto-merge semantics, and "green" meaning the task's own acceptance passed —
+were both wrong.
 
 | # | Milestone | Why here |
 |---|---|---|
-| **D10** | Plan-authoring contract (skill + doc) | Cheapest real leverage and no new machinery. There is currently *no* document teaching the format — only examples and `validate`'s error messages. |
-| **D11** | `doctor` completeness, then an interactive gated `init` | Two steps, and step one ships value alone. `doctor` becomes the single source of truth for "is this repo set up", and `init` refuses to advance past a failing check. |
-| **D12** | Org + GitHub App auth | Starts with a probe: can an App installation token assign Copilot? If not, the milestone buys nothing. |
-| **D13** | Local runner daemon | Largest new surface, and the only place per-task `model`/`effort` can live. Consumes `dispatch:local`. Inherits D7's failure handling rather than inventing its own. |
+| **D10** | Plan-authoring contract (skill + doc) | Cheapest real leverage, no new machinery. There is currently *no* document teaching the format — only examples and `validate`'s error messages — yet the intended workflow is that an agent writes the graph. |
+| **D11** | `doctor` completeness, then an interactive gated `init` | Two steps; step one ships value alone. `doctor` becomes the single source of truth for "is this repo set up", and `init` refuses to advance past a failing check. The Copilot workflow-approval toggle can never be gated — it has no API — so it stays asserted by a human. |
+| **D12** | Org + GitHub App auth | Opens with a probe: can an App installation token assign Copilot? If it cannot, the milestone buys nothing. Org-first, not org-only: the sandbox is a user repo. |
+| **D8** | Alerting, transition-only | Now has something true to say: D7 produces `Stuck`, the first state worth waking someone for. |
+| **D6** | Local runner daemon | Deferred by choice. Largest new surface, the only place per-task `model`/`effort` could live, and the consumer of the `dispatch:local` label that nothing reads today. It also completes D7, whose stale-heartbeat reclaim has no daemon to reclaim from. |
 
-**D10 before D11** because a correctly configured repo that produces malformed plans still fails,
-and the authoring contract costs least. **D13 last** because it is the only item that adds a
-long-running component, and because a workstation that vanishes mid-task is the hardest test of
-D7's reclaim.
+**D10 before D11** because a correctly configured repo that emits malformed plans still fails, and
+the authoring contract costs least. **D6 last** because it is the only item adding a long-running
+component, and a workstation vanishing mid-task is the hardest test of D7's reclaim.
 
 Smaller items, still worth doing, not milestones:
 

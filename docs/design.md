@@ -598,6 +598,15 @@ real chores on real code rather than no-ops.
 | D7   | Timeout/retry/stuck + stale-heartbeat reclaim          | Fixture with a stalled dispatch and a dead daemon                                             |
 | D8   | Lark alerting with transition-only dedupe              | Fixture asserting one alert, not one per cron pass, plus a non-zero `code` treated as failure |
 | D9   | `verify: auto` merge + subset/fence/drift guardrails   | Negative tests: red CI, fenced path, scope drift                                              |
+| D10  | Plan-authoring contract: schema doc + agent skill      | An agent given only the doc produces a graph `validate` accepts unaided                       |
+| D11  | `doctor` completeness, then interactive gated `init`   | `doctor` red on each defect in turn; `init` refuses to advance past one                       |
+| D12  | Org + GitHub App auth                                  | A probe first: an App installation token assigning Copilot on a live issue                    |
+
+D1–D5.5 and D9 are shipped. D7 is shipped except its stale-heartbeat half, which has no daemon to
+reclaim from and waits on D6. **D6 is deferred by choice, not blocked**, and is now sequenced last:
+it is the only long-running component, the only place per-task `model`/`effort` could live, and the
+sole consumer of the `dispatch:local` label nothing reads today. D8 is worth building now that D7
+produces `Stuck` — the first state worth waking someone for. Order from here: D10, D11, D12, D8, D6.
 
 ### D1 decision record — schema + validator (shipped)
 
