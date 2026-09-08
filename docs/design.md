@@ -1361,6 +1361,49 @@ unanswerable question about whether an agent stayed where it said it would, and 
 those is no.
 
 
+### Decisions taken about work not yet built
+
+Recorded here because each was argued to a conclusion, and re-arguing them later without the
+reasoning would be waste.
+
+**The local lane is an empty socket, and that is the whole answer to "can we choose the model?"**
+`_dispatch_op` handles `Lane.LOCAL` by adding a `dispatch:local` label and nothing else — the
+scheduler cannot reach a workstation, so the label *is* the dispatch, and the claim check treats
+it exactly as assignment is treated for cloud. The symmetry is deliberate and preserves the
+assignment-is-the-lock property. But no daemon consumes it, so `caps.local = 1` is not a
+conservative default, it is moot.
+
+This settles the model/thinking-effort question. For cloud, dispatch is "assign Copilot to this
+issue" and there is no parameter to carry a model on. For local, *we* would write the runner, so
+we own the invocation and per-task `model`/`effort` become ordinary graph fields. It is therefore
+a local-lane feature, and an argument for building the daemon rather than a separate deliverable.
+
+**Setup can be gated by `doctor`, except at one step, permanently.** Making `doctor` the single
+source of truth and having `init` refuse to advance past a failing check is strictly better than
+today's print-and-hope. But the Copilot workflow-approval setting is not exposed over REST, which
+is why it already lives in `MANUAL_STEPS` apart from the steps with a copyable command. That step
+can only ever be asserted by a human. Since it is also a genuine trust decision — turning it off
+lets unreviewed agent code run your workflows — a forced pause there is arguably correct, and the
+design should say so rather than imply the gate is complete.
+
+**Org-first, not org-only.** The awkward token has one root cause: user-owned Projects reject
+fine-grained tokens, which forces a classic PAT holding broad `repo` and `project` scope. An org
+Project with a GitHub App removes that, giving short-lived installation tokens and per-repo scope
+— a security improvement, not merely fewer steps. But dropping user repos is an amputation, and
+the load-bearing unknown is whether an App installation token can assign Copilot. Probe before
+committing; if it cannot, the migration buys nothing.
+
+**No external workflow engine.** Temporal, or anything like it, would make scheduling across many
+repos look simpler and would contradict the property the design rests on: there is no stored
+state. Status is recomputed from the issues every pass, and assignment itself is the lock, which
+is why concurrent passes converge with no lease. A workflow engine adds a second source of truth
+about what is running, and the moment it disagrees with GitHub there is a reconciliation problem
+this design does not currently have. Many repos are already served by addition rather than
+coordination: each carries its own cron, independent and stateless. If the pain turns out to be
+seeing every board at once, that is a read-side aggregation problem and does not require moving
+the scheduler. Reconsider only if D7 surfaces state GitHub genuinely cannot express.
+
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once

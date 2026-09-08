@@ -273,12 +273,28 @@ Three things it changed that are worth knowing before touching this code:
   rather than in a real project — and the blast-radius fence already forces `verify: human` for
   anything touching workflows or config, so a buggy dispatcher cannot merge its own broken fix.
 
-## Backlog worth dispatching once D5 is proven
+## Roadmap
 
-Real, small, independently useful — exactly what the design asks test tasks to be:
+Ordered, with the reasoning that put each where it is. Two of these start with a probe rather
+than an implementation, because the last two design claims that went unprobed — auto-merge
+semantics and "green means green" — were both wrong.
+
+| # | Milestone | Why here |
+|---|---|---|
+| **D7** | Retry / reclaim / stuck | Next. Every failure path is unexercised, and an agent that opens no pull request stalls silently and forever. Everything below assumes the pipeline survives failure. |
+| **D10** | Plan-authoring contract (skill + doc) | Cheapest real leverage and no new machinery. There is currently *no* document teaching the format — only examples and `validate`'s error messages. |
+| **D11** | `doctor` completeness, then an interactive gated `init` | Two steps, and step one ships value alone. `doctor` becomes the single source of truth for "is this repo set up", and `init` refuses to advance past a failing check. |
+| **D12** | Org + GitHub App auth | Starts with a probe: can an App installation token assign Copilot? If not, the milestone buys nothing. |
+| **D13** | Local runner daemon | Largest new surface, and the only place per-task `model`/`effort` can live. Consumes `dispatch:local`. Inherits D7's failure handling rather than inventing its own. |
+
+**D10 before D11** because a correctly configured repo that produces malformed plans still fails,
+and the authoring contract costs least. **D13 last** because it is the only item that adds a
+long-running component, and because a workstation that vanishes mid-task is the hardest test of
+D7's reclaim.
+
+Smaller items, still worth doing, not milestones:
 
 - re-record `search_issues.json` from a real `gh api graphql` response
-- `dispatchkit doctor`: check branch protection and the merge queue (D9's prerequisites)
 - `dispatchkit doctor --json`, so a workflow can gate on it
 - `dispatchkit init`: create the Project itself, once the owner-type question is settled
-- D6: the local daemon — claim, worktree, heartbeat, spend gate
+- add `copilot_work_finished` to `STATE_QUERY`, closing the `[WIP]` gap
