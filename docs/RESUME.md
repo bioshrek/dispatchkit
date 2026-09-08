@@ -6,16 +6,16 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.5 are implemented and green offline. 375 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.5 are implemented and green offline. 384 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
 |------|------|-------|
 | D1 | Task graph schema + validator | done |
 | D2 | Structural lints + plan shape | done |
-| D3 | `apply` (graph → issues + board), idempotent | done, offline only |
+| D3 | `apply` (graph → issues + board), idempotent | **done and proven live**; converges |
 | D4 | Readiness resolver + admission | done |
-| D5 | Cloud dispatch + workflow | code done; `doctor` now runs live, **`apply`/`tick` still never have** |
+| D5 | Cloud dispatch + workflow | `apply` live; **`tick --push` is the last unexecuted mutation** |
 | D5.5 | Block version key, configurable paths/fence, `doctor`, `init` | **done and proven live**; board bootstrap converges |
 | D6–D9 | Local daemon, retry/reclaim, alerting, auto-merge | designed, unbuilt |
 
@@ -50,27 +50,33 @@ The shorthand the remaining steps use:
 S="--root ../dispatchkit-sandbox --repo bioshrek/dispatchkit-sandbox --project 2"
 ```
 
-1. **Write the first plan graph** — `../dispatchkit-sandbox/docs/plans/<plan>.tasks.toml`. Per
-   the design's "synthetic tasks, but never no-ops" rule these must be real chores producing real
-   diffs and real CI time. The sandbox README lists four, chosen to be exactly that: `--top N`,
-   stopword filtering, `--json` output, and an encoding fallback.
+The plan graph is written and applied: `wordfreq`, five tasks, issues #1–#5 on the board. The
+fixture question is settled — the real response matched the generated one exactly, and the real
+one is now recorded as `tests/fixtures/live_state.json`. See the D5 live run record in
+`design.md`. The lints earned their keep while the graph was written, catching a serial pair split
+for nothing and an estimate below the economic floor.
 
-2. **Run the live trial by hand first**, before wiring the workflow — it uses the local `gh`
-   credential, so no PAT is needed yet:
+1. **Dispatch, which is the one thing left.** *This spends a Copilot quota and starts autonomous
+   agent sessions, so it is a deliberate human go/no-go:*
    ```sh
-   uv run dispatchkit apply ../dispatchkit-sandbox/docs/plans/<plan>.tasks.toml --push $S
-   uv run dispatchkit tick  --plan <plan> --push $S
+   uv run dispatchkit tick --plan wordfreq --push $S
    ```
-   The first job here is to **re-record `tests/fixtures/search_issues.json`** from the real
-   response, since today's is renderer-generated.
+   The dry run against the recorded state says it will dispatch `top-n` and `stopwords`, and defer
+   `encoding-fallback` for a file-scope conflict with `top-n`. Re-run the dry run first, since the
+   state moves:
+   ```sh
+   uv run dispatchkit tick --plan wordfreq --state tests/fixtures/live_state.json
+   ```
+   Then check that assignment really is the lock: a second `tick --push` must dispatch nothing,
+   because the two it just assigned have left the ready set.
 
-3. **Then create the real repo**, once the sandbox has proven the path end to end:
+2. **Then create the real repo**, once the sandbox has proven the path end to end:
    ```sh
    gh repo create dispatchkit --public --source . --remote origin --push
    ```
    Then `doctor` → `init --push` → `doctor` against it, as above.
 
-4. **Then automate.** `.github/workflows/dispatchkit.yml` needs `secrets.DISPATCHKIT_TOKEN` plus
+3. **Then automate.** `.github/workflows/dispatchkit.yml` needs `secrets.DISPATCHKIT_TOKEN` plus
    repo variables `DISPATCHKIT_PLAN` and `DISPATCHKIT_PROJECT`. The token must be a PAT:
    `GITHUB_TOKEN` can neither assign the coding agent nor write a user-level Project. Set it with
    a prompt, never as an argv: `gh secret set DISPATCHKIT_TOKEN`.
