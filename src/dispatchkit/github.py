@@ -15,7 +15,7 @@ local database that could disagree with it.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from dispatchkit.model import PullRequest, TaskId
@@ -136,6 +136,10 @@ class Notice:
 class ApplyPlan:
     operations: tuple[Operation, ...]
     notices: tuple[Notice, ...]
+    #: Board item id per task, for items the board *already* held. Without it
+    #: a field change on an issue added by an earlier run has nowhere to be
+    #: written: the executor only learns ids from the items it adds itself.
+    item_ids: Mapping[TaskId, str] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.operations)

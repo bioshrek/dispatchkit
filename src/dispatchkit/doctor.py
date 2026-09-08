@@ -258,8 +258,13 @@ def _workflow_source(facts: LocalFacts) -> Check:
         f"{facts.workflow_path} puts `{source}` on PYTHONPATH, but nothing in this "
         "repository or in the workflow provides it, so every pass will fail with "
         "`No module named dispatchkit`",
-        "dispatchkit init --repo owner/name --project N, which writes a workflow that "
-        "fetches dispatchkit's source itself",
+        # Not "re-run init": it writes the workflow only when there is none,
+        # because overwriting somebody's workflow uninvited is worse than
+        # leaving a stale one. Saying so is the difference between a remedy
+        # and a wild goose chase.
+        f"delete {facts.workflow_path} and re-run `dispatchkit init`, which writes a "
+        "workflow that fetches dispatchkit's source itself; `init` will not overwrite "
+        "a workflow that already exists",
     )
 
 
@@ -283,9 +288,24 @@ def _inputs(diagnostics: Diagnostics) -> Check:
         "workflow-inputs",
         False,
         f"the repository is missing {_quoted(missing)}, so an unattended pass "
-        "runs with no plan, no board or no token",
+        f"runs with {_consequence(missing)}",
         "; ".join(remedy),
     )
+
+
+#: What the absence of each input costs, so the message says only what is true.
+_CONSEQUENCES = {
+    "DISPATCHKIT_PLAN": "no plan",
+    "DISPATCHKIT_PROJECT": "no board",
+    "DISPATCHKIT_TOKEN": "no token",
+}
+
+
+def _consequence(missing: Sequence[str]) -> str:
+    parts = [_CONSEQUENCES[name] for name in missing if name in _CONSEQUENCES]
+    if len(parts) == 1:
+        return parts[0]
+    return f"{', '.join(parts[:-1])} and {parts[-1]}"
 
 
 def parse_token_scopes(text: str) -> tuple[str, ...] | None:

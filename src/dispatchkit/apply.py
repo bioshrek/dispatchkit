@@ -82,6 +82,14 @@ def plan_apply(
     """Diff the graph against GitHub. Pure: no I/O, no client, no ordering surprises."""
     specs = specs or {}
     existing, notices = _index(state, plan=graph.plan)
+    # Captured before the loop pops from `existing`. Every board item that
+    # already exists, so a field operation on an issue an earlier run put on
+    # the board has an id to write to.
+    boarded = {
+        task_id: issue.project_item_id
+        for task_id, issue in existing.items()
+        if issue.project_item_id is not None
+    }
     operations: list[Operation] = []
 
     for task in graph.tasks:
@@ -131,7 +139,7 @@ def plan_apply(
                     "close it by hand — `apply` never deletes",
                 )
             )
-    return ApplyPlan(tuple(operations), tuple(notices))
+    return ApplyPlan(tuple(operations), tuple(notices), item_ids=boarded)
 
 
 def execute_plan(plan: ApplyPlan, api: GitHubApi) -> ApplyResult:
@@ -141,7 +149,7 @@ def execute_plan(plan: ApplyPlan, api: GitHubApi) -> ApplyResult:
         api.ensure_labels(labels)
 
     numbers: dict[TaskId, int] = {}
-    items: dict[TaskId, str] = {}
+    items: dict[TaskId, str] = dict(plan.item_ids)
     created = updated = added = fields_set = 0
 
     for operation in plan.operations:

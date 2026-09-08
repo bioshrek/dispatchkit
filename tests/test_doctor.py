@@ -294,6 +294,15 @@ class TestWorkflowCanImportDispatchkit:
         assert "src" in failed.detail
         assert failed.remedy
 
+    def test_the_remedy_admits_that_init_will_not_overwrite(self) -> None:
+        # `init` writes the workflow only when there is none, so "re-run init"
+        # on its own sends the reader to a command that does nothing and
+        # reports success.
+        facts = local(workflow_text=VENDORED_WORKFLOW, vendored=False)
+        failed = next(c for c in check_local(facts) if c.name == "workflow-source")
+        assert "delete" in failed.remedy
+        assert "will not overwrite" in failed.remedy
+
     def test_a_checkout_to_a_different_path_than_pythonpath_fails(self) -> None:
         # Two halves written in separate steps; a rename of one is silent.
         text = FETCHING_WORKFLOW.replace("path: .dispatchkit", "path: .elsewhere")
@@ -346,3 +355,15 @@ class TestWorkflowInputs:
         diagnostics = healthy(secrets=())
         failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
         assert "gh secret set DISPATCHKIT_TOKEN" in failed.remedy
+
+    def test_the_consequence_matches_what_is_actually_missing(self) -> None:
+        # Reciting all three costs when only one input is absent trains the
+        # reader to skim the line.
+        diagnostics = healthy(secrets=())
+        failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
+        assert failed.detail.endswith("runs with no token")
+
+    def test_several_missing_inputs_read_as_a_list(self) -> None:
+        diagnostics = healthy(variables=(), secrets=())
+        failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
+        assert failed.detail.endswith("no plan, no board and no token")

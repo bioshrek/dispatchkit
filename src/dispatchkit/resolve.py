@@ -214,9 +214,9 @@ def ci_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
                 "ci-approval-required",
                 f"#{task.number}",
                 f"{listed}: GitHub is holding the workflow runs for approval, so "
-                "`verify: auto` cannot complete. A maintainer must approve them "
-                "(Actions tab, or `gh api -X POST "
-                "repos/{owner}/{repo}/actions/runs/{id}/approve`).",
+                "`verify: auto` cannot complete. Approve them in the Actions tab, "
+                "or re-queue with `gh run rerun <id>` — note that either way you "
+                "are choosing to run agent-authored code.",
             )
         )
     return tuple(notices)

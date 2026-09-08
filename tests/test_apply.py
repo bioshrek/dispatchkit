@@ -311,3 +311,50 @@ def _issue(
         if fields is not None
         else {"Task ID": task_id, "Lane": "cloud", "Verify": "human"},
     )
+
+
+class TestFieldsOnAnAlreadyBoardedIssue:
+    """Changing a field on an issue the board already holds.
+
+    Latent since D3 and only reachable here: `apply` learns board item ids
+    from the `AddProjectItem` operations it performs in the same run, so a
+    `SetProjectField` for an item added by an *earlier* run had no id to write
+    to. Every prior live run either created the issue (id in hand) or changed
+    only the body (no field op), so the path was never taken until a task's
+    `verify` was edited in place — which then died with `KeyError`.
+    """
+
+    def _boarded(self) -> tuple[FakeGitHub, TaskGraph]:
+        api = FakeGitHub()
+        first = graph(task("ports", verify=Verify.HUMAN), plan=PLAN)
+        execute_plan(plan_apply(first, api.fetch_state(plan=PLAN)), api)
+        return api, graph(task("ports", verify=Verify.AUTO), plan=PLAN)
+
+    def test_the_field_change_is_planned(self) -> None:
+        api, changed = self._boarded()
+        plan = plan_apply(changed, api.fetch_state(plan=PLAN))
+        assert any(
+            isinstance(op, SetProjectField) and op.field_name == "Verify"
+            for op in plan.operations
+        )
+
+    def test_the_field_change_can_actually_be_executed(self) -> None:
+        api, changed = self._boarded()
+        plan = plan_apply(changed, api.fetch_state(plan=PLAN))
+        result = execute_plan(plan, api)
+        assert result.fields_set == 1
+
+    def test_it_writes_to_the_item_the_board_already_had(self) -> None:
+        # Not a new item: `apply` must never add a second board entry for an
+        # issue that is already on it.
+        api, changed = self._boarded()
+        before = len(api.state.issues)
+        execute_plan(plan_apply(changed, api.fetch_state(plan=PLAN)), api)
+        assert len(api.state.issues) == before
+        assert api.state.issues[0].fields["Verify"] == "auto"
+        assert api.calls.count("add_project_item(100)") == 1
+
+    def test_it_converges(self) -> None:
+        api, changed = self._boarded()
+        execute_plan(plan_apply(changed, api.fetch_state(plan=PLAN)), api)
+        assert plan_apply(changed, api.fetch_state(plan=PLAN)).operations == ()

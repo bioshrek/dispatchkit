@@ -149,7 +149,27 @@ class TestCiNotices:
 
     def test_the_remedy_is_stated(self) -> None:
         working = item("a", open_prs=(PullRequest(7, Checks.BLOCKED),), verify=Verify.AUTO)
-        assert "approve" in ci_notices(items_of(working))[0].message.lower()
+        message = ci_notices(items_of(working))[0].message
+        assert "approve" in message.lower()
+
+    def test_the_remedy_is_one_that_actually_works(self) -> None:
+        # The obvious REST call — POST .../actions/runs/{id}/approve — answers
+        # 403 "not from a fork pull request or queued by the Actions bot" for
+        # a Copilot-authored run. `gh run rerun` re-queues it under the
+        # maintainer's own identity and does start CI. Verified live.
+        message = ci_notices(
+            items_of(item("a", open_prs=(PullRequest(7, Checks.BLOCKED),), verify=Verify.AUTO))
+        )[0].message
+        assert "gh run rerun" in message
+        assert "/approve" not in message
+
+    def test_the_remedy_does_not_pretend_the_gate_is_a_formality(self) -> None:
+        # Clearing it is a decision to run agent-authored code on your
+        # runners, which is the reason the gate exists.
+        message = ci_notices(
+            items_of(item("a", open_prs=(PullRequest(7, Checks.BLOCKED),), verify=Verify.AUTO))
+        )[0].message
+        assert "agent-authored" in message
 
     def test_a_failing_run_is_not_an_approval_problem(self) -> None:
         # A red PR is the agent's problem or a reviewer's; it is not a gate

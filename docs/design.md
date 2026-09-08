@@ -1041,6 +1041,81 @@ a set that contains the agent rather than equals it.
 has merged, so `verify`, the merge policy, retry and reclaim (D7–D9) remain unexercised, and
 `tick`'s handling of a closed dependency releasing its dependents has been seen only in tests.
 
+### D5.6 decision record — `verify: auto` had never been true (2026-09-08)
+
+Watching the first dispatch settle turned up four faults. Every one of them was invisible to the
+offline suite and none was a coding error: each was a place where the design had assumed
+something about GitHub that is not so.
+
+**`Auto-merging` was a claim nobody had checked.** `_status_of` returned `Auto-merging` for any
+`verify: auto` task with an open PR, without ever looking at a check. GitHub classes the coding
+agent as an untrusted contributor and parks its workflow runs pending human approval — so the
+board would have sat on `Auto-merging` indefinitely for a pipeline that had not started and never
+would. That is the board asserting something false, which is worse than the board being silent.
+
+`Auto-merging` is now only claimed while CI can actually reach a verdict. A held or failing run
+resolves to `In Review`, which is true in both cases because a human is the next mover either
+way. This deliberately avoids inventing a board value: a new `Status` option would be a migration
+for every existing board, and `In Review` already means what needs to be meant. The *reason* is
+carried out of band, as a `ci-approval-required` notice — absorbing it into the status alone
+would invite someone to go and review a pull request that cannot merge.
+
+**`statusCheckRollup` cannot see this failure.** The obvious place to read CI's verdict returns
+`null` for a held run. A run awaiting approval produces a check *suite* whose conclusion is
+`ACTION_REQUIRED` and which contains **zero check runs** — and the rollup is assembled from check
+runs. Through the rollup, a stalled pull request is indistinguishable from one in a repository
+with no CI at all. The state query therefore reads `checkSuites` directly.
+
+**`Checks.NONE` is not a stall.** Absence is ambiguous: with no stored state there is no way to
+tell "the runs have not been created yet" from "this repository has no CI", and the first is the
+normal condition in the seconds after a PR opens. Only GitHub saying `ACTION_REQUIRED` is treated
+as a stall. An unknown suite conclusion counts as a failure rather than a success, because
+GitHub adds enum members and guessing green would auto-merge on a verdict we have never seen.
+
+**The shipped workflow could not run in any repository but this one.** `init` wrote a workflow
+setting `PYTHONPATH: src`, with a comment explaining that there was nothing to install. True
+here; false in every repository `init` exists to serve. The sandbox scheduler had been dying on
+`No module named dispatchkit` on a cron since the moment it was installed, and three separate
+things conspired to hide it: `doctor` only asked whether the workflow file existed, the failure
+was on a schedule with nobody reading the log, and the one test that covered the template pinned
+it byte-for-byte to *this repository's* workflow — asserting a sameness that cannot hold.
+
+The template now fetches its own pinned source into `.dispatchkit`. Fetching is not installing:
+no resolver, no build, no third-party code in a job holding a token that can assign work, so the
+zero-dependency rule survives intact. The byte-identity pin is replaced by a shared set of
+properties asserted against *both* files, plus the properties that are true of only one. That is
+a weaker-looking guarantee and a stronger real one: the old pin could only have been kept by
+breaking the template.
+
+**A field change on an already-boarded issue was unexecutable.** Latent since D3: `apply` learned
+board item ids only from the `AddProjectItem` operations it performed in the same run, so a
+`SetProjectField` for an item added by an *earlier* run had no id to write to. Every previous run
+either created the issue (id in hand) or changed only the body (no field operation), so the path
+was first taken when a task's `verify` was edited in place — and died with `KeyError`. The plan
+now carries the ids the board already held.
+
+**The obvious remedy does not work.** `POST /actions/runs/{id}/approve` answers 403 — *"not from
+a fork pull request or queued by the Actions bot"*. The Copilot gate is a different class from
+the fork gate and that endpoint does not clear it. `gh run rerun <id>` does: it re-queues the run
+under the maintainer's own identity. Verified live, and the notice says so, including that
+clearing the gate either way is a decision to run agent-authored code rather than a formality.
+
+**What this says about `verify: auto` generally.** It cannot be relied on while the gate stands,
+because a green pipeline requires a human click *per run*. There are three ways out and they are
+not equivalent: a repository setting that skips approval for coding-agent workflows (a blanket
+trust decision, and not exposed over REST, so `doctor` cannot check it and `init` cannot set it);
+the agent verifying itself (the agent grading its own homework, which is what `auto` exists to
+avoid); or dispatchkit running the verification itself. The last is the only one that both keeps
+verification independent and works unattended: a workflow on a *trusted* trigger is not gated, so
+a job that takes a PR number, checks out the merge ref and runs the task's declared `verify`
+command would sidestep approval entirely — dispatchkit is asking, not the agent. The condition
+that makes it safe is the one already in force elsewhere: that job runs untrusted code, so it
+holds no token and no secrets and reports by exit code to the pass that does. This is why
+`pull_request_target` is the wrong answer and is ruled out. Left for D9, where its real cost
+belongs in the open: it would make `verify` a command dispatchkit executes rather than a claim
+about the repository's own pipeline, and two CIs can disagree.
+
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once

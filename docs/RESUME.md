@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.5 are implemented and green offline. 384 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.6 are implemented and green offline. 473 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -17,6 +17,7 @@ clean via `make check`.
 | D4 | Readiness resolver + admission | **done and proven live**; assignment is the lock |
 | D5 | Cloud dispatch + workflow | **done and proven live**; agents dispatched, PRs open |
 | D5.5 | Block version key, configurable paths/fence, `doctor`, `init` | **done and proven live**; board bootstrap converges |
+| D5.6 | CI-aware status, workflow template fix, `doctor` inputs | **done and proven live**; `verify: auto` now means something |
 | D6–D9 | Local daemon, retry/reclaim, alerting, auto-merge | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
@@ -61,6 +62,19 @@ draft PRs #6 and #7 within the minute. A second pass dispatched nothing — assi
 confirmed against the real API — and `Status` had moved itself to `In Review`, recomputed from the
 new PRs rather than stored. See the D5 completion record in `design.md`.
 
+**`verify: auto` has been made honest.** D5.6 found the resolver claiming `Auto-merging` for PRs
+whose CI GitHub was holding pending approval — a pipeline that had not started and never would.
+It also found the shipped workflow template unable to run in any repository but this one, which
+is why the sandbox scheduler had been failing on its cron since installation. Both are fixed and
+both were proven against the sandbox; see the D5.6 decision record in `design.md`.
+
+Live sequence, for reference: `top-n` was moved to `verify: auto` (its acceptance is a test
+selector and a linter, so `human` was over-conservative), and the pass then reported `In Review`
+with a `ci-approval-required` notice rather than `Auto-merging`. After `gh run rerun` cleared the
+gate and CI went green, the next pass reported `Auto-merging` and the notice was gone.
+`stopwords` — `verify: human`, CI still held — stayed `In Review` with no notice, which is
+correct: nobody was waiting on CI there.
+
 1. **Watch a task all the way through.** This is the first thing nobody has ever seen: review PR
    #6, merge it, close `top-n`, then run a pass and check that `json-output` unblocks and
    `encoding-fallback` stops being deferred.
@@ -76,10 +90,12 @@ new PRs rather than stored. See the D5 completion record in `design.md`.
    ```
    Then `doctor` → `init --push` → `doctor` against it, as above.
 
-3. **Then automate.** `.github/workflows/dispatchkit.yml` needs `secrets.DISPATCHKIT_TOKEN` plus
-   repo variables `DISPATCHKIT_PLAN` and `DISPATCHKIT_PROJECT`. The token must be a PAT:
-   `GITHUB_TOKEN` can neither assign the coding agent nor write a user-level Project. Set it with
-   a prompt, never as an argv: `gh secret set DISPATCHKIT_TOKEN`.
+3. **Then automate.** `doctor` now checks all three inputs and names the ones that are missing.
+   The sandbox's `DISPATCHKIT_PLAN` and `DISPATCHKIT_PROJECT` are set; only the token is
+   outstanding, and it must be a **classic** PAT with `repo` and `project`. `GITHUB_TOKEN` can
+   neither assign the coding agent nor write a Project, and a *fine-grained* PAT cannot touch a
+   **user-owned** Project at all — which the sandbox board is, and which is the default case.
+   Set it with a prompt, never as an argv: `gh secret set DISPATCHKIT_TOKEN`.
 
 ## Known gaps, in the order they will bite
 
@@ -91,11 +107,26 @@ new PRs rather than stored. See the D5 completion record in `design.md`.
 - **`gh project field-list` pages at 30 by default**, and truncation reads exactly like a missing
   field. It is now sent `--limit 200`. A board with more than 200 fields would still lie, but that
   is not a board anyone has.
-- **`tests/fixtures/search_issues.json` is renderer-generated, not recorded.** It is
-  GraphQL-shaped but has never been compared against a real response. The live run's first job is
-  to re-record it. Until then every `GhCli` subprocess path — the Project field lookups,
-  `item-add`, `item-edit`, `assign_agent`, and D5.5's `fetch_board`, `create_field`,
-  `delete_field`, `token_scopes` — is argv-checked but unexecuted code.
+- **`tests/fixtures/search_issues.json` is renderer-generated, and now known to be accurate.** It
+  was compared against a real response during the D5 live run: zero paths differing in either
+  direction. `tests/fixtures/live_state.json` holds the recorded one alongside it — kept as well
+  as, not instead of, because the live snapshot predates dispatch and swapping would lose the
+  dispatched and in-review coverage. Note that neither fixture carries `checkSuites`, which D5.6
+  added: the check-state tests inject suites into a copy rather than re-recording, so that shape
+  is replayed from a live payload but not from a stored one.
+- **The workflow template points at `bioshrek/dispatchkit@v0.1.0`, which does not exist yet.**
+  This is the one thing blocking the sandbox's unattended scheduler: the template now fetches its
+  own source (correctly — `PYTHONPATH: src` only ever worked here), but there is nothing to fetch
+  until step 2 publishes the repository and tags it. Adopters can override with the
+  `DISPATCHKIT_SOURCE` and `DISPATCHKIT_REF` repository variables. Everything local is verified;
+  a pass has never run *inside* Actions.
+- **`init` will not overwrite an existing workflow**, so an adopter on an old template stays on
+  it. `doctor`'s `workflow-source` check catches this and its remedy says to delete the file
+  first, but there is no upgrade path worth the name.
+- **The Copilot approval gate is not visible to `doctor`.** The repository setting that skips
+  approval for coding-agent workflows is not exposed over REST — probed under
+  `actions/permissions/*`, all 404 — so `doctor` cannot report it and `init` cannot set it. Until
+  D9 takes over verification, every `verify: auto` PR needs a human `gh run rerun` per run.
 - **`doctor` cannot see branch protection or the merge queue.** Both are D9 prerequisites and both
   belong in the check set; they were left out because nothing consumes them yet.
 - **`init` cannot create the Project itself.** `gh project create` needs an owner-type decision
