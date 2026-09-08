@@ -203,6 +203,12 @@ Three things it changed that are worth knowing before touching this code:
 
 ## Known gaps, in the order they will bite
 
+- **Adding a `Status` option needs a manual board migration.** `init` refuses to replace the
+  options of a populated single-select, because doing so deletes the values of every item using
+  it. The refusal is right, and the override is cheap: on the sandbox all 5 values were lost and
+  the next pass rebuilt every one from the issues. Say so when a release adds a status, because
+  an adopter who does nothing gets a scheduler that cannot write the new one.
+
 - **`gh project field-create`'s option syntax is verified.** Checked against `gh` 2.89.0 on
   2026-09-08: `--single-select-options` is a `strings` flag and the manual's own example passes it
   comma-joined as one argument, which is what D5.5 sends. `field-list`, `field-delete`,
@@ -218,7 +224,7 @@ Three things it changed that are worth knowing before touching this code:
   dispatched and in-review coverage. Note that neither fixture carries `checkSuites`, which D5.6
   added: the check-state tests inject suites into a copy rather than re-recording, so that shape
   is replayed from a live payload but not from a stored one.
-- **The workflow template pins `bioshrek/dispatchkit@v0.2.1`, which exists.** Adopters override
+- **The workflow template pins `bioshrek/dispatchkit@v0.3.0`, which exists.** Adopters override
   with the `DISPATCHKIT_SOURCE` and `DISPATCHKIT_REF` repository variables, and
   `test_the_default_ref_is_a_version_tag` refuses a moving ref like `main`. Note the consequence:
   an adopter's scheduler keeps running the pinned tag until someone repins it, so shipping a fix
@@ -275,13 +281,19 @@ Three things it changed that are worth knowing before touching this code:
 
 ## Roadmap
 
+**D7 shipped.** A dispatch that produces no pull request within `retry.stall_after` is reclaimed
+by unassigning the agent, which is the whole retry because assignment is the lock. `attempts` is
+now derived from the issue's assignment history rather than read from a board field nothing ever
+wrote — the budget had been structurally unable to fire since D4. `Stuck` is a status, so a task
+that has spent its budget stops advertising itself as `Ready`.
+
+
 Ordered, with the reasoning that put each where it is. Two of these start with a probe rather
 than an implementation, because the last two design claims that went unprobed — auto-merge
 semantics and "green means green" — were both wrong.
 
 | # | Milestone | Why here |
 |---|---|---|
-| **D7** | Retry / reclaim / stuck | Next. Every failure path is unexercised, and an agent that opens no pull request stalls silently and forever. Everything below assumes the pipeline survives failure. |
 | **D10** | Plan-authoring contract (skill + doc) | Cheapest real leverage and no new machinery. There is currently *no* document teaching the format — only examples and `validate`'s error messages. |
 | **D11** | `doctor` completeness, then an interactive gated `init` | Two steps, and step one ships value alone. `doctor` becomes the single source of truth for "is this repo set up", and `init` refuses to advance past a failing check. |
 | **D12** | Org + GitHub App auth | Starts with a probe: can an App installation token assign Copilot? If not, the milestone buys nothing. |
