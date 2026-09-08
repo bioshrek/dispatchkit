@@ -83,21 +83,45 @@ now marks a green `verify: auto` PR ready itself, and `Auto-merging` finally imp
 has passed and that a merge is possible. PR #6 is out of draft and `MERGEABLE`; PR #7 is
 correctly untouched.
 
-1. **Watch a task all the way through.** This is the first thing nobody has ever seen: review PR
-   #6, merge it, close `top-n`, then run a pass and check that `json-output` unblocks and
-   `encoding-fallback` stops being deferred. PR #6 is now genuinely mergeable, so this is
-   unblocked for the first time.
-   ```sh
-   uv run dispatchkit tick --plan wordfreq --push $S
-   ```
-   Everything about verification, merge policy, retry and reclaim (D6–D9) is downstream of what
-   that pass reveals.
+**A task has now gone all the way through, and the graph moved.** PR #6 was reviewed against its
+own declared acceptance (`uv run pytest -q -k top && uv run ruff check .`, run locally rather
+than trusted from CI) and against its task body: the limit stayed in `cli.py`, `count_words` was
+left returning the unsliced list that `json-output` needs, `--top 0` prints nothing and a
+negative N exits 2. Squash-merged; `Closes #1` closed `top-n` on its own.
 
-2. **Then create the real repo**, once the sandbox has proven the path end to end:
+The pass after the merge is the one that had never been observed:
+
+```
+top-n: Done                 <- closed issue
+encoding-fallback: Dispatched  <- deferral released, then dispatched
+json-output: Ready          <- dependency satisfied, was Blocked
+dispatch: encoding-fallback
+  defer json-output: file-scope-conflict (overlaps encoding-fallback)
+pass complete: 1 dispatched, 3 board write(s)
+```
+
+Three separate mechanisms fired together, none previously exercised outside synthetic graphs:
+dependency unblocking (`json-output` Blocked → Ready), deferral release (`encoding-fallback` had
+been deferred for overlapping `top-n`), and file-scope exclusion **re-forming around the new
+pair** — `json-output` was immediately deferred against `encoding-fallback`, since both touch
+`cli.py` and `test_cli.py`. Copilot opened PR #8 within the minute; the next pass dispatched
+nothing and wrote once. Assignment is still the lock.
+
+1. **Publish this repository — the hard blocker.** The sandbox scheduler still cannot run,
+   because the workflow template checks out `bioshrek/dispatchkit@v0.1.0` and there is nothing
+   there. Every pass so far has been run by hand from the laptop; a pass has never executed
+   inside Actions at all.
    ```sh
    gh repo create dispatchkit --public --source . --remote origin --push
+   git tag v0.1.0 && git push origin v0.1.0
    ```
-   Then `doctor` → `init --push` → `doctor` against it, as above.
+   Then `doctor` against the sandbox and watch the scheduled run go green on its own.
+
+2. **Then D9**, which is what makes `Auto-merging` true. Note it is *currently a claim nothing
+   fulfils*: dispatchkit contains no merge code at all, and the sandbox has `allow_auto_merge:
+   false` with no branch protection on `main`, so there are no required checks for a merge to
+   wait on. That is the same class of unchecked claim D5.6 and D5.7 removed, one level up —
+   either D9 makes it true or the board value should be renamed. D9 is designed, so build it.
 
 3. **Then automate.** `doctor` now checks all three inputs and names the ones that are missing.
    The sandbox's `DISPATCHKIT_PLAN` and `DISPATCHKIT_PROJECT` are set; only the token is

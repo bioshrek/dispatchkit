@@ -1201,6 +1201,50 @@ with PR #6 (`auto`) ending `draft=false, mergeable=MERGEABLE` and PR #7 (`human`
 and the pull request.
 
 
+### D5 live: the graph moved
+
+The first task to go all the way through. PR #6 was reviewed against its own declared acceptance
+— run locally rather than read off CI, on the principle that a green check is evidence about a
+pipeline and not about the work — and against its task body: the limit stayed in `cli.py`,
+`count_words` was left returning the unsliced list `json-output` will need, `--top 0` prints
+nothing, a negative N exits 2. Squash-merged, and `Closes #1` closed `top-n` without help.
+
+The pass that followed exercised three mechanisms that had only ever run against synthetic
+graphs, all at once:
+
+```
+top-n: Done
+encoding-fallback: Dispatched
+json-output: Ready
+dispatch: encoding-fallback
+  defer json-output: file-scope-conflict (overlaps encoding-fallback)
+pass complete: 1 dispatched, 3 board write(s)
+```
+
+Dependency unblocking: `json-output` went `Blocked → Ready` because its one dependency closed.
+Deferral release: `encoding-fallback` had been held every pass for overlapping `top-n`, and the
+moment that overlap merged it was dispatched. And the part worth pausing on — **the file-scope
+fence re-formed around the new pair in the same pass.** `json-output` was immediately deferred
+against `encoding-fallback`, because both touch `cli.py` and `tests/test_cli.py`. The exclusion is
+not a property of any task; it is recomputed from whatever is in flight, so it moves as the front
+moves. That is what having no stored state buys, demonstrated rather than argued.
+
+Copilot opened PR #8 within the minute. The next pass dispatched nothing and wrote once:
+assignment is still the lock.
+
+**What this did not prove.** `Auto-merging` remains a claim nothing fulfils — there is no merge
+code in the package, and the sandbox has `allow_auto_merge: false` and no branch protection, so
+no required check exists for a merge to wait on. `top-n` reached `Done` because a human merged
+it. That is the same unchecked-claim pattern D5.6 and D5.7 removed, sitting one level up, and D9
+is where it gets settled.
+
+One further observation, recorded because it is the next candidate for the same treatment:
+`encoding-fallback` reported `In Review` while its pull request was still titled `[WIP]` and the
+agent was still pushing to it. Nobody can review that. `draft` alone cannot distinguish it, since
+Copilot also leaves a *finished* PR in draft; the signal that separates them is the
+`copilot_work_finished` timeline event, which the state query does not currently request.
+
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once
