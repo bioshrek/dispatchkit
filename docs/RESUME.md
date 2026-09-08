@@ -218,7 +218,7 @@ Three things it changed that are worth knowing before touching this code:
   dispatched and in-review coverage. Note that neither fixture carries `checkSuites`, which D5.6
   added: the check-state tests inject suites into a copy rather than re-recording, so that shape
   is replayed from a live payload but not from a stored one.
-- **The workflow template pins `bioshrek/dispatchkit@v0.2.0`, which exists.** Adopters override
+- **The workflow template pins `bioshrek/dispatchkit@v0.2.1`, which exists.** Adopters override
   with the `DISPATCHKIT_SOURCE` and `DISPATCHKIT_REF` repository variables, and
   `test_the_default_ref_is_a_version_tag` refuses a moving ref like `main`. Note the consequence:
   an adopter's scheduler keeps running the pinned tag until someone repins it, so shipping a fix
