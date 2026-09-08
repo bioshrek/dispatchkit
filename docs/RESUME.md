@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7 are implemented and green offline. 502 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.7 are implemented and green offline. 504 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -133,26 +133,49 @@ The default must now match a version tag.
 The scheduler's log now ends in one line: `dispatchkit: cannot read bioshrek/dispatchkit-sandbox:
 … set the GH_TOKEN environment variable`, exit 2.
 
-1. **Set the token — the last blocker, and only you can do it.**
-   ```sh
-   gh secret set DISPATCHKIT_TOKEN --repo bioshrek/dispatchkit-sandbox
-   ```
-   A **classic** PAT with `repo` and `project`. Fine-grained tokens cannot touch a user-owned
-   Project, and the sandbox board is user-owned. Then re-run the workflow and watch a pass
-   complete inside Actions for the first time.
+**The scheduler runs unattended.** The token is set and a pass has completed inside GitHub
+Actions, which had never happened before — every previous pass was run by hand from the laptop.
 
-2. **Then D9**, which is what makes `Auto-merging` true. Note it is *currently a claim nothing
-   fulfils*: dispatchkit contains no merge code at all, and the sandbox has `allow_auto_merge:
-   false` with no branch protection on `main`, so there are no required checks for a merge to
-   wait on. That is the same class of unchecked claim D5.6 and D5.7 removed, one level up —
-   either D9 makes it true or the board value should be renamed. D9 is designed, so build it.
+```
+top-n: Done              stopwords: In Review     encoding-fallback: In Review
+json-output: Ready       document-flags: Blocked
+dispatch: (nothing)
+  defer json-output: file-scope-conflict (overlaps encoding-fallback)
+pass complete: 0 dispatched, 0 board write(s)
+```
 
-3. **Then automate.** `doctor` now checks all three inputs and names the ones that are missing.
-   The sandbox's `DISPATCHKIT_PLAN` and `DISPATCHKIT_PROJECT` are set; only the token is
-   outstanding, and it must be a **classic** PAT with `repo` and `project`. `GITHUB_TOKEN` can
-   neither assign the coding agent nor write a Project, and a *fine-grained* PAT cannot touch a
-   **user-owned** Project at all — which the sandbox board is, and which is the default case.
-   Set it with a prompt, never as an argv: `gh secret set DISPATCHKIT_TOKEN`.
+**Zero board writes is the result worth reading twice.** A different machine, a different token
+and a different working directory derived byte-identical state to the local passes and therefore
+had nothing to correct. That is the no-stored-state claim holding across execution environments,
+not merely across repeated runs — the strongest form of it that has been demonstrated.
+
+Getting there cost one debugging cycle worth recording: the first token was wrong, `doctor`
+reported `ok` for `DISPATCHKIT_TOKEN`, and the pass then failed `Bad credentials (HTTP 401)`.
+GitHub never discloses a secret's value, so validity is unknowable from `doctor` by construction;
+the check now says it saw the *name* only. Verify a token before setting it —
+`GH_TOKEN="$PAT" gh api user` and a `projectV2` query — rather than after.
+
+The cron is live (`7,37 * * * *`), so the sandbox now schedules itself.
+
+1. **Next: D9**, and it is the last unchecked claim. `Auto-merging` is still a status nothing
+   fulfils — there is no merge code in the package, `allow_auto_merge` is `false` on the sandbox
+   and `main` has no branch protection, so no required check exists for a merge to wait on.
+   `top-n` reached `Done` because a human merged it.
+
+   It is the same class of unchecked claim D5.6 and D5.7 removed, one level up: either D9 makes
+   it true or the board value should be renamed. D9 is designed, so build it. Its prerequisites
+   are not set on the sandbox and `doctor` cannot yet see them — enabling `allow_auto_merge` and
+   adding branch protection with a required check comes first, and that backlog item is now on
+   the critical path rather than a nicety.
+
+2. **Watch `stopwords` and `encoding-fallback` finish.** Both are `verify: human` with open draft
+   PRs (#7, #8). Reviewing and merging them exercises the propagation again and finally releases
+   `json-output`, which is deferred behind `encoding-fallback` on `cli.py`.
+
+3. **Decide on the `[WIP]` gap.** `encoding-fallback` reported `In Review` while its PR was still
+   titled `[WIP]` and the agent was still pushing to it. Nobody can review that. `draft` cannot
+   separate it, since Copilot leaves finished PRs in draft too; the signal is the
+   `copilot_work_finished` timeline event, which `STATE_QUERY` does not request.
 
 ## Known gaps, in the order they will bite
 
