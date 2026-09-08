@@ -10,6 +10,7 @@ formatting, and each one has already been a real incident somewhere:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +179,18 @@ class TestTheTemplateCanRunWhereItIsWritten:
             with_ = step.get("with", {})
             if "repository" in with_:
                 assert with_.get("ref")
+
+    def test_the_default_ref_is_a_version_tag(self, template: dict[Any, Any]) -> None:
+        # Asserting a ref merely exists would accept `ref: main`, which is the
+        # exact thing the pin is for: a moving branch means every adopter runs
+        # whatever was pushed here last, unreviewed, in a job holding a token
+        # that can assign work. The default must name an immutable release.
+        for step in steps(template):
+            with_ = step.get("with", {})
+            if "repository" not in with_:
+                continue
+            default = with_["ref"].split("||")[-1].strip(" }'\"")
+            assert re.fullmatch(r"v\d+\.\d+\.\d+", default), default
 
     def test_it_still_installs_nothing(self, template: dict[Any, Any]) -> None:
         # Fetching source is not installing: no resolver, no build, no
