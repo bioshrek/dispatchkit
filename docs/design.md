@@ -1007,6 +1007,40 @@ resolver, the dependency gate and the scope heuristic compose.
 unexecuted mutation — and it is the one that spends a Copilot quota and starts autonomous work,
 which makes it the right place to stop and ask.
 
+### D5 complete — the first real dispatch (2026-09-08)
+
+`tick --push` dispatched `top-n` and `stopwords`, deferred `encoding-fallback`, and wrote 5 board
+values. The coding agent opened two draft PRs against the sandbox within the minute. The loop the
+whole project exists to close — graph → issues → board → readiness → dispatch → agent → PR — has
+now run once, unattended, on real infrastructure.
+
+The second pass is the one that matters:
+
+```
+top-n: In Review     stopwords: In Review     encoding-fallback: Ready
+dispatch: (nothing)
+```
+
+- **Assignment is the lock, confirmed against the real API.** Nothing was dispatched a second
+  time, because both tasks had left the ready set the moment they were assigned. This is the
+  property that lets concurrent passes converge without a lease or a lockfile, and it had never
+  been tested anywhere but in memory.
+- **`Status` is recomputed, never stored.** Between the two passes nothing wrote `In Review`; the
+  status changed because the PRs appeared and the next pass re-derived it from the issues. The
+  board is a view, and it moved on its own.
+- **The deferral survived the state change.** `encoding-fallback` is still deferred, correctly:
+  `top-n` is open, so the file-scope overlap still stands.
+
+**One observation worth carrying into D7.** `replaceActorsForAssignable` is sent a single actor —
+the agent — but the issue comes back assigned to *both* the agent and the human whose token made
+the call. That is GitHub attributing the session, not a bug here, but reclaim logic that assumes
+"assigned to the agent alone" would be wrong, and the retry/reclaim work should read assignees as
+a set that contains the agent rather than equals it.
+
+**The gap this leaves:** the pipeline has never been watched through a *completed* task. Nothing
+has merged, so `verify`, the merge policy, retry and reclaim (D7–D9) remain unexercised, and
+`tick`'s handling of a closed dependency releasing its dependents has been seen only in tests.
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once

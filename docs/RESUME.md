@@ -14,8 +14,8 @@ clean via `make check`.
 | D1 | Task graph schema + validator | done |
 | D2 | Structural lints + plan shape | done |
 | D3 | `apply` (graph → issues + board), idempotent | **done and proven live**; converges |
-| D4 | Readiness resolver + admission | done |
-| D5 | Cloud dispatch + workflow | `apply` live; **`tick --push` is the last unexecuted mutation** |
+| D4 | Readiness resolver + admission | **done and proven live**; assignment is the lock |
+| D5 | Cloud dispatch + workflow | **done and proven live**; agents dispatched, PRs open |
 | D5.5 | Block version key, configurable paths/fence, `doctor`, `init` | **done and proven live**; board bootstrap converges |
 | D6–D9 | Local daemon, retry/reclaim, alerting, auto-merge | designed, unbuilt |
 
@@ -56,19 +56,19 @@ one is now recorded as `tests/fixtures/live_state.json`. See the D5 live run rec
 `design.md`. The lints earned their keep while the graph was written, catching a serial pair split
 for nothing and an estimate below the economic floor.
 
-1. **Dispatch, which is the one thing left.** *This spends a Copilot quota and starts autonomous
-   agent sessions, so it is a deliberate human go/no-go:*
+**Dispatch has run.** `tick --push` assigned `top-n` and `stopwords`; the coding agent opened
+draft PRs #6 and #7 within the minute. A second pass dispatched nothing — assignment is the lock,
+confirmed against the real API — and `Status` had moved itself to `In Review`, recomputed from the
+new PRs rather than stored. See the D5 completion record in `design.md`.
+
+1. **Watch a task all the way through.** This is the first thing nobody has ever seen: review PR
+   #6, merge it, close `top-n`, then run a pass and check that `json-output` unblocks and
+   `encoding-fallback` stops being deferred.
    ```sh
    uv run dispatchkit tick --plan wordfreq --push $S
    ```
-   The dry run against the recorded state says it will dispatch `top-n` and `stopwords`, and defer
-   `encoding-fallback` for a file-scope conflict with `top-n`. Re-run the dry run first, since the
-   state moves:
-   ```sh
-   uv run dispatchkit tick --plan wordfreq --state tests/fixtures/live_state.json
-   ```
-   Then check that assignment really is the lock: a second `tick --push` must dispatch nothing,
-   because the two it just assigned have left the ready set.
+   Everything about verification, merge policy, retry and reclaim (D6–D9) is downstream of what
+   that pass reveals.
 
 2. **Then create the real repo**, once the sandbox has proven the path end to end:
    ```sh
