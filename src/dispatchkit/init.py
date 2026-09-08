@@ -55,10 +55,16 @@ class CreateField:
 
 
 @dataclass(frozen=True, slots=True)
-class RecreateField:
-    """Delete then create: the only way to fix a single select's options.
+class SetFieldOptions:
+    """Replace a single select's options, in place.
 
-    Only ever planned for an empty board, where the values it drops are none.
+    Not delete-and-recreate: the board's built-in `Status` refuses deletion
+    outright ("Only custom fields can be deleted"), and that is precisely the
+    field that always needs fixing. Updating works on built-in and custom
+    fields alike and keeps the id the board's views are built on.
+
+    Still only ever planned for an empty board: replacing the options drops
+    every value held under an option that goes away.
     """
 
     spec: FieldSpec
@@ -81,7 +87,7 @@ class MakeDirectory:
     path: Path
 
 
-InitOperation = CreateField | RecreateField | CreateLabel | WriteFile | MakeDirectory
+InitOperation = CreateField | SetFieldOptions | CreateLabel | WriteFile | MakeDirectory
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,15 +115,15 @@ def plan_init(board: BoardSnapshot, facts: LocalFacts) -> InitPlan:
     for spec, existing in mismatched_fields(board):
         wanted = [option for option in spec.options if option not in existing.options]
         if board.items == 0:
-            operations.append(RecreateField(spec, existing.id))
+            operations.append(SetFieldOptions(spec, existing.id))
             continue
         notices.append(
             Notice(
                 "field-options",
                 spec.name,
                 f"`{spec.name}` cannot hold {_quoted(wanted)}, and the board has "
-                f"{board.items} item(s) whose values a rebuild would delete. Fix it by hand: "
-                f"`gh project field-delete --id {existing.id}`, then re-run init",
+                f"{board.items} item(s) whose values replacing the options would delete. "
+                f"Add them by hand in the project's settings, then re-run init",
             )
         )
 
@@ -149,9 +155,8 @@ def execute_board(plan: InitPlan, api: BoardApi) -> tuple[int, int]:
     """
     fields = 0
     for operation in plan.operations:
-        if isinstance(operation, RecreateField):
-            api.delete_field(field_id=operation.field_id)
-            api.create_field(operation.spec)
+        if isinstance(operation, SetFieldOptions):
+            api.set_field_options(field_id=operation.field_id, spec=operation.spec)
             fields += 1
         elif isinstance(operation, CreateField):
             api.create_field(operation.spec)
@@ -193,7 +198,7 @@ def summarise(plan: InitPlan) -> list[str]:
 
 
 def _subject(operation: InitOperation) -> str:
-    if isinstance(operation, CreateField | RecreateField):
+    if isinstance(operation, CreateField | SetFieldOptions):
         return operation.spec.name
     if isinstance(operation, CreateLabel):
         return operation.name

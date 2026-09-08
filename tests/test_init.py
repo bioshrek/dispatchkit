@@ -36,7 +36,7 @@ from dispatchkit.init import (
     CreateField,
     CreateLabel,
     MakeDirectory,
-    RecreateField,
+    SetFieldOptions,
     WriteFile,
     execute_init,
     plan_init,
@@ -73,6 +73,9 @@ class FakeBoard:
 
     def delete_field(self, *, field_id: str) -> None:
         self.calls.append(f"delete_field({field_id})")
+
+    def set_field_options(self, *, field_id: str, spec: FieldSpec) -> None:
+        self.calls.append(f"set_field_options({field_id})")
         self.snapshot = replace(
             self.snapshot,
             fields=tuple(f for f in self.snapshot.fields if f.id != field_id),
@@ -156,27 +159,38 @@ class TestTheBuiltInStatusField:
             items=items,
         )
 
-    def test_on_an_empty_board_it_is_replaced(self, tmp_path: Path) -> None:
+    def test_on_an_empty_board_its_options_are_set(self, tmp_path: Path) -> None:
+        """Live finding: the built-in `Status` cannot be deleted at all.
+
+        `deleteProjectV2Field` answers "Only custom fields can be deleted",
+        empty board or not, so the field that always needs fixing was the one
+        field the old plan could never fix. Setting the options works on it,
+        and keeps the id the board's own views are built on.
+        """
         plan = plan_init(self.built_in(), facts(tmp_path))
-        (recreate,) = [op for op in plan.operations if isinstance(op, RecreateField)]
-        assert recreate.spec.name == FIELD_STATUS
-        assert recreate.field_id == f"PVTF_{FIELD_STATUS}"
+        (update,) = [op for op in plan.operations if isinstance(op, SetFieldOptions)]
+        assert update.spec.name == FIELD_STATUS
+        assert update.field_id == f"PVTF_{FIELD_STATUS}"
+
+    def test_the_built_in_status_is_never_deleted(self, tmp_path: Path) -> None:
+        api = FakeBoard(self.built_in())
+        execute_init(plan_init(api.fetch_board(), facts(tmp_path)), api)
+        assert not any(call.startswith("delete_field") for call in api.calls)
 
     def test_on_a_populated_board_it_is_reported_and_left_alone(self, tmp_path: Path) -> None:
-        # Deleting a field deletes its values. With items on the board that is
-        # somebody's data, so it is a human's call, not a machine's.
+        # Replacing the options drops every value held under an option that
+        # goes away. With items on the board that is somebody's data, so it is
+        # a human's call, not a machine's.
         plan = plan_init(self.built_in(items=7), facts(tmp_path))
-        assert not any(isinstance(op, RecreateField) for op in plan.operations)
+        assert not any(isinstance(op, SetFieldOptions) for op in plan.operations)
         (notice,) = [n for n in plan.notices if n.code == "field-options"]
         assert FIELD_STATUS in notice.message
         assert "Auto-merging" in notice.message
 
-    def test_the_notice_names_the_command_that_would_destroy_the_values(
-        self, tmp_path: Path
-    ) -> None:
+    def test_the_notice_names_the_options_to_add_by_hand(self, tmp_path: Path) -> None:
         plan = plan_init(self.built_in(items=7), facts(tmp_path))
         (notice,) = [n for n in plan.notices if n.code == "field-options"]
-        assert "field-delete" in notice.message
+        assert "settings" in notice.message
 
 
 class TestExecution:
@@ -195,8 +209,7 @@ class TestExecution:
         execute_init(plan_init(api.fetch_board(), facts(tmp_path)), api)
         assert len([call for call in api.calls if call.startswith("ensure_labels")]) == 1
 
-    def test_a_recreated_field_is_deleted_before_it_is_created(self, tmp_path: Path) -> None:
-        # The other order would fail: two fields cannot share a name.
+    def test_a_mismatched_field_is_updated_in_place(self, tmp_path: Path) -> None:
         board = complete_board()
         api = FakeBoard(
             replace(
@@ -209,7 +222,7 @@ class TestExecution:
         )
         execute_init(plan_init(api.fetch_board(), facts(tmp_path)), api)
         calls = [c for c in api.calls if "field" in c and "fetch" not in c]
-        assert calls == [f"delete_field(PVTF_{FIELD_STATUS})", f"create_field({FIELD_STATUS})"]
+        assert calls == [f"set_field_options(PVTF_{FIELD_STATUS})"]
 
 
 class TestIdempotency:

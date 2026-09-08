@@ -386,6 +386,48 @@ def field_delete_command(field_id: str) -> list[str]:
     return ["gh", "project", "field-delete", "--id", field_id]
 
 
+#: Built-in fields refuse `deleteProjectV2Field` ("Only custom fields can be
+#: deleted"), which is exactly the case that matters: every board arrives with
+#: a `Status` holding Todo/In Progress/Done. Updating the options works on
+#: built-in and custom fields alike, and keeps the id the board's views use.
+FIELD_UPDATE_MUTATION = """
+mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: {fieldId: $field, singleSelectOptions: $options}) {
+    projectV2Field {
+      ... on ProjectV2SingleSelectField { id name options { name } }
+    }
+  }
+}
+"""
+
+
+def field_update_command() -> list[str]:
+    """The argv. The variables travel in the body, because `-F` cannot carry
+    a list of objects."""
+    return ["gh", "api", "graphql", "--input", "-"]
+
+
+def field_update_body(field_id: str, spec: FieldSpec) -> str:
+    """The request body, built as data and serialised once.
+
+    Replacing the options drops any value an item held under an option that
+    goes away, which is why `init` only ever plans this for an empty board.
+    """
+    if spec.data_type != SINGLE_SELECT:
+        raise ValueError(f"{spec.name} is not a single select, so it has no options to set")
+    body = {
+        "query": FIELD_UPDATE_MUTATION,
+        "variables": {
+            "field": field_id,
+            # `color` and `description` are not optional on the input type.
+            "options": [
+                {"name": option, "color": "GRAY", "description": ""} for option in spec.options
+            ],
+        },
+    }
+    return json.dumps(body)
+
+
 def label_list_command(repo: str) -> list[str]:
     return ["gh", "label", "list", "--repo", repo, "--json", "name", "--limit", "200"]
 
@@ -494,6 +536,10 @@ class GhCli:
 
     def delete_field(self, *, field_id: str) -> None:
         _run(field_delete_command(field_id))
+        self._catalog = None
+
+    def set_field_options(self, *, field_id: str, spec: FieldSpec) -> None:
+        _run(field_update_command(), stdin=field_update_body(field_id, spec))
         self._catalog = None
 
     def token_scopes(self) -> tuple[str, ...] | None:

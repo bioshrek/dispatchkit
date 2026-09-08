@@ -24,6 +24,8 @@ from dispatchkit.gh_cli import (
     field_create_command,
     field_delete_command,
     field_list_command,
+    field_update_body,
+    field_update_command,
     item_add_command,
     item_edit_command,
     label_command,
@@ -366,3 +368,39 @@ class TestNodeIds:
         payload = recorded()
         del payload["data"]["repository"]["issues"]["nodes"][0]["id"]
         assert parse_state(payload).issues[0].node_id is None
+
+
+class TestFieldOptionUpdate:
+    """Live finding (2026-09-08): built-in fields cannot be deleted.
+
+    `deleteProjectV2Field` on the board's own `Status` returns "Only custom
+    fields can be deleted", empty board or not, so D5.5's delete-and-recreate
+    could never have worked on the one field that always needs fixing.
+    `updateProjectV2Field` does work on it, and is better besides: the field
+    keeps its id and its role driving the board's columns.
+    """
+
+    def test_the_mutation_travels_as_a_body_not_as_argv(self) -> None:
+        command = field_update_command()
+        assert command == ["gh", "api", "graphql", "--input", "-"]
+
+    def test_the_body_sends_ids_and_options_as_variables(self) -> None:
+        spec = FieldSpec("Status", SINGLE_SELECT, ("Ready", "Done"))
+        body = json.loads(field_update_body("PVTSSF_1", spec))
+
+        assert body["variables"]["field"] == "PVTSSF_1"
+        assert [o["name"] for o in body["variables"]["options"]] == ["Ready", "Done"]
+        # The field id must never be spliced into the mutation text.
+        assert "PVTSSF_1" not in body["query"]
+
+    def test_every_option_carries_the_colour_the_api_demands(self) -> None:
+        spec = FieldSpec("Status", SINGLE_SELECT, ("Ready",))
+        option = json.loads(field_update_body("PVTSSF_1", spec))["variables"]["options"][0]
+
+        assert set(option) == {"name", "color", "description"}
+
+    def test_it_refuses_a_field_that_is_not_a_single_select(self) -> None:
+        # Options on a TEXT field are meaningless; sending them would be a
+        # silent no-op rather than the loud failure D5.5 asked for.
+        with pytest.raises(ValueError, match="single select"):
+            field_update_body("PVTF_1", FieldSpec("Task ID", "TEXT", ()))

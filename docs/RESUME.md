@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.5 are implemented and green offline. 370 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.5 are implemented and green offline. 375 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -16,7 +16,7 @@ clean via `make check`.
 | D3 | `apply` (graph → issues + board), idempotent | done, offline only |
 | D4 | Readiness resolver + admission | done |
 | D5 | Cloud dispatch + workflow | code done; `doctor` now runs live, **`apply`/`tick` still never have** |
-| D5.5 | Block version key, configurable paths/fence, `doctor`, `init` | done; `doctor`/`init --local` exercised live |
+| D5.5 | Block version key, configurable paths/fence, `doctor`, `init` | **done and proven live**; board bootstrap converges |
 | D6–D9 | Local daemon, retry/reclaim, alerting, auto-merge | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
@@ -31,46 +31,31 @@ D9 will auto-merge, and none of that argv had ever been executed — a sandbox a
 that misbehaves. Its payload is `wordfreq`, a deliberately unfinished CLI with real tests and real
 CI (green in 13s), so the backlog is genuine chores rather than the no-ops the design forbids.
 
-Already done, and the first live exercise of the adapter:
+**The board bootstrap is done and proven live.** Sandbox project is
+[number 2](https://github.com/users/bioshrek/projects/2); the token now holds `project`. In order:
 
-- The sandbox exists, is pushed, and its CI passes.
-- `dispatchkit init --local --root ../dispatchkit-sandbox` wrote its config, workflow and plans
-  directory. Files landed where the summary said they would, which is the relative-root
-  double-join bug staying fixed outside the tests.
-- `dispatchkit doctor --root ../dispatchkit-sandbox --repo bioshrek/dispatchkit-sandbox
-  --project 1` **ran against real GitHub** and returned `FAIL board` with its remedy and exit 2 —
-  diagnosing the missing scope instead of raising. The local checks all report `ok`.
+- The sandbox exists, is pushed, and its CI passes (13s).
+- `init --local` wrote the config, workflow and plans directory where its summary said.
+- `doctor` named the four missing fields and five missing labels, exit 1.
+- `init --push` **failed on its first operation** — GitHub refuses to delete the built-in `Status`
+  field, so D5.5's delete-and-recreate was unreachable in the only case it existed for. Fixed by
+  `updateProjectV2Field`; see the D5.5 live correction in `design.md`. The failure itself behaved:
+  exit 2, nothing partially applied.
+- `init --push` then created 5 fields and 5 labels; `doctor` returned **all `ok`**; a second
+  `init --push` planned nothing. Convergence, against real GitHub rather than a double.
 
-1. **Grant the local token the Projects scope.** *This one needs a human: it is an interactive
-   browser flow.* Nothing project-related works without it:
-   ```sh
-   gh auth refresh -s project
-   ```
-   (Verified 2026-09-08: the account's token has `repo`, `read:org`, `gist`, `admin:public_key` —
-   no `project`. Note `gh`'s own hint says `-s read:project`; that is not enough, because `init`
-   *writes* fields.)
+The shorthand the remaining steps use:
 
-2. **Create the board, then let `init` fill it in.** The Project itself still has to be created by
-   hand (`gh project create`); everything after that is one command:
-   ```sh
-   gh project create --owner bioshrek --title dispatchkit-sandbox
-   S="--root ../dispatchkit-sandbox --repo bioshrek/dispatchkit-sandbox --project <n>"
-   uv run dispatchkit doctor $S   # what is missing
-   uv run dispatchkit init   $S --push
-   uv run dispatchkit doctor $S   # expect all `ok`
-   ```
+```sh
+S="--root ../dispatchkit-sandbox --repo bioshrek/dispatchkit-sandbox --project 2"
+```
 
-   `init` creates every field with its options, every label, and any missing file. The built-in
-   `Status` field carrying `Todo`/`In Progress`/`Done` is handled: on an empty board it is deleted
-   and recreated; on a populated one you get a notice naming the `field-delete` command, because
-   deleting a field deletes its values and that is not a machine's call.
-
-3. **Write the first plan graph** — `../dispatchkit-sandbox/docs/plans/<plan>.tasks.toml`. Per
+1. **Write the first plan graph** — `../dispatchkit-sandbox/docs/plans/<plan>.tasks.toml`. Per
    the design's "synthetic tasks, but never no-ops" rule these must be real chores producing real
    diffs and real CI time. The sandbox README lists four, chosen to be exactly that: `--top N`,
    stopword filtering, `--json` output, and an encoding fallback.
 
-4. **Run the live trial by hand first**, before wiring the workflow — it uses the local `gh`
+2. **Run the live trial by hand first**, before wiring the workflow — it uses the local `gh`
    credential, so no PAT is needed yet:
    ```sh
    uv run dispatchkit apply ../dispatchkit-sandbox/docs/plans/<plan>.tasks.toml --push $S
@@ -79,13 +64,13 @@ Already done, and the first live exercise of the adapter:
    The first job here is to **re-record `tests/fixtures/search_issues.json`** from the real
    response, since today's is renderer-generated.
 
-5. **Then create the real repo**, once the sandbox has proven the path end to end:
+3. **Then create the real repo**, once the sandbox has proven the path end to end:
    ```sh
    gh repo create dispatchkit --public --source . --remote origin --push
    ```
-   Then the same three commands from step 2 against it.
+   Then `doctor` → `init --push` → `doctor` against it, as above.
 
-6. **Then automate.** `.github/workflows/dispatchkit.yml` needs `secrets.DISPATCHKIT_TOKEN` plus
+4. **Then automate.** `.github/workflows/dispatchkit.yml` needs `secrets.DISPATCHKIT_TOKEN` plus
    repo variables `DISPATCHKIT_PLAN` and `DISPATCHKIT_PROJECT`. The token must be a PAT:
    `GITHUB_TOKEN` can neither assign the coding agent nor write a user-level Project. Set it with
    a prompt, never as an argv: `gh secret set DISPATCHKIT_TOKEN`.

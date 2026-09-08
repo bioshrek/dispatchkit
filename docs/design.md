@@ -923,9 +923,48 @@ presumptuous conventions became configuration, and the two commands that stand a
   verdict is "could not be carried out", not "unhealthy".
 
 **The gap this leaves:** `doctor` still cannot see branch protection or the merge queue, which are
-D9's prerequisites; it will grow those checks when D9 needs them. And every new adapter path —
-`fetch_board`, `create_field`, `delete_field`, `token_scopes` — is, like the rest of `GhCli`,
-argv-checked but never executed. The live run is still the live run.
+D9's prerequisites; it will grow those checks when D9 needs them.
+
+### D5.5 live correction — the built-in `Status` field cannot be deleted
+
+The first `init --push` against a real board failed on its first operation, and the failure was in
+the design, not the code:
+
+```
+GraphQL: Only custom fields can be deleted. (deleteProjectV2Field)
+```
+
+D5.5 had reasoned that a mis-optioned single select can only be fixed by delete-and-recreate, and
+made it safe by gating on an empty board. Both halves were right except for the one field it
+actually had to fix. Every Project arrives with a built-in `Status` holding `Todo`/`In Progress`/
+`Done`, and GitHub refuses to delete built-in fields at all — empty board or not. So the operation
+was unreachable in exactly the case that motivated it, and no offline test could have caught it:
+the in-memory double faithfully implemented an API that does not exist.
+
+`updateProjectV2Field` does work on built-in fields, and is the better primitive anyway:
+
+- **The field keeps its id.** Delete-and-recreate would have silently orphaned every saved view,
+  grouping and workflow the board had built on `Status` — a cost the old plan never accounted for
+  because nothing offline could observe it.
+- **The safety argument is unchanged.** Replacing the options still drops any value held under an
+  option that goes away, so it stays gated on `board.items == 0`; on a populated board the notice
+  now names the project's settings rather than a `field-delete` that would fail anyway.
+- **The variables travel in a request body**, not in argv: `-F` cannot carry a list of objects,
+  and the option list is one. `gh api graphql --input -` with a `json.dumps`ed body keeps the
+  argv rule intact and keeps the field id out of the mutation text.
+
+`delete_field` stays on the port. It is still the right operation for a custom field, and removing
+it would trade a real capability for a tidier diff.
+
+**Verified live 2026-09-08** against `bioshrek/dispatchkit-sandbox` and project 2: `doctor` named
+the four missing fields and the five missing labels, `init --push` created them and set `Status`'s
+options in place, `doctor` returned all `ok`, and a second `init --push` planned nothing. That
+last one is the convergence standard met against real GitHub rather than a double.
+
+**The gap this leaves:** `apply` and `tick` still have not run live, so the issue-writing and
+dispatch paths — `create_issue`, `item_add`, `item_edit`, `assign_agent` — remain argv-checked and
+unexecuted, and `tests/fixtures/search_issues.json` is still renderer-generated rather than
+recorded.
 
 ## First real plan
 

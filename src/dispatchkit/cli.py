@@ -380,6 +380,9 @@ def _init(args: argparse.Namespace) -> int:
 
     for line in summarise_init(plan):
         print(line)
+    # stderr is unbuffered, so without this a failure below overtakes the plan
+    # it failed on, and the output reads back to front.
+    sys.stdout.flush()
 
     if api is not None:
         try:
