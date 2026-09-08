@@ -29,6 +29,7 @@ from dispatchkit.github import (
     DispatchOperation,
     GitHubApi,
     LabelIssue,
+    MarkReady,
     Notice,
     RepoState,
     SetProjectField,
@@ -42,6 +43,7 @@ from dispatchkit.resolve import (
     admit,
     build_items,
     ci_notices,
+    ready_ops,
     reconcile_ops,
     resolve,
 )
@@ -66,6 +68,9 @@ class TickPlan:
 class TickResult:
     dispatched: int
     reconciled: int
+    #: Pull requests taken out of draft. Kept apart from `dispatched` because
+    #: no work was handed to an agent: an existing PR was merely un-drafted.
+    readied: int = 0
 
 
 def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPlan:
@@ -92,8 +97,15 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
     # rather than needing a second write.
     projected = {**statuses, **dict.fromkeys(dispatched, Status.DISPATCHED)}
 
+    # Planned from the state as read, so the board is told what was true when
+    # we looked. A draft cleared by this pass becomes `Auto-merging` on the
+    # next one, which is the same convergence the whole resolver relies on.
     return TickPlan(
-        operations=(*dispatch_ops, *reconcile_ops(items, projected)),
+        operations=(
+            *dispatch_ops,
+            *ready_ops(items),
+            *reconcile_ops(items, projected),
+        ),
         item_ids={
             task.id: task.project_item_id
             for task in items
@@ -107,7 +119,7 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
 
 
 def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
-    dispatched = reconciled = 0
+    dispatched = reconciled = readied = 0
     for operation in plan.operations:
         match operation:
             case AssignAgent():
@@ -118,10 +130,13 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
                     number=operation.number, add=operation.add, remove=operation.remove
                 )
                 dispatched += 1
+            case MarkReady():
+                api.mark_ready(number=operation.number)
+                readied += 1
             case SetProjectField():
                 _set_field(api, plan, operation)
                 reconciled += 1
-    return TickResult(dispatched, reconciled)
+    return TickResult(dispatched, reconciled, readied)
 
 
 def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:

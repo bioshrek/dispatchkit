@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.6 are implemented and green offline. 473 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.7 are implemented and green offline. 499 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -18,6 +18,7 @@ clean via `make check`.
 | D5 | Cloud dispatch + workflow | **done and proven live**; agents dispatched, PRs open |
 | D5.5 | Block version key, configurable paths/fence, `doctor`, `init` | **done and proven live**; board bootstrap converges |
 | D5.6 | CI-aware status, workflow template fix, `doctor` inputs | **done and proven live**; `verify: auto` now means something |
+| D5.7 | Draft-aware status, `MarkReady` for `verify: auto` | **done and proven live**; `Auto-merging` implies a merge is possible |
 | D6–D9 | Local daemon, retry/reclaim, alerting, auto-merge | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
@@ -75,9 +76,17 @@ gate and CI went green, the next pass reported `Auto-merging` and the notice was
 `stopwords` — `verify: human`, CI still held — stayed `In Review` with no notice, which is
 correct: nobody was waiting on CI there.
 
+**Draft pull requests were the last false `Auto-merging`.** D5.7 found that Copilot leaves its
+PRs in draft when it finishes — deliberate, and correct for `verify: human`, where marking it
+ready *is* the review. But a draft cannot be merged, so `verify: auto` could never close. A pass
+now marks a green `verify: auto` PR ready itself, and `Auto-merging` finally implies both that CI
+has passed and that a merge is possible. PR #6 is out of draft and `MERGEABLE`; PR #7 is
+correctly untouched.
+
 1. **Watch a task all the way through.** This is the first thing nobody has ever seen: review PR
    #6, merge it, close `top-n`, then run a pass and check that `json-output` unblocks and
-   `encoding-fallback` stops being deferred.
+   `encoding-fallback` stops being deferred. PR #6 is now genuinely mergeable, so this is
+   unblocked for the first time.
    ```sh
    uv run dispatchkit tick --plan wordfreq --push $S
    ```

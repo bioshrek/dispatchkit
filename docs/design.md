@@ -1137,6 +1137,70 @@ then runs unreviewed. So `verify: auto` is now usable unattended for adopters wi
 that trade, per repository and by hand, while D9 remains the answer for those who are not.
 
 
+### D5.7 — a draft pull request merges nothing
+
+Found by asking why the two sandbox PRs were still drafts. The answer is that this is correct
+behaviour and nothing was stuck: the timeline on #6 reads `copilot_work_started`, `committed`,
+`renamed`, `copilot_work_finished`, `review_requested`, with no `ready_for_review` after it.
+Copilot finishes, requests review, and deliberately leaves the pull request a draft for a human
+to mark ready. GitHub documents this.
+
+The bug was ours, and it is D5.6's bug reached by a second road. `Auto-merging` had just been
+taught to check that CI could reach a verdict; it still did not check that a merge was *possible*.
+A draft cannot be merged at all, so green CI on a draft merges nothing and the board would sit on
+`Auto-merging` forever — the same false claim D5.6 existed to remove, with a different cause.
+Confirmed rather than assumed:
+
+```
+$ gh pr merge 7 --auto --squash
+GraphQL: Pull Request is still a draft (mergePullRequest)
+```
+
+**`mergeStateStatus` cannot be used to detect this,** which is the trap worth recording. GitHub
+documents a `DRAFT` value for it, but both live PRs reported `mergeable: MERGEABLE` and
+`mergeStateStatus: CLEAN` while `isDraft` was true. This is the same shape of failure as
+`statusCheckRollup` returning `null` for a held run: the aggregated field looks like the one to
+read, and it is quietly wrong for the case that matters. Both times the fix was to stop reading
+the summary and ask the specific question. `isDraft` is now a field on `PullRequest`, parsed
+verbatim, never inferred. A missing `isDraft` reads as *not* draft, because the pessimistic
+reading would strand `verify: auto` at `In Review` forever over a payload shape we merely failed
+to request.
+
+**Clearing the gate is `verify: auto`'s whole meaning.** For `verify: human`, draft is exactly
+right and no notice is emitted: marking it ready *is* the reviewer's act, and a notice on every
+such task would be noise. For `verify: auto` there is no reviewer by definition, so leaving the
+draft would define a task that can never close. `auto` declares that the pipeline decides, and
+the pipeline has decided; the draft is therefore a gate dispatchkit has already been told it may
+clear. `ready_ops` emits `MarkReady`, and `gh pr ready` performs it.
+
+Guarded on `Checks.PASSING`, not on "not stalled". `Checks.NONE` is an absence of evidence, and
+clearing a merge gate on the strength of no runs at all would be a worse version of the fault
+being fixed here. This narrows behaviour for one case — a draft with no CI and `verify: auto`
+used to reach `Auto-merging` and now stays `In Review` — which is the honest answer, since
+nothing verified it.
+
+`MarkReady` is the first operation a pass performs against a pull request rather than an issue.
+The rule it does not break is the one that matters: it changes no content, creates nothing and
+closes nothing, so `apply` still owns the graph's shape and only a merged PR still closes work.
+It is counted as `readied` rather than `dispatched`, because no work was handed to an agent and
+the dispatch count is the number a human skims in the workflow log.
+
+The board is told the status that was true when the state was read, so a pass that clears a draft
+still reports `In Review` and the next pass reports `Auto-merging`. That is the same convergence
+the resolver relies on everywhere else, and it is proven twice: against the in-memory double, and
+live —
+
+```
+pass 1: top-n: In Review     0 dispatched, 1 board write(s), 1 PR(s) marked ready
+pass 2: top-n: Auto-merging  0 dispatched, 1 board write(s)
+pass 3: top-n: Auto-merging  0 dispatched, 0 board write(s)
+```
+
+with PR #6 (`auto`) ending `draft=false, mergeable=MERGEABLE` and PR #7 (`human`) untouched at
+`draft=true`. `Auto-merging` is now, for the first time, a claim that is true of both the pipeline
+and the pull request.
+
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once

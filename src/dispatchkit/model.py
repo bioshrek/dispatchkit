@@ -97,6 +97,11 @@ class PullRequest:
 
     number: int
     checks: Checks = Checks.NONE
+    #: Read from `isDraft`, never inferred. GitHub documents a `DRAFT` value
+    #: for `mergeStateStatus`, but a draft PR reports `CLEAN` there, so the
+    #: summary field cannot be used to answer the one question that decides
+    #: whether a merge is possible at all.
+    draft: bool = False
 
 
 # Capability tags a task may demand of its runner. The cloud lane advertises

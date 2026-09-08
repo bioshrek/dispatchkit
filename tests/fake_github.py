@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 
 from dispatchkit.gh_cli import AGENT_LOGIN
 from dispatchkit.github import IssueState, RepoState
+from dispatchkit.model import PullRequest
 
 
 @dataclass
@@ -84,6 +85,21 @@ class FakeGitHub:
         # second assignment of the same actor leaves the state unchanged —
         # which is exactly what makes concurrent passes safe.
         self._replace(number, assignees=(AGENT_LOGIN,))
+
+    def mark_ready(self, *, number: int) -> None:
+        self.calls.append(f"mark_ready({number})")
+        # The real mutation is idempotent — a PR already out of draft stays
+        # out — and so is this: the double rewrites the flag rather than
+        # counting, so a second pass over the same PR changes nothing.
+        for issue in self.state.issues:
+            replacement = tuple(
+                PullRequest(pr.number, pr.checks, draft=False)
+                if pr.number == number
+                else pr
+                for pr in issue.open_prs
+            )
+            if replacement != issue.open_prs:
+                self._replace(issue.number, open_prs=replacement)
 
     def edit_labels(
         self, *, number: int, add: Sequence[str] = (), remove: Sequence[str] = ()

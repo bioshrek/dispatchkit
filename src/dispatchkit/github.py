@@ -114,10 +114,26 @@ class LabelIssue:
     remove: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class MarkReady:
+    """Take a `verify: auto` pull request out of draft (D5.7).
+
+    Copilot leaves its pull requests as drafts when it finishes, and a draft
+    cannot be merged. `verify: auto` is a declaration that no human judgment is
+    required, so the draft gate is one dispatchkit has already been told it may
+    clear. It does not touch the tree, and it is only ever emitted over a run
+    that has actually passed.
+    """
+
+    task_id: TaskId
+    number: int
+
+
 #: What a scheduler pass may do. Deliberately narrower than `Operation`: a pass
 #: never creates, edits or closes an issue — `apply` owns the graph's shape and
-#: only a merged PR closes work.
-DispatchOperation = AssignAgent | LabelIssue | SetProjectField
+#: only a merged PR closes work. `MarkReady` is the one write that lands on a
+#: pull request rather than an issue, and it changes no content.
+DispatchOperation = AssignAgent | LabelIssue | MarkReady | SetProjectField
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +194,8 @@ class GitHubApi(Protocol):
     def set_project_field(self, *, item_id: str, field_name: str, value: str) -> None: ...
 
     def assign_agent(self, *, number: int, node_id: str) -> None: ...
+
+    def mark_ready(self, *, number: int) -> None: ...
 
     def edit_labels(
         self, *, number: int, add: Sequence[str] = (), remove: Sequence[str] = ()

@@ -278,7 +278,10 @@ def _tick(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     result = execute_tick(plan, api)
-    print(f"pass complete: {result.dispatched} dispatched, {result.reconciled} board write(s)")
+    line = f"pass complete: {result.dispatched} dispatched, {result.reconciled} board write(s)"
+    if result.readied:
+        line += f", {result.readied} PR(s) marked ready"
+    print(line)
     return EXIT_OK
 
 

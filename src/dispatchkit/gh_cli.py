@@ -73,6 +73,7 @@ query($owner: String!, $repo: String!, $first: Int!) {
                 ... on PullRequest {
                   number
                   state
+                  isDraft
                   commits(last: 1) {
                     nodes {
                       commit {
@@ -145,7 +146,13 @@ def _parse_open_prs(node: dict[str, Any]) -> tuple[PullRequest, ...]:
     for event in node.get("timelineItems", {}).get("nodes") or []:
         source = event.get("source") or {}
         if source.get("state") == "OPEN" and "number" in source:
-            prs.append(PullRequest(int(source["number"]), _parse_checks(source)))
+            prs.append(
+                PullRequest(
+                    int(source["number"]),
+                    _parse_checks(source),
+                    draft=bool(source.get("isDraft")),
+                )
+            )
     return tuple(prs)
 
 
@@ -272,6 +279,16 @@ def actor_command(owner: str, repo: str) -> list[str]:
         "-F",
         f"repo={repo}",
     ]
+
+
+def ready_command(number: int, repo: str) -> list[str]:
+    """Take a pull request out of draft.
+
+    `gh pr ready` rather than the GraphQL mutation because the CLI already
+    resolves a number to a node id against the right repository, and the
+    number is the only thing the planner knows.
+    """
+    return ["gh", "pr", "ready", str(number), "--repo", repo]
 
 
 def assign_command(assignable_id: str, actor_id: str) -> list[str]:
@@ -570,6 +587,9 @@ class GhCli:
                 "enable the coding agent, or route these tasks to the local lane"
             )
         _run(assign_command(node_id, actor))
+
+    def mark_ready(self, *, number: int) -> None:
+        _run(ready_command(number, self.repo))
 
     def edit_labels(
         self, *, number: int, add: Sequence[str] = (), remove: Sequence[str] = ()

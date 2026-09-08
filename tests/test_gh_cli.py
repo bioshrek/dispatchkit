@@ -16,6 +16,7 @@ import pytest
 from dispatchkit.board import SINGLE_SELECT, TEXT, FieldSpec
 from dispatchkit.gh_cli import (
     AGENT_LOGIN,
+    STATE_QUERY,
     FieldCatalog,
     ProjectFieldError,
     assign_command,
@@ -35,6 +36,7 @@ from dispatchkit.gh_cli import (
     parse_item_count,
     parse_state,
     project_view_command,
+    ready_command,
     state_command,
     update_issue_command,
 )
@@ -474,3 +476,64 @@ class TestFieldOptionUpdate:
         # silent no-op rather than the loud failure D5.5 asked for.
         with pytest.raises(ValueError, match="single select"):
             field_update_body("PVTF_1", FieldSpec("Task ID", "TEXT", ()))
+
+
+class TestParseDraft:
+    """`isDraft` is read from the payload, because nothing else answers it.
+
+    A draft pull request cannot be merged, and the field that looks like it
+    should say so does not: both live sandbox PRs reported
+    `mergeStateStatus: CLEAN` while `isDraft` was true. The query therefore
+    asks for `isDraft` directly and the parser stores it verbatim.
+    """
+
+    @staticmethod
+    def _with_draft(value: object) -> dict[str, Any]:
+        payload = recorded()
+        node = payload["data"]["repository"]["issues"]["nodes"][1]
+        for event in node["timelineItems"]["nodes"]:
+            source = event.get("source") or {}
+            if source.get("state") == "OPEN":
+                if value is None:
+                    source.pop("isDraft", None)
+                else:
+                    source["isDraft"] = value
+        return payload
+
+    def _draft(self, value: object) -> bool:
+        return parse_state(self._with_draft(value)).issues[1].open_prs[0].draft
+
+    def test_a_draft_pr_is_read_as_draft(self) -> None:
+        assert self._draft(True) is True
+
+    def test_a_ready_pr_is_not_draft(self) -> None:
+        assert self._draft(False) is False
+
+    def test_a_missing_field_is_not_treated_as_draft(self) -> None:
+        # An absent field must not strand a task: reading it as draft would
+        # hold `verify: auto` at `In Review` forever on a payload shape we
+        # simply failed to ask for.
+        assert self._draft(None) is False
+
+    def test_the_query_asks_for_it(self) -> None:
+        assert "isDraft" in STATE_QUERY
+
+
+class TestMarkReadyCommand:
+    """Taking a PR out of draft is `gh pr ready`, as an argv list."""
+
+    def test_it_names_the_pr_and_the_repo(self) -> None:
+        assert ready_command(7, "o/r") == [
+            "gh",
+            "pr",
+            "ready",
+            "7",
+            "--repo",
+            "o/r",
+        ]
+
+    def test_the_number_is_never_interpolated_into_a_string(self) -> None:
+        # Every argument is its own element, so nothing a PR number could
+        # contain reaches a shell. There is no shell.
+        assert all(isinstance(part, str) for part in ready_command(7, "o/r"))
+        assert " " not in "".join(ready_command(7, "o/r")[:3])

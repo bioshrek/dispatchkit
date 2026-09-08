@@ -12,9 +12,16 @@ unassigned, and every id in `depends` maps to a closed issue.*
 from __future__ import annotations
 
 from dispatchkit.config import SchedulerConfig
-from dispatchkit.github import SetProjectField
+from dispatchkit.github import MarkReady, SetProjectField
 from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
-from dispatchkit.resolve import Status, admit, ci_notices, reconcile_ops, resolve
+from dispatchkit.resolve import (
+    Status,
+    admit,
+    ci_notices,
+    ready_ops,
+    reconcile_ops,
+    resolve,
+)
 from tests.items import item, items_of
 
 
@@ -390,3 +397,90 @@ class TestFileScopeExclusion:
         deferred = plan.deferred[0]
         assert deferred.task_id == TaskId("b")
         assert "a" in deferred.detail  # names what it is waiting behind
+
+
+class TestDraftBlocksAutoMerge:
+    """A draft pull request cannot be merged, so `Auto-merging` cannot be true.
+
+    The same fault as `TestAutoMergeRequiresLiveCi`, reached by a different
+    road. Copilot opens its pull requests as drafts and — by design, confirmed
+    by a `copilot_work_finished` event with no `ready_for_review` after it —
+    leaves them that way when it is done. Green CI on a draft still merges
+    nothing.
+
+    `mergeStateStatus` is no help and is actively misleading: GitHub documents
+    a `DRAFT` value, but both live sandbox PRs reported `CLEAN` while
+    `isDraft` was true. Only `isDraft` can be trusted, which is why it is a
+    field on `PullRequest` rather than something inferred.
+    """
+
+    @staticmethod
+    def _auto(*, draft: bool, checks: Checks = Checks.PASSING) -> Status:
+        working = item(
+            "a",
+            assignees=("copilot",),
+            open_prs=(PullRequest(7, checks, draft=draft),),
+            verify=Verify.AUTO,
+        )
+        return resolve(items_of(working))[TaskId("a")]
+
+    def test_a_green_draft_is_not_auto_merging(self) -> None:
+        assert self._auto(draft=True) is Status.IN_REVIEW
+
+    def test_a_green_ready_pr_is_still_auto_merging(self) -> None:
+        assert self._auto(draft=False) is Status.AUTO_MERGING
+
+    def test_draft_does_not_change_a_human_task(self) -> None:
+        # `verify: human` was always `In Review`; draft is the normal state
+        # there and marking it ready is the reviewer's own act.
+        working = item(
+            "a",
+            assignees=("copilot",),
+            open_prs=(PullRequest(7, Checks.PASSING, draft=True),),
+            verify=Verify.HUMAN,
+        )
+        assert resolve(items_of(working))[TaskId("a")] is Status.IN_REVIEW
+
+
+class TestReadyOps:
+    """`verify: auto` promises no human judgment, so draft is ours to clear.
+
+    Only when CI has actually passed. `Checks.NONE` is an absence of evidence,
+    not evidence, so a draft with no runs stays a draft — that is the one case
+    where the old behaviour was accidentally right for the wrong reason.
+    """
+
+    @staticmethod
+    def _ops(
+        *, verify: Verify = Verify.AUTO, draft: bool = True, checks: Checks = Checks.PASSING
+    ) -> tuple[MarkReady, ...]:
+        working = item(
+            "a",
+            number=3,
+            assignees=("copilot",),
+            open_prs=(PullRequest(7, checks, draft=draft),),
+            verify=verify,
+        )
+        return ready_ops(items_of(working))
+
+    def test_a_green_auto_draft_is_marked_ready(self) -> None:
+        assert self._ops() == (MarkReady(TaskId("a"), 7),)
+
+    def test_a_pr_already_out_of_draft_is_left_alone(self) -> None:
+        assert self._ops(draft=False) == ()
+
+    def test_a_human_task_is_never_marked_ready(self) -> None:
+        assert self._ops(verify=Verify.HUMAN) == ()
+
+    def test_a_draft_without_a_passing_run_is_left_alone(self) -> None:
+        for checks in (Checks.NONE, Checks.PENDING, Checks.FAILING, Checks.BLOCKED):
+            assert self._ops(checks=checks) == ()
+
+    def test_a_closed_task_is_left_alone(self) -> None:
+        done = item(
+            "a",
+            closed=True,
+            open_prs=(PullRequest(7, Checks.PASSING, draft=True),),
+            verify=Verify.AUTO,
+        )
+        assert ready_ops(items_of(done)) == ()

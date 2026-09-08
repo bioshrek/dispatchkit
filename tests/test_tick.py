@@ -16,7 +16,13 @@ import pytest
 
 from dispatchkit.cli import main
 from dispatchkit.config import SchedulerConfig
-from dispatchkit.github import AssignAgent, LabelIssue, RepoState, SetProjectField
+from dispatchkit.github import (
+    AssignAgent,
+    LabelIssue,
+    MarkReady,
+    RepoState,
+    SetProjectField,
+)
 from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 from dispatchkit.resolve import LABEL_LOCAL_CLAIM, Status
 from dispatchkit.tick import TickPlan, execute_tick, plan_tick, summarise
@@ -263,3 +269,122 @@ class TestTickCommand:
     ) -> None:
         assert main(["tick", "--plan", PLAN]) == 2
         assert "--state" in capsys.readouterr().err
+
+
+class TestMarkingAutoPrsReady:
+    """A pass clears the draft gate for `verify: auto`, and only then.
+
+    The ordering matters for the same reason dispatch-before-record does: the
+    status the board is told reflects the operations this pass is about to
+    perform, and a draft cleared now is `Auto-merging` on the next pass, not
+    this one. Claiming it early would be the board asserting a merge over a
+    pull request that was still a draft when we looked.
+    """
+
+    @staticmethod
+    def _state(verify: Verify, checks: Checks, *, draft: bool = True) -> RepoState:
+        return state_of(
+            issue(
+                "a",
+                number=3,
+                verify=verify,
+                assignees=("copilot",),
+                open_prs=(PullRequest(7, checks, draft=draft),),
+            )
+        )
+
+    def _plan(self, verify: Verify, checks: Checks, *, draft: bool = True) -> TickPlan:
+        state = self._state(verify, checks, draft=draft)
+        return plan_tick(state, plan=PLAN, config=SchedulerConfig())
+
+    def test_a_green_auto_draft_is_marked_ready(self) -> None:
+        plan = self._plan(Verify.AUTO, Checks.PASSING)
+        assert MarkReady(TaskId("a"), 7) in plan.operations
+
+    def test_a_human_draft_is_left_for_its_reviewer(self) -> None:
+        plan = self._plan(Verify.HUMAN, Checks.PASSING)
+        assert not [op for op in plan.operations if isinstance(op, MarkReady)]
+
+    def test_the_board_is_not_told_auto_merging_in_the_same_pass(self) -> None:
+        plan = self._plan(Verify.AUTO, Checks.PASSING)
+        assert plan.statuses[TaskId("a")] is Status.IN_REVIEW
+
+    def test_executing_it_calls_the_port(self) -> None:
+        api = FakeGitHub(state=self._state(Verify.AUTO, Checks.PASSING))
+        execute_tick(self._plan(Verify.AUTO, Checks.PASSING), api)
+        assert "mark_ready(7)" in api.calls
+
+    def test_a_pass_over_a_ready_pr_plans_nothing(self) -> None:
+        # Convergence: once the draft is cleared the operation must not be
+        # re-emitted, or every pass would write to the same pull request.
+        plan = self._plan(Verify.AUTO, Checks.PASSING, draft=False)
+        assert not [op for op in plan.operations if isinstance(op, MarkReady)]
+        assert plan.statuses[TaskId("a")] is Status.AUTO_MERGING
+
+
+class TestMarkReadyConverges:
+    """The standard for any mutating behaviour: plan, apply, re-read, re-plan.
+
+    A second pass must plan nothing. `gh pr ready` on a PR that is already out
+    of draft is harmless, but a pass that keeps emitting it would be writing to
+    GitHub on every cron tick forever, which is how rate limits and confusing
+    audit trails are made.
+    """
+
+    def _state(self) -> RepoState:
+        return state_of(
+            issue(
+                "a",
+                number=3,
+                verify=Verify.AUTO,
+                assignees=("copilot",),
+                open_prs=(PullRequest(7, Checks.PASSING, draft=True),),
+            )
+        )
+
+    def test_the_second_pass_plans_no_ready_op(self) -> None:
+        api = FakeGitHub(state=self._state())
+        first = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        assert [op for op in first.operations if isinstance(op, MarkReady)]
+
+        execute_tick(first, api)
+        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        assert not [op for op in second.operations if isinstance(op, MarkReady)]
+
+    def test_the_second_pass_reaches_auto_merging(self) -> None:
+        # The point of clearing the draft: the task can now actually merge,
+        # and the board says so on the very next pass without further help.
+        api = FakeGitHub(state=self._state())
+        execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        assert second.statuses[TaskId("a")] is Status.AUTO_MERGING
+
+    def test_the_third_pass_is_empty(self) -> None:
+        api = FakeGitHub(state=self._state())
+        for _ in range(2):
+            execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        assert not plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+
+
+class TestReadyIsNotCountedAsDispatch:
+    """`dispatched` means work handed to an agent, and this hands out nothing.
+
+    Reporting it there would tell the log a task had been started when in fact
+    an existing pull request was merely un-drafted, and the count is the one
+    number a human skims in the workflow output.
+    """
+
+    def test_marking_ready_is_reported_separately(self) -> None:
+        state = state_of(
+            issue(
+                "a",
+                number=3,
+                verify=Verify.AUTO,
+                assignees=("copilot",),
+                open_prs=(PullRequest(7, Checks.PASSING, draft=True),),
+            )
+        )
+        api = FakeGitHub(state=state)
+        result = execute_tick(plan_tick(state, plan=PLAN, config=SchedulerConfig()), api)
+        assert result.readied == 1
+        assert result.dispatched == 0

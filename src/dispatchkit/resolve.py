@@ -34,6 +34,7 @@ from dispatchkit.config import SchedulerConfig
 from dispatchkit.errors import GraphError
 from dispatchkit.github import (
     DISPATCHKIT_LABEL,
+    MarkReady,
     Notice,
     RepoState,
     SetProjectField,
@@ -105,6 +106,15 @@ class TaskItem:
     def checks(self) -> Checks:
         """CI's verdict across every open PR on this task, worst first."""
         return Checks.combine(pr.checks for pr in self.open_prs)
+
+    @property
+    def draft(self) -> bool:
+        """Is any open PR still a draft, and so unmergeable?
+
+        `any`, not `all`: one draft is enough to stop the task closing, and
+        the pessimistic reading is the safe one here as everywhere else.
+        """
+        return any(pr.draft for pr in self.open_prs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +189,9 @@ def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Statu
         # to: a run held for approval, or a red one, needs a human, which is
         # exactly what `In Review` means. Saying `Auto-merging` over a pipeline
         # that will never start would be the board asserting something false.
-        if task.verify is Verify.AUTO and not task.checks.stalled:
+        # A draft is the same lie by a different route — green CI merges
+        # nothing while the PR cannot be merged at all.
+        if task.verify is Verify.AUTO and not task.checks.stalled and not task.draft:
             return Status.AUTO_MERGING
         return Status.IN_REVIEW
     if task.claimed:
@@ -189,6 +201,32 @@ def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Statu
     if all(dep in closed for dep in task.block.depends):
         return Status.READY
     return Status.BLOCKED
+
+
+def ready_ops(items: Sequence[TaskItem]) -> tuple[MarkReady, ...]:
+    """Take `verify: auto` pull requests out of draft once CI has passed.
+
+    Copilot finishes its work and leaves the pull request a draft — that is
+    deliberate on GitHub's part, and for `verify: human` it is exactly right,
+    because marking it ready *is* the reviewer's act. For `verify: auto` there
+    is no reviewer by definition, so leaving it would mean a task that can
+    never close: `auto` says the pipeline decides, and the pipeline has.
+
+    Guarded on `PASSING` rather than on "not stalled". `Checks.NONE` is an
+    absence of evidence, and clearing a merge gate on the strength of no runs
+    at all would be a worse version of the bug this whole deliverable exists
+    to fix.
+    """
+    operations = []
+    for task in items:
+        if task.closed or task.verify is not Verify.AUTO:
+            continue
+        operations += [
+            MarkReady(task.id, pr.number)
+            for pr in task.open_prs
+            if pr.draft and pr.checks is Checks.PASSING
+        ]
+    return tuple(operations)
 
 
 def ci_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
