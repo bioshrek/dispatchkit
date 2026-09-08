@@ -102,6 +102,10 @@ class PullRequest:
     #: summary field cannot be used to answer the one question that decides
     #: whether a merge is possible at all.
     draft: bool = False
+    #: Repository paths this pull request changes, for the blast-radius fence.
+    #: Empty means the question went unanswered, not that nothing changed — a
+    #: pull request with no files does not exist. Treated as unknown scope.
+    files: tuple[str, ...] = ()
 
 
 # Capability tags a task may demand of its runner. The cloud lane advertises

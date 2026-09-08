@@ -61,6 +61,10 @@ class Diagnostics:
     #: empty one is a scheduler that runs on a cron and does nothing.
     variables: tuple[str, ...] = ()
     secrets: tuple[str, ...] = ()
+    #: Is the default branch protected by required status checks? Not a
+    #: precondition for merging — dispatchkit checks CI itself — but it decides
+    #: whether anything is watching if that reading is wrong.
+    protected_branch: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +106,7 @@ def check_remote(diagnostics: Diagnostics) -> tuple[Check, ...]:
         _fields(diagnostics.board),
         _labels(diagnostics.board),
         _inputs(diagnostics),
+        _merge_gate(diagnostics),
     )
 
 
@@ -302,6 +307,40 @@ _CONSEQUENCES = {
     "DISPATCHKIT_PROJECT": "no board",
     "DISPATCHKIT_TOKEN": "no token",
 }
+
+
+def _merge_gate(diagnostics: Diagnostics) -> Check:
+    """Is there a second lock behind a `verify: auto` merge?
+
+    Reported rather than enforced. `merge_ops` refuses to merge anything that
+    is not green, non-draft and outside the fence, and that gate does not
+    depend on the repository's settings — which is the whole point, because a
+    live probe showed the repository is no backstop at all: with no protection,
+    GitHub merged a pull request the instant it was asked, reporting success,
+    having run nothing.
+
+    So an unprotected branch is not broken, it is *single-gated*. Every belief
+    dispatchkit holds about CI is then the only thing standing between an agent
+    and `main`. Protection makes GitHub refuse a red merge independently, which
+    is the difference between one lock and two.
+    """
+    if diagnostics.protected_branch:
+        return Check(
+            "merge-gate",
+            True,
+            "the default branch requires status checks, so a `verify: auto` "
+            "merge is refused by GitHub as well as by dispatchkit",
+        )
+    return Check(
+        "merge-gate",
+        False,
+        "the default branch has no required status checks, so dispatchkit's "
+        "own reading of CI is the only gate on a `verify: auto` merge",
+        remedy=(
+            "add branch protection requiring the check your `acceptance` "
+            "command runs, so a red pull request is refused independently"
+        ),
+    )
 
 
 def _consequence(missing: Sequence[str]) -> str:

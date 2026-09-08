@@ -129,11 +129,26 @@ class MarkReady:
     number: int
 
 
+@dataclass(frozen=True, slots=True)
+class MergePr:
+    """Squash-merge a `verify: auto` pull request (D9).
+
+    The one operation in the system that mutates `main` with no human in the
+    loop, so it is the one with the most gates in front of it. It is a *direct*
+    merge, never `--auto`: the probe behind D9 found that `gh pr merge --auto`
+    silently degrades to an immediate merge on a repository without branch
+    protection, which would merge unreviewed code having consulted nothing.
+    """
+
+    task_id: TaskId
+    number: int
+
+
 #: What a scheduler pass may do. Deliberately narrower than `Operation`: a pass
 #: never creates, edits or closes an issue — `apply` owns the graph's shape and
 #: only a merged PR closes work. `MarkReady` is the one write that lands on a
 #: pull request rather than an issue, and it changes no content.
-DispatchOperation = AssignAgent | LabelIssue | MarkReady | SetProjectField
+DispatchOperation = AssignAgent | LabelIssue | MarkReady | MergePr | SetProjectField
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +211,8 @@ class GitHubApi(Protocol):
     def assign_agent(self, *, number: int, node_id: str) -> None: ...
 
     def mark_ready(self, *, number: int) -> None: ...
+
+    def merge_pr(self, *, number: int) -> None: ...
 
     def edit_labels(
         self, *, number: int, add: Sequence[str] = (), remove: Sequence[str] = ()

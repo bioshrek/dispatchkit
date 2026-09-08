@@ -30,6 +30,7 @@ from dispatchkit.github import (
     GitHubApi,
     LabelIssue,
     MarkReady,
+    MergePr,
     Notice,
     RepoState,
     SetProjectField,
@@ -43,6 +44,7 @@ from dispatchkit.resolve import (
     admit,
     build_items,
     ci_notices,
+    merge_ops,
     ready_ops,
     reconcile_ops,
     resolve,
@@ -71,6 +73,8 @@ class TickResult:
     #: Pull requests taken out of draft. Kept apart from `dispatched` because
     #: no work was handed to an agent: an existing PR was merely un-drafted.
     readied: int = 0
+    #: Pull requests squash-merged. The only count here that changed `main`.
+    merged: int = 0
 
 
 def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPlan:
@@ -104,6 +108,7 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
         operations=(
             *dispatch_ops,
             *ready_ops(items),
+            *merge_ops(items, config),
             *reconcile_ops(items, projected),
         ),
         item_ids={
@@ -119,7 +124,7 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
 
 
 def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
-    dispatched = reconciled = readied = 0
+    dispatched = reconciled = readied = merged = 0
     for operation in plan.operations:
         match operation:
             case AssignAgent():
@@ -133,10 +138,13 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
             case MarkReady():
                 api.mark_ready(number=operation.number)
                 readied += 1
+            case MergePr():
+                api.merge_pr(number=operation.number)
+                merged += 1
             case SetProjectField():
                 _set_field(api, plan, operation)
                 reconciled += 1
-    return TickResult(dispatched, reconciled, readied)
+    return TickResult(dispatched, reconciled, readied, merged)
 
 
 def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:

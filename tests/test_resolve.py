@@ -12,12 +12,13 @@ unassigned, and every id in `depends` maps to a closed issue.*
 from __future__ import annotations
 
 from dispatchkit.config import SchedulerConfig
-from dispatchkit.github import MarkReady, SetProjectField
+from dispatchkit.github import MarkReady, MergePr, SetProjectField
 from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 from dispatchkit.resolve import (
     Status,
     admit,
     ci_notices,
+    merge_ops,
     ready_ops,
     reconcile_ops,
     resolve,
@@ -484,3 +485,62 @@ class TestReadyOps:
             verify=Verify.AUTO,
         )
         assert ready_ops(items_of(done)) == ()
+
+
+class TestMergeOps:
+    """D9: the pass that finally makes `Auto-merging` mean something.
+
+    Every gate here is one dispatchkit checks itself, because the probe that
+    preceded this code showed the repository cannot be relied on to check any
+    of them. An unprotected branch merges whatever it is handed.
+    """
+
+    @staticmethod
+    def _ops(
+        *,
+        verify: Verify = Verify.AUTO,
+        draft: bool = False,
+        checks: Checks = Checks.PASSING,
+        files: tuple[str, ...] = ("src/app.py",),
+        closed: bool = False,
+        config: SchedulerConfig | None = None,
+    ) -> tuple[MergePr, ...]:
+        working = item(
+            "a",
+            number=3,
+            assignees=("copilot",),
+            open_prs=(PullRequest(7, checks, draft=draft, files=files),),
+            verify=verify,
+            closed=closed,
+        )
+        return merge_ops(items_of(working), config or SchedulerConfig())
+
+    def test_a_green_undrafted_auto_pr_is_merged(self) -> None:
+        assert self._ops() == (MergePr(TaskId("a"), 7),)
+
+    def test_a_human_task_is_never_merged(self) -> None:
+        assert self._ops(verify=Verify.HUMAN) == ()
+
+    def test_a_draft_is_never_merged(self) -> None:
+        assert self._ops(draft=True) == ()
+
+    def test_only_a_passing_run_merges(self) -> None:
+        for checks in (Checks.NONE, Checks.PENDING, Checks.FAILING, Checks.BLOCKED):
+            assert self._ops(checks=checks) == ()
+
+    def test_a_closed_task_is_left_alone(self) -> None:
+        assert self._ops(closed=True) == ()
+
+    def test_a_pr_touching_the_fence_is_never_merged(self) -> None:
+        # The pipeline may not rewrite its own rules unattended, however green.
+        for path in (
+            ".github/workflows/ci.yml",
+            ".github/dispatchkit.toml",
+            "docs/plans/demo.tasks.toml",
+        ):
+            assert self._ops(files=("src/app.py", path)) == (), path
+
+    def test_a_pr_whose_files_are_unknown_is_never_merged(self) -> None:
+        # An empty file list is not an empty pull request; it is a question we
+        # failed to get an answer to, and the fence cannot be applied to it.
+        assert self._ops(files=()) == ()

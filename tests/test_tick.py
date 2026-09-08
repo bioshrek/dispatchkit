@@ -20,6 +20,7 @@ from dispatchkit.github import (
     AssignAgent,
     LabelIssue,
     MarkReady,
+    MergePr,
     RepoState,
     SetProjectField,
 )
@@ -388,3 +389,68 @@ class TestReadyIsNotCountedAsDispatch:
         result = execute_tick(plan_tick(state, plan=PLAN, config=SchedulerConfig()), api)
         assert result.readied == 1
         assert result.dispatched == 0
+
+
+class TestMergingConverges:
+    """D9: the pass merges a green `verify: auto` PR, and then stops.
+
+    The convergence standard applied to the only operation that mutates the
+    tree. A merge that kept being re-planned would be harmless at GitHub — the
+    second call errors — but it would mean the pass never settles.
+    """
+
+    def _state(self) -> RepoState:
+        return state_of(
+            issue(
+                "a",
+                number=3,
+                verify=Verify.AUTO,
+                assignees=("copilot",),
+                open_prs=(
+                    PullRequest(7, Checks.PASSING, draft=False, files=("src/app.py",)),
+                ),
+            )
+        )
+
+    def test_a_green_auto_pr_is_merged(self) -> None:
+        plan = plan_tick(self._state(), plan=PLAN, config=SchedulerConfig())
+        assert MergePr(TaskId("a"), 7) in plan.operations
+
+    def test_the_second_pass_plans_no_merge(self) -> None:
+        api = FakeGitHub(state=self._state())
+        first = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        result = execute_tick(first, api)
+        assert result.merged == 1
+
+        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        assert not [op for op in second.operations if isinstance(op, MergePr)]
+        assert second.statuses[TaskId("a")] is Status.DONE
+
+    def test_merging_is_not_counted_as_a_dispatch(self) -> None:
+        # Nothing was handed to an agent; a pass reporting otherwise would
+        # overstate what it did in the one place a human reads.
+        api = FakeGitHub(state=self._state())
+        result = execute_tick(
+            plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api
+        )
+        assert result.dispatched == 0
+
+    def test_a_merge_unblocks_the_dependent(self) -> None:
+        state = state_of(
+            issue(
+                "a",
+                number=3,
+                verify=Verify.AUTO,
+                assignees=("copilot",),
+                open_prs=(
+                    PullRequest(7, Checks.PASSING, draft=False, files=("src/app.py",)),
+                ),
+            ),
+            issue("b", number=4, depends=("a",)),
+        )
+        api = FakeGitHub(state=state)
+        execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        # Unblocked and handed out in the same pass: `b`'s dependency closed
+        # because the merge closed it, so the projection reads `Dispatched`.
+        assert second.admitted == (TaskId("b"),)

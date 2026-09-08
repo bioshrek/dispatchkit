@@ -285,6 +285,8 @@ def _tick(args: argparse.Namespace) -> int:
     line = f"pass complete: {result.dispatched} dispatched, {result.reconciled} board write(s)"
     if result.readied:
         line += f", {result.readied} PR(s) marked ready"
+    if result.merged:
+        line += f", {result.merged} PR(s) merged"
     print(line)
     return EXIT_OK
 
@@ -341,6 +343,7 @@ def _doctor(args: argparse.Namespace) -> int:
                 board=api.fetch_board(),
                 variables=variables,
                 secrets=secrets,
+                protected_branch=api.branch_protected(),
             )
         except RuntimeError as exc:
             # Every failure `doctor` exists to name arrives as a non-zero `gh`

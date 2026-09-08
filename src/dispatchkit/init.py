@@ -209,6 +209,9 @@ NEXT_STEPS = (
     "user-owned Projects do not accept fine-grained tokens)",
     "gh variable set DISPATCHKIT_PLAN --body <plan-name>",
     "gh variable set DISPATCHKIT_PROJECT --body <project-number>",
+    "gh api -X PUT repos/<owner>/<repo>/branches/main/protection ...  (require the "
+    "status check your `acceptance` command runs; without it dispatchkit's own "
+    "reading of CI is the only gate on a `verify: auto` merge)",
 )
 
 #: Kept apart from `NEXT_STEPS` because there is no command to copy: the

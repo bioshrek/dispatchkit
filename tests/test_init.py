@@ -272,7 +272,9 @@ class TestTheResultIsHealthy:
     def test_only_the_human_supplied_inputs_are_left_outstanding(
         self, tmp_path: Path
     ) -> None:
-        assert self._remaining(tmp_path) == ["workflow-inputs"]
+        # Branch protection joins the list for the same reason: `init` cannot
+        # know which status check this repository's `acceptance` runs.
+        assert self._remaining(tmp_path) == ["workflow-inputs", "merge-gate"]
 
     def test_the_workflow_it_writes_can_import_dispatchkit(self, tmp_path: Path) -> None:
         # The regression that matters: `init` used to write a workflow that

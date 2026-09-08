@@ -20,8 +20,10 @@ import pytest
 from dispatchkit.board import REQUIRED_FIELDS, REQUIRED_LABELS, BoardSnapshot, ExistingField
 from dispatchkit.doctor import (
     REQUIRED_SCOPES,
+    Check,
     Diagnostics,
     LocalFacts,
+    _merge_gate,
     check,
     check_local,
     check_remote,
@@ -78,6 +80,7 @@ def healthy(**overrides: object) -> Diagnostics:
         "board": healthy_board(),
         "variables": ("DISPATCHKIT_PLAN", "DISPATCHKIT_PROJECT"),
         "secrets": ("DISPATCHKIT_TOKEN",),
+        "protected_branch": True,
     }
     return Diagnostics(**{**base, **overrides})  # type: ignore[arg-type]
 
@@ -391,3 +394,51 @@ class TestTheSecretIsOnlyKnownByName:
     def test_it_does_not_claim_the_token_is_valid(self) -> None:
         for overclaim in ("valid", "works", "usable"):
             assert overclaim not in self._detail()
+
+
+class TestTheMergeGate:
+    """D9: whether a merge dispatchkit performs has a second lock behind it.
+
+    Neither of these can stop `merge_ops` — dispatchkit checks CI itself, and
+    that gate stands on its own. What they change is how much is riding on it.
+    On an unprotected branch a merge is single-gated: if dispatchkit's reading
+    of CI is ever wrong, nothing else is looking. That is worth saying out loud
+    rather than leaving an adopter to infer it.
+    """
+
+    @staticmethod
+    def _check(*, protected: bool) -> Check:
+        return _merge_gate(
+            Diagnostics(
+                scopes=("repo", "project"),
+                agent_available=True,
+                board=healthy_board(),
+                protected_branch=protected,
+            )
+        )
+
+    def test_a_protected_branch_passes(self) -> None:
+        assert self._check(protected=True).ok
+
+    def test_an_unprotected_branch_is_reported(self) -> None:
+        result = self._check(protected=False)
+        assert not result.ok
+        assert "single" in result.detail or "only gate" in result.detail
+
+    def test_the_remedy_names_the_required_check(self) -> None:
+        # An adopter who reads only the remedy line still ends up protected.
+        assert "protection" in self._check(protected=False).remedy.lower()
+
+    def test_it_is_part_of_the_remote_checks(self) -> None:
+        names = [
+            item.name
+            for item in check_remote(
+                Diagnostics(
+                    scopes=("repo", "project"),
+                    agent_available=True,
+                    board=healthy_board(),
+                    protected_branch=False,
+                )
+            )
+        ]
+        assert "merge-gate" in names

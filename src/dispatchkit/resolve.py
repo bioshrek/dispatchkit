@@ -35,6 +35,7 @@ from dispatchkit.errors import GraphError
 from dispatchkit.github import (
     DISPATCHKIT_LABEL,
     MarkReady,
+    MergePr,
     Notice,
     RepoState,
     SetProjectField,
@@ -225,6 +226,43 @@ def ready_ops(items: Sequence[TaskItem]) -> tuple[MarkReady, ...]:
             MarkReady(task.id, pr.number)
             for pr in task.open_prs
             if pr.draft and pr.checks is Checks.PASSING
+        ]
+    return tuple(operations)
+
+
+def merge_ops(
+    items: Sequence[TaskItem], config: SchedulerConfig
+) -> tuple[MergePr, ...]:
+    """Merge the `verify: auto` pull requests that have earned it.
+
+    This is the only thing dispatchkit does that changes `main` without a human,
+    so every gate is checked here rather than delegated. The probe that produced
+    this function found the repository is not a backstop: on a branch with no
+    protection GitHub merged a pull request instantly and reported success,
+    having consulted no check at all. Branch protection is a *second* lock when
+    it exists, never the first one.
+
+    Four conditions, each of which has already been the subject of a bug:
+
+    - `verify: auto`, because `human` means a person merges.
+    - Not a draft, because a draft merges nothing (D5.7).
+    - `Checks.PASSING` exactly, not merely "not stalled" (D5.6). `NONE` is an
+      absence of evidence and is the state an unconfigured repository sits in
+      forever.
+    - Nothing inside the blast-radius fence, so the pipeline cannot rewrite its
+      own workflow, config or task graph unattended.
+    """
+    operations = []
+    for task in items:
+        if task.closed or task.verify is not Verify.AUTO:
+            continue
+        operations += [
+            MergePr(task.id, pr.number)
+            for pr in task.open_prs
+            if not pr.draft
+            and pr.checks is Checks.PASSING
+            and pr.files
+            and not any(config.is_fenced(path) for path in pr.files)
         ]
     return tuple(operations)
 

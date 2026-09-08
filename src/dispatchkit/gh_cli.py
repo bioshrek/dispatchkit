@@ -74,6 +74,7 @@ query($owner: String!, $repo: String!, $first: Int!) {
                   number
                   state
                   isDraft
+                  files(first: 100) { nodes { path } }
                   commits(last: 1) {
                     nodes {
                       commit {
@@ -151,9 +152,22 @@ def _parse_open_prs(node: dict[str, Any]) -> tuple[PullRequest, ...]:
                     int(source["number"]),
                     _parse_checks(source),
                     draft=bool(source.get("isDraft")),
+                    files=_parse_files(source),
                 )
             )
     return tuple(prs)
+
+
+def _parse_files(source: dict[str, Any]) -> tuple[str, ...]:
+    """The paths a pull request changes, for the blast-radius fence.
+
+    Capped at 100 by the query. A pull request larger than that returns a
+    partial list, which would be the one case where the fence could be walked
+    past silently — so the cap is deliberately far above any task this tool is
+    meant to dispatch, and a task that big is a decomposition failure.
+    """
+    nodes = (source.get("files") or {}).get("nodes") or []
+    return tuple(node["path"] for node in nodes if node.get("path"))
 
 
 def _parse_checks(source: dict[str, Any]) -> Checks:
@@ -289,6 +303,44 @@ def ready_command(number: int, repo: str) -> list[str]:
     number is the only thing the planner knows.
     """
     return ["gh", "pr", "ready", str(number), "--repo", repo]
+
+
+def protection_command(repo: str, branch: str) -> list[str]:
+    """Read a branch's protection. A 404 here means "not protected"."""
+    return ["gh", "api", f"repos/{repo}/branches/{branch}/protection"]
+
+
+def parse_protection(payload: dict[str, Any]) -> bool:
+    """Is this branch protected in the way a `verify: auto` merge relies on?
+
+    Only required *status checks* count. Required reviews protect a branch from
+    a human's mistake; they do nothing about a red pull request, which is the
+    failure this is meant to catch. An empty context list is protection that
+    requires nothing, so it is not protection for this purpose.
+    """
+    checks = payload.get("required_status_checks") or {}
+    return bool(checks.get("contexts"))
+
+
+def merge_command(number: int, repo: str) -> list[str]:
+    """Squash-merge a pull request. Direct, never `--auto`, never `--admin`.
+
+    Both omissions are load-bearing and both were found by probing a live
+    repository, because neither is documented:
+
+    `--auto` reads as "merge once the requirements are met", but on a branch
+    with no protection there are no requirements, and `gh` merges immediately —
+    silently, exit 0, no checks consulted. The GraphQL mutation it is named
+    after refuses that same case outright ("Auto merge is not allowed for this
+    repository"), so the flag is strictly less safe than the thing it wraps.
+    A direct merge is refused by branch protection when the branch is
+    protected, and is gated by `merge_ops` when it is not.
+
+    `--admin` overrides branch protection. The scheduler's token is usually the
+    repository owner's, so without this omission the second lock would not
+    exist: a red pull request is refused for an admin too, until this flag.
+    """
+    return ["gh", "pr", "merge", str(number), "--squash", "--repo", repo]
 
 
 def assign_command(assignable_id: str, actor_id: str) -> list[str]:
@@ -591,6 +643,9 @@ class GhCli:
     def mark_ready(self, *, number: int) -> None:
         _run(ready_command(number, self.repo))
 
+    def merge_pr(self, *, number: int) -> None:
+        _run(merge_command(number, self.repo))
+
     def edit_labels(
         self, *, number: int, add: Sequence[str] = (), remove: Sequence[str] = ()
     ) -> None:
@@ -633,6 +688,19 @@ class GhCli:
 
     def agent_available(self) -> bool:
         return self._agent_actor() is not None
+
+    def branch_protected(self, branch: str = "main") -> bool:
+        """Does the default branch require a status check?
+
+        A repository with no protection answers 404, which `_run` raises on.
+        That is the answer, not a failure: the check exists precisely to report
+        it, so it must not take `doctor` down with it.
+        """
+        try:
+            payload = json.loads(_run(protection_command(self.repo, branch)))
+        except RuntimeError:
+            return False
+        return parse_protection(payload)
 
     def workflow_inputs(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """The Actions variable and secret names set on the repository."""

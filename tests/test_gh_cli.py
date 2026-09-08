@@ -19,6 +19,7 @@ from dispatchkit.gh_cli import (
     STATE_QUERY,
     FieldCatalog,
     ProjectFieldError,
+    _parse_open_prs,
     assign_command,
     auth_status_command,
     create_issue_command,
@@ -31,11 +32,14 @@ from dispatchkit.gh_cli import (
     item_edit_command,
     label_command,
     label_list_command,
+    merge_command,
     parse_agent_actor,
     parse_field_catalog,
     parse_item_count,
+    parse_protection,
     parse_state,
     project_view_command,
+    protection_command,
     ready_command,
     state_command,
     update_issue_command,
@@ -537,3 +541,86 @@ class TestMarkReadyCommand:
         # contain reaches a shell. There is no shell.
         assert all(isinstance(part, str) for part in ready_command(7, "o/r"))
         assert " " not in "".join(ready_command(7, "o/r")[:3])
+
+
+class TestMergeCommand:
+    """D9's merge, and the two flags it must never carry.
+
+    Both were established by probing a live repository rather than by reading
+    the documentation, because the documentation does not say either of them.
+    """
+
+    def test_it_is_a_direct_squash_merge(self) -> None:
+        assert merge_command(7, "o/r") == [
+            "gh",
+            "pr",
+            "merge",
+            "7",
+            "--squash",
+            "--repo",
+            "o/r",
+        ]
+
+    def test_it_never_passes_auto(self) -> None:
+        # `--auto` does not mean "wait for the checks". On a repository without
+        # branch protection `gh pr merge --auto` merged instantly, silently and
+        # with exit 0, having consulted nothing. The GraphQL mutation underneath
+        # refuses that case; the CLI flag papers over it.
+        assert "--auto" not in merge_command(7, "o/r")
+
+    def test_it_never_passes_admin(self) -> None:
+        # Branch protection refuses a red pull request even for a repository
+        # admin — but `--admin` overrides exactly that, and the scheduler's
+        # token usually belongs to an admin. This flag is the difference
+        # between a second lock and no lock.
+        assert "--admin" not in merge_command(7, "o/r")
+
+
+class TestParsePullRequestFiles:
+    """The fence needs paths, so the state query has to ask for them."""
+
+    def test_the_query_asks_for_the_changed_paths(self) -> None:
+        assert "files(first:" in STATE_QUERY.replace(" ", "")
+
+    @staticmethod
+    def _pr(files: object) -> PullRequest:
+        node = {
+            "timelineItems": {
+                "nodes": [
+                    {"source": {"number": 7, "state": "OPEN", "files": files}}
+                ]
+            }
+        }
+        return _parse_open_prs(node)[0]
+
+    def test_paths_are_read_off_the_nodes(self) -> None:
+        pr = self._pr({"nodes": [{"path": "src/app.py"}, {"path": "tests/t.py"}]})
+        assert pr.files == ("src/app.py", "tests/t.py")
+
+    def test_a_missing_file_list_is_empty_not_an_error(self) -> None:
+        # And `merge_ops` refuses to merge on an empty list, so a truncated or
+        # absent answer fails closed rather than merging past the fence.
+        assert self._pr(None).files == ()
+
+
+class TestProtectionCommand:
+    """Reading branch protection, and treating "not protected" as an answer."""
+
+    def test_it_asks_the_rest_api_for_the_default_branch(self) -> None:
+        assert protection_command("o/r", "main") == [
+            "gh",
+            "api",
+            "repos/o/r/branches/main/protection",
+        ]
+
+    def test_a_required_check_is_protection(self) -> None:
+        payload = {"required_status_checks": {"contexts": ["check"]}}
+        assert parse_protection(payload) is True
+
+    def test_protection_without_a_required_check_does_not_count(self) -> None:
+        # Requiring a review but no check leaves `verify: auto` ungated, which
+        # is the case this check exists to catch.
+        assert parse_protection({"required_pull_request_reviews": {}}) is False
+
+    def test_an_empty_context_list_does_not_count(self) -> None:
+        assert parse_protection({"required_status_checks": {"contexts": []}}) is False
