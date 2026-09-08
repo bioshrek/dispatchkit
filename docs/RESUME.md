@@ -68,10 +68,14 @@ This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived
 
 ## Known gaps, in the order they will bite
 
-- **`gh project field-create`'s option syntax is assumed, not verified.** D5.5 sends
-  `--single-select-options "Blocked,Ready,Dispatched,In Review,Auto-merging,Done"` as a single
-  argument. If `gh` wants a repeated flag instead, `init` fails on its very first operation.
-  Check this before anything else in step 3.
+- **`gh project field-create`'s option syntax is verified.** Checked against `gh` 2.89.0 on
+  2026-09-08: `--single-select-options` is a `strings` flag and the manual's own example passes it
+  comma-joined as one argument, which is what D5.5 sends. `field-list`, `field-delete`,
+  `project view` and `auth status` were checked the same way and all match. Verified from
+  `--help`, so it is the flag surface that is confirmed, not the responses.
+- **`gh project field-list` pages at 30 by default**, and truncation reads exactly like a missing
+  field. It is now sent `--limit 200`. A board with more than 200 fields would still lie, but that
+  is not a board anyone has.
 - **`tests/fixtures/search_issues.json` is renderer-generated, not recorded.** It is
   GraphQL-shaped but has never been compared against a real response. The live run's first job is
   to re-record it. Until then every `GhCli` subprocess path — the Project field lookups,

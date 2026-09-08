@@ -348,6 +348,11 @@ def field_list_command(project: int, owner: str) -> list[str]:
         str(project),
         "--owner",
         owner,
+        # `gh` fetches 30 by default, and truncation is indistinguishable from
+        # a missing field: `doctor` would report a field the board has, and
+        # `init` would try to create it a second time.
+        "--limit",
+        "200",
         "--format",
         "json",
     ]

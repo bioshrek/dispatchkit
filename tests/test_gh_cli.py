@@ -272,6 +272,18 @@ class TestBoardCommands:
         assert "--format" in field_list_command(1, "owner")
         assert "json" in field_list_command(1, "owner")
 
+    def test_the_field_list_defeats_ghs_page_limit(self) -> None:
+        """`gh project field-list` fetches 30 fields unless told otherwise.
+
+        Truncation here is silent and reads exactly like a missing field, so
+        `doctor` would report a field the board has and `init` would try to
+        create it again. A board with more than 30 fields is somebody else's
+        board that we were pointed at, which is precisely the case worth
+        surviving.
+        """
+        command = field_list_command(1, "owner")
+        assert int(command[command.index("--limit") + 1]) >= 100
+
     def test_labels_are_listed_by_name_only(self) -> None:
         command = label_list_command("owner/repo")
         assert command[:3] == ["gh", "label", "list"]
