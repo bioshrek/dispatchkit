@@ -211,12 +211,11 @@ Three things it changed that are worth knowing before touching this code:
   dispatched and in-review coverage. Note that neither fixture carries `checkSuites`, which D5.6
   added: the check-state tests inject suites into a copy rather than re-recording, so that shape
   is replayed from a live payload but not from a stored one.
-- **The workflow template points at `bioshrek/dispatchkit@v0.1.0`, which does not exist yet.**
-  This is the one thing blocking the sandbox's unattended scheduler: the template now fetches its
-  own source (correctly — `PYTHONPATH: src` only ever worked here), but there is nothing to fetch
-  until step 2 publishes the repository and tags it. Adopters can override with the
-  `DISPATCHKIT_SOURCE` and `DISPATCHKIT_REF` repository variables. Everything local is verified;
-  a pass has never run *inside* Actions.
+- **The workflow template pins `bioshrek/dispatchkit@v0.2.0`, which exists.** Adopters override
+  with the `DISPATCHKIT_SOURCE` and `DISPATCHKIT_REF` repository variables, and
+  `test_the_default_ref_is_a_version_tag` refuses a moving ref like `main`. Note the consequence:
+  an adopter's scheduler keeps running the pinned tag until someone repins it, so shipping a fix
+  is two steps, not one — the sandbox ran v0.1.1 for several passes after D9 landed.
 - **`init` will not overwrite an existing workflow**, so an adopter on an old template stays on
   it. `doctor`'s `workflow-source` check catches this and its remedy says to delete the file
   first, but there is no upgrade path worth the name.
