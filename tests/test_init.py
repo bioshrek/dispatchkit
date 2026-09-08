@@ -336,6 +336,32 @@ class TestNextSteps:
         printed = "\n".join(self._lines(tmp_path))
         assert "classic" in printed
 
+    def test_it_names_the_copilot_approval_setting(self, tmp_path: Path) -> None:
+        # The fourth manual step, and the only one that is not a command:
+        # until it is turned off, every agent-authored CI run waits for a
+        # human click, so `verify: auto` cannot complete unattended. It is
+        # not exposed over REST, so neither `init` nor `doctor` can act on
+        # it and naming it is the whole of what we can do.
+        printed = "\n".join(self._lines(tmp_path))
+        assert "Actions workflow approval" in printed
+        assert "verify: auto" in printed
+
+    def test_the_approval_setting_is_not_offered_as_a_command(
+        self, tmp_path: Path
+    ) -> None:
+        # It is UI-only. Printing it under NEXT, among lines that can be
+        # pasted into a shell, would invite an adopter to try.
+        for line in self._lines(tmp_path):
+            if "Actions workflow approval" in line:
+                assert line.startswith("MANUAL ")
+
+    def test_the_cost_of_turning_it_off_is_stated(self, tmp_path: Path) -> None:
+        # It is a trust decision, not a formality: it lets unreviewed agent
+        # code run workflows. Naming the step without its cost would be
+        # advice we cannot stand behind.
+        printed = "\n".join(self._lines(tmp_path))
+        assert "unreviewed" in printed
+
     def test_the_steps_are_shown_even_when_there_is_nothing_to_do(
         self, tmp_path: Path
     ) -> None:

@@ -195,6 +195,7 @@ def summarise(plan: InitPlan) -> list[str]:
     lines = [f"  {type(op).__name__} {_subject(op)}" for op in plan.operations]
     lines += [f"NOTE {notice}" for notice in plan.notices]
     lines += [f"NEXT {step}" for step in NEXT_STEPS]
+    lines += [f"MANUAL {step}" for step in MANUAL_STEPS]
     return lines
 
 
@@ -208,6 +209,18 @@ NEXT_STEPS = (
     "user-owned Projects do not accept fine-grained tokens)",
     "gh variable set DISPATCHKIT_PLAN --body <plan-name>",
     "gh variable set DISPATCHKIT_PROJECT --body <project-number>",
+)
+
+#: Kept apart from `NEXT_STEPS` because there is no command to copy: the
+#: setting is not exposed over REST, so neither `init` nor `doctor` can act on
+#: it or even read it back. Until it is off, every agent-authored CI run waits
+#: for a human click, which is precisely what `verify: auto` promises not to
+#: need. Stated with its cost, because it is a real trust decision.
+MANUAL_STEPS = (
+    'for `verify: auto`: Settings > Copilot > Cloud agent > "Actions workflow '
+    'approval" > turn off "Require approval for workflow runs". Until then every '
+    "agent-authored CI run waits for a human. Turning it off lets unreviewed "
+    "agent code run your workflows, including changes to .github/workflows/.",
 )
 
 

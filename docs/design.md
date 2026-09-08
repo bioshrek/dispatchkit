@@ -1115,6 +1115,27 @@ holds no token and no secrets and reports by exit code to the pass that does. Th
 belongs in the open: it would make `verify` a command dispatchkit executes rather than a claim
 about the repository's own pipeline, and two CIs can disagree.
 
+**The first way out was taken on the sandbox, and it works.** The setting is
+Settings → Copilot → Cloud agent → "Actions workflow approval" → *Require approval for workflow
+runs*; it is per-repository and off by default. Notably it is *not* the fork-PR control under
+Actions → General, which is a genuinely different mechanism — `fork-pr-contributor-approval`
+remained `first_time_contributors` throughout and changing it would have done nothing. That
+distinction is the same one the 403 was reporting.
+
+Verified by making Copilot push rather than by pushing as a maintainer, since a maintainer push
+runs regardless and would have proved nothing: a review comment on PR #7 asking for a missing CLI
+test produced a commit whose CI went straight to `success`, no `action_required`, no human move.
+Both open PRs then read `COMPLETED/SUCCESS`, the pass reported `top-n: Auto-merging` and
+`stopwords: In Review` with zero board writes, and `ci-approval-required` correctly went silent.
+
+This does not retire the D9 argument; it narrows it. The setting is a blanket trust decision
+whose cost GitHub states plainly — unreviewed agent code may gain write access or reach Actions
+secrets. It is acceptable here because the scheduler runs on `schedule`, not `pull_request`, so
+`DISPATCHKIT_TOKEN` never reaches a Copilot PR, and that separation is now load-bearing rather
+than incidental. The case it does not cover is a Copilot PR editing `.github/workflows/`, which
+then runs unreviewed. So `verify: auto` is now usable unattended for adopters willing to make
+that trade, per repository and by hand, while D9 remains the answer for those who are not.
+
 
 ## First real plan
 

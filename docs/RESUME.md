@@ -123,10 +123,26 @@ correct: nobody was waiting on CI there.
 - **`init` will not overwrite an existing workflow**, so an adopter on an old template stays on
   it. `doctor`'s `workflow-source` check catches this and its remedy says to delete the file
   first, but there is no upgrade path worth the name.
-- **The Copilot approval gate is not visible to `doctor`.** The repository setting that skips
-  approval for coding-agent workflows is not exposed over REST — probed under
-  `actions/permissions/*`, all 404 — so `doctor` cannot report it and `init` cannot set it. Until
-  D9 takes over verification, every `verify: auto` PR needs a human `gh run rerun` per run.
+- **The Copilot approval gate is not visible to `doctor`, but it can be turned off.** The
+  repository setting is **Settings → Copilot → Cloud agent → "Actions workflow approval" →
+  _Require approval for workflow runs_**, off by default. It is not exposed over REST — probed
+  under `actions/permissions/*`, all 404 — so `doctor` cannot report it and `init` cannot set it,
+  and each adopter must flip it by hand. It is *not* the fork-PR setting under Actions → General,
+  which is a different mechanism: `fork-pr-contributor-approval` stays `first_time_contributors`
+  and changing it would not have helped.
+
+  Disabled on the sandbox and verified end to end: a Copilot push in response to a review comment
+  produced a CI run that went straight to `success` with no `action_required` and no human
+  action. Both open PRs now report `COMPLETED/SUCCESS`, `top-n` resolves to `Auto-merging` and
+  `stopwords` to `In Review`, and the `ci-approval-required` notice correctly stopped firing.
+  Where the setting is left on, `gh run rerun` remains the only clearing move — `POST
+  /actions/runs/{id}/approve` answers 403 — which is what the notice says.
+
+  Worth being clear about what this trades: GitHub's own warning is that unreviewed Copilot code
+  may gain write access or reach Actions secrets. It is the right call in a sandbox. Before
+  recommending it generally, note that the scheduler runs on `schedule`, not `pull_request`, so
+  `DISPATCHKIT_TOKEN` is not exposed to a Copilot PR — keep it that way. The unguarded case is a
+  Copilot PR that edits `.github/workflows/`, which then runs unreviewed.
 - **`doctor` cannot see branch protection or the merge queue.** Both are D9 prerequisites and both
   belong in the check set; they were left out because nothing consumes them yet.
 - **`init` cannot create the Project itself.** `gh project create` needs an owner-type decision
