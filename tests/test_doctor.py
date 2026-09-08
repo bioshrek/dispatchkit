@@ -367,3 +367,27 @@ class TestWorkflowInputs:
         diagnostics = healthy(variables=(), secrets=())
         failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
         assert failed.detail.endswith("no plan, no board and no token")
+
+
+class TestTheSecretIsOnlyKnownByName:
+    """`ok` here must not read as "the token works", because it cannot mean that.
+
+    Found live. Every check passed and `doctor` exited 0, then the scheduler
+    failed with `Bad credentials (HTTP 401)`: the secret existed and its value
+    was invalid. GitHub never discloses a secret's value, so validity is
+    unknowable from here by construction — which makes it all the more
+    important that the line says what it actually verified.
+    """
+
+    @staticmethod
+    def _detail() -> str:
+        found = [c for c in check(healthy(), local()) if c.name == "workflow-inputs"]
+        assert found and found[0].ok
+        return found[0].detail
+
+    def test_the_passing_message_says_it_only_saw_the_name(self) -> None:
+        assert "name" in self._detail()
+
+    def test_it_does_not_claim_the_token_is_valid(self) -> None:
+        for overclaim in ("valid", "works", "usable"):
+            assert overclaim not in self._detail()

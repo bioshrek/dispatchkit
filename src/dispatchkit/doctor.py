@@ -276,7 +276,10 @@ def _inputs(diagnostics: Diagnostics) -> Check:
         return Check(
             "workflow-inputs",
             True,
-            f"the repository sets {_quoted((*REQUIRED_VARIABLES, *REQUIRED_SECRETS))}",
+            f"the repository sets {_quoted(REQUIRED_VARIABLES)}, and "
+            f"{_quoted(REQUIRED_SECRETS)} by name — GitHub never discloses a "
+            "secret's value, so whether the token is accepted is only learnt "
+            "from a pass",
         )
     remedy = [
         f"gh variable set {name}" for name in REQUIRED_VARIABLES if name in missing
