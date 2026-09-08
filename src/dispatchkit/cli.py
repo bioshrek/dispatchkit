@@ -25,6 +25,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dispatchkit.apply import execute_plan, plan_apply
@@ -278,7 +279,7 @@ def _tick(args: argparse.Namespace) -> int:
         print("dispatchkit: a dry run needs --state; use --push to run for real", file=sys.stderr)
         return EXIT_UNREADABLE
 
-    plan = plan_tick(state, plan=args.plan, config=config)
+    plan = plan_tick(state, plan=args.plan, config=config, now=datetime.now(UTC))
     for line in summarise_tick(plan):
         print(line)
 
@@ -292,6 +293,8 @@ def _tick(args: argparse.Namespace) -> int:
         line += f", {result.readied} PR(s) marked ready"
     if result.merged:
         line += f", {result.merged} PR(s) merged"
+    if result.reclaimed:
+        line += f", {result.reclaimed} stalled dispatch(es) reclaimed"
     print(line)
     for notice in result.refused:
         print(f"NOTE {notice}")

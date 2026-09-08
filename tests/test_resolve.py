@@ -339,10 +339,13 @@ class TestSpendAndRetryGates:
         assert admit(nodes, resolve(nodes), SchedulerConfig()).admitted == ()
 
     def test_a_stuck_task_is_never_dispatched_again(self) -> None:
+        """Since D7 the label also makes the status `Stuck`, so admission never
+        sees it as ready and there is no deferral to report -- the board column
+        says it once, instead of every pass repeating itself."""
         nodes = items_of(item("a", labels=("dispatchkit", "dispatch:stuck")))
         plan = admit(nodes, resolve(nodes), SchedulerConfig())
         assert plan.admitted == ()
-        assert plan.deferred[0].reason == "stuck"
+        assert plan.deferred == ()
 
     def test_a_task_at_the_retry_budget_is_stuck_even_without_the_label(self) -> None:
         nodes = items_of(item("a", attempts=3))

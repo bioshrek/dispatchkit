@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 
 from dispatchkit.gh_cli import AGENT_LOGIN
 from dispatchkit.github import IssueState, RepoState
@@ -22,6 +23,9 @@ class FakeGitHub:
     next_item: int = 1
     calls: list[str] = field(default_factory=list)
     ensured_labels: set[str] = field(default_factory=set)
+    #: What the double stamps on an assignment. A test that cares about the
+    #: stall moves it; everything else never reads it.
+    clock: datetime = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
 
     def fetch_state(self, *, plan: str) -> RepoState:
         self.calls.append(f"fetch_state({plan})")
@@ -83,7 +87,22 @@ class FakeGitHub:
         # `replaceActorsForAssignable` replaces rather than appends, so a
         # second assignment of the same actor leaves the state unchanged —
         # which is exactly what makes concurrent passes safe.
-        self._replace(number, assignees=(AGENT_LOGIN,))
+        issue = self._issue(number)
+        # GitHub keeps the assignment history whatever happens to the
+        # assignment itself, which is what lets `attempts` be derived.
+        self._replace(
+            number,
+            assignees=(AGENT_LOGIN,),
+            dispatches=(*issue.dispatches, self.clock),
+        )
+
+    def unassign_agent(self, *, number: int, assignees: Sequence[str]) -> None:
+        self.calls.append(f"unassign_agent({number})")
+        issue = self._issue(number)
+        remaining = tuple(name for name in issue.assignees if name not in set(assignees))
+        # `dispatches` is deliberately untouched: releasing the lock must not
+        # erase the fact that an attempt was spent, or the budget never bites.
+        self._replace(number, assignees=remaining)
 
     def mark_ready(self, *, number: int) -> None:
         self.calls.append(f"mark_ready({number})")
@@ -118,6 +137,12 @@ class FakeGitHub:
                 labels += [label for label in add if label not in labels]
                 self._replace(number, labels=tuple(labels))
                 return
+        raise AssertionError(f"no issue numbered {number}")
+
+    def _issue(self, number: int) -> IssueState:
+        for issue in self.state.issues:
+            if issue.number == number:
+                return issue
         raise AssertionError(f"no issue numbered {number}")
 
     def _replace(self, number: int, **changes: object) -> None:

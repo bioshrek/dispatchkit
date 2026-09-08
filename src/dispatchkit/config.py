@@ -23,6 +23,7 @@ from __future__ import annotations
 import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import timedelta
 from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 
@@ -72,6 +73,8 @@ def default_fence(config_path: Path, plans: Path) -> tuple[str, ...]:
 class SchedulerConfig:
     caps: Mapping[Lane, int] = field(default_factory=lambda: dict(DEFAULT_CAPS))
     retry_budget: int = 3
+    #: How long a dispatch may produce nothing before it is reclaimed (D7).
+    stall_after: timedelta = timedelta(hours=24)
     plans: Path = DEFAULT_PLANS
     fence: tuple[str, ...] = field(
         default_factory=lambda: default_fence(DEFAULT_LOCATIONS[0], DEFAULT_PLANS)

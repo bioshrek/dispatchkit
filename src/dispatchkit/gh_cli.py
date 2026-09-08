@@ -22,6 +22,7 @@ import json
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from dispatchkit.board import SINGLE_SELECT, BoardSnapshot, FieldSpec
@@ -33,6 +34,8 @@ from dispatchkit.model import Checks, PullRequest
 # `gh issue edit --add-assignee`: it has to be looked up by capability and
 # handed over through a mutation.
 AGENT_LOGIN = "copilot-swe-agent"
+#: Every login the cloud agent appears under in a timeline.
+AGENT_LOGINS = frozenset({AGENT_LOGIN, "Copilot"})
 
 ACTOR_QUERY = """
 query($owner: String!, $repo: String!) {
@@ -66,6 +69,14 @@ query($owner: String!, $repo: String!, $first: Int!) {
         state
         labels(first: 20) { nodes { name } }
         assignees(first: 10) { nodes { login } }
+        dispatches: timelineItems(first: 50, itemTypes: [ASSIGNED_EVENT]) {
+          nodes {
+            ... on AssignedEvent {
+              createdAt
+              assignee { ... on Bot { login } ... on User { login } }
+            }
+          }
+        }
         timelineItems(first: 20, itemTypes: [CROSS_REFERENCED_EVENT]) {
           nodes {
             ... on CrossReferencedEvent {
@@ -137,7 +148,27 @@ def _parse_issue(node: dict[str, Any]) -> IssueState:
         assignees=tuple(user["login"] for user in (node.get("assignees", {}).get("nodes") or [])),
         open_prs=_parse_open_prs(node),
         node_id=node.get("id"),
+        dispatches=_parse_dispatches(node),
     )
+
+
+def _parse_dispatches(node: dict[str, Any]) -> tuple[datetime, ...]:
+    """When the agent was assigned, once per dispatch.
+
+    Only the agent's own assignment counts. GitHub records a second
+    AssignedEvent for the human who triggered the dispatch -- confirmed live on
+    the sandbox -- so counting the events wholesale would score every attempt
+    twice against the retry budget.
+    """
+    stamps: list[datetime] = []
+    for event in node.get("dispatches", {}).get("nodes") or []:
+        assignee = event.get("assignee") or {}
+        if assignee.get("login") not in AGENT_LOGINS:
+            continue
+        created = event.get("createdAt")
+        if created:
+            stamps.append(datetime.fromisoformat(created.replace("Z", "+00:00")))
+    return tuple(sorted(stamps))
 
 
 def _parse_open_prs(node: dict[str, Any]) -> tuple[PullRequest, ...]:
@@ -293,6 +324,14 @@ def actor_command(owner: str, repo: str) -> list[str]:
         "-F",
         f"repo={repo}",
     ]
+
+
+def unassign_command(number: int, repo: str, assignees: Sequence[str]) -> list[str]:
+    """Release a stalled dispatch. Named assignees only, never `--remove-assignee` on all."""
+    argv = ["gh", "issue", "edit", str(number), "--repo", repo]
+    for login in assignees:
+        argv += ["--remove-assignee", login]
+    return argv
 
 
 def ready_command(number: int, repo: str) -> list[str]:
@@ -639,6 +678,9 @@ class GhCli:
                 "enable the coding agent, or route these tasks to the local lane"
             )
         _run(assign_command(node_id, actor))
+
+    def unassign_agent(self, *, number: int, assignees: Sequence[str]) -> None:
+        _run(unassign_command(number, self.repo, assignees))
 
     def mark_ready(self, *, number: int) -> None:
         _run(ready_command(number, self.repo))

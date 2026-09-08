@@ -10,6 +10,7 @@ Everything runs against an in-memory double. No network, no `gh`.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,10 @@ pytestmark = pytest.mark.replay
 
 CONFIG = SchedulerConfig()
 
+#: These fixtures carry no dispatch history, so no clock value can strand them;
+#: a fixed one keeps the pass reproducible.
+NOW = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+
 
 def dispatches(plan: TickPlan) -> list[AssignAgent | LabelIssue]:
     return [op for op in plan.operations if isinstance(op, AssignAgent | LabelIssue)]
@@ -41,28 +46,30 @@ def dispatches(plan: TickPlan) -> list[AssignAgent | LabelIssue]:
 
 class TestDispatchByLane:
     def test_a_ready_cloud_task_is_assigned_to_the_agent(self) -> None:
-        plan = plan_tick(state_of(issue("a", 1)), plan=PLAN, config=CONFIG)
+        plan = plan_tick(state_of(issue("a", 1)), plan=PLAN, config=CONFIG, now=NOW)
         assert dispatches(plan) == [AssignAgent(TaskId("a"), 1, "I_1")]
 
     def test_a_ready_local_task_is_only_labelled(self) -> None:
         # The scheduler cannot reach the workstation, so the label *is* the
         # dispatch; a daemon picks it up on its own schedule.
-        plan = plan_tick(state_of(issue("a", 1, lane=Lane.LOCAL)), plan=PLAN, config=CONFIG)
+        plan = plan_tick(
+            state_of(issue("a", 1, lane=Lane.LOCAL)), plan=PLAN, config=CONFIG, now=NOW
+        )
         assert dispatches(plan) == [LabelIssue(TaskId("a"), 1, add=(LABEL_LOCAL_CLAIM,))]
 
     def test_a_blocked_task_is_never_dispatched(self) -> None:
         state = state_of(issue("a", 1), issue("b", 2, depends=("a",)))
-        assert [op.task_id for op in dispatches(plan_tick(state, plan=PLAN, config=CONFIG))] == [
-            TaskId("a")
-        ]
+        assert [
+            op.task_id for op in dispatches(plan_tick(state, plan=PLAN, config=CONFIG, now=NOW))
+        ] == [TaskId("a")]
 
     def test_a_closed_task_is_never_touched(self) -> None:
         state = state_of(issue("a", 1, closed=True, fields={"Status": "Done"}))
-        assert plan_tick(state, plan=PLAN, config=CONFIG).operations == ()
+        assert plan_tick(state, plan=PLAN, config=CONFIG, now=NOW).operations == ()
 
     def test_an_already_assigned_task_is_not_reassigned(self) -> None:
         state = state_of(issue("a", 1, assignees=("copilot-swe-agent",)))
-        assert dispatches(plan_tick(state, plan=PLAN, config=CONFIG)) == []
+        assert dispatches(plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)) == []
 
 
 class TestBoardReconciliation:
@@ -76,7 +83,7 @@ class TestBoardReconciliation:
         )
         writes = [
             op
-            for op in plan_tick(state, plan=PLAN, config=CONFIG).operations
+            for op in plan_tick(state, plan=PLAN, config=CONFIG, now=NOW).operations
             if isinstance(op, SetProjectField)
         ]
         assert [(op.task_id, op.value) for op in writes] == [
@@ -88,7 +95,7 @@ class TestBoardReconciliation:
     def test_a_task_dispatched_this_pass_is_recorded_as_dispatched_not_ready(self) -> None:
         # Writing `Ready` for an issue we just assigned would leave the board
         # contradicting the issue for half an hour, until the next pass.
-        plan = plan_tick(state_of(issue("a", 1)), plan=PLAN, config=CONFIG)
+        plan = plan_tick(state_of(issue("a", 1)), plan=PLAN, config=CONFIG, now=NOW)
         writes = [op for op in plan.operations if isinstance(op, SetProjectField)]
         assert writes == [SetProjectField(TaskId("a"), "Status", "Dispatched")]
 
@@ -96,7 +103,7 @@ class TestBoardReconciliation:
         # Deferred means "unblocked, not started" — the board should say so,
         # otherwise a capped lane looks like a blocked plan.
         state = state_of(*(issue(f"t{i}", i) for i in range(1, 6)))
-        plan = plan_tick(state, plan=PLAN, config=CONFIG)
+        plan = plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)
         values = {op.task_id: op.value for op in plan.operations if isinstance(op, SetProjectField)}
         assert values[TaskId("t4")] == "Ready"
         assert values[TaskId("t5")] == "Ready"
@@ -104,43 +111,43 @@ class TestBoardReconciliation:
     def test_the_lock_is_taken_before_the_board_is_updated(self) -> None:
         # If the pass dies between the two, an assigned issue with a stale
         # board entry self-heals next pass; the reverse would double-dispatch.
-        ops = plan_tick(state_of(issue("a", 1)), plan=PLAN, config=CONFIG).operations
+        ops = plan_tick(state_of(issue("a", 1)), plan=PLAN, config=CONFIG, now=NOW).operations
         assert isinstance(ops[0], AssignAgent)
 
 
 class TestGates:
     def test_paid_work_is_not_dispatched_without_approval(self) -> None:
         state = state_of(issue("a", 1, spend=True))
-        plan = plan_tick(state, plan=PLAN, config=CONFIG)
+        plan = plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)
         assert dispatches(plan) == []
         assert plan.deferred[0].reason == "awaiting-spend-approval"
 
     def test_approved_paid_work_is_dispatched(self) -> None:
         state = state_of(issue("a", 1, spend=True, labels=("dispatchkit", "spend:approved")))
-        assert len(dispatches(plan_tick(state, plan=PLAN, config=CONFIG))) == 1
+        assert len(dispatches(plan_tick(state, plan=PLAN, config=CONFIG, now=NOW))) == 1
 
     def test_the_lane_cap_bounds_how_much_is_dispatched_per_pass(self) -> None:
         state = state_of(*(issue(f"t{i}", i) for i in range(1, 6)))
-        assert len(dispatches(plan_tick(state, plan=PLAN, config=CONFIG))) == 3
+        assert len(dispatches(plan_tick(state, plan=PLAN, config=CONFIG, now=NOW))) == 3
 
     def test_a_stuck_task_is_never_dispatched(self) -> None:
         state = state_of(issue("a", 1, labels=("dispatchkit", "dispatch:stuck")))
-        assert dispatches(plan_tick(state, plan=PLAN, config=CONFIG)) == []
+        assert dispatches(plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)) == []
 
 
 class TestIdempotency:
     def test_a_second_pass_over_the_same_repo_does_nothing(self) -> None:
         api = FakeGitHub(state=state_of(issue("a", 1), issue("b", 2, depends=("a",))))
-        first = plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG)
+        first = plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW)
         execute_tick(first, api)
 
-        second = plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG)
+        second = plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW)
         assert second.operations == ()
 
     def test_dispatching_removes_the_task_from_the_ready_set(self) -> None:
         api = FakeGitHub(state=state_of(issue("a", 1)))
-        execute_tick(plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG), api)
-        second = plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG)
+        execute_tick(plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW), api)
+        second = plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW)
         assert second.statuses[TaskId("a")] is Status.DISPATCHED
         assert second.admitted == ()
 
@@ -149,26 +156,30 @@ class TestIdempotency:
         # executing, which is what the real scheduler does every 30 minutes.
         api = FakeGitHub(state=state_of(issue("a", 1)))
         snapshot = api.fetch_state(plan=PLAN)
-        execute_tick(plan_tick(snapshot, plan=PLAN, config=CONFIG), api)
-        execute_tick(plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG), api)
+        execute_tick(plan_tick(snapshot, plan=PLAN, config=CONFIG, now=NOW), api)
+        execute_tick(plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW), api)
         assert api.calls.count("assign_agent(1)") == 1
 
     def test_a_local_claim_is_not_reapplied(self) -> None:
         api = FakeGitHub(state=state_of(issue("a", 1, lane=Lane.LOCAL)))
-        execute_tick(plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG), api)
-        second = plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG)
+        execute_tick(plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW), api)
+        second = plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW)
         assert dispatches(second) == []
 
 
 class TestExecution:
     def test_execution_reports_what_it_did(self) -> None:
         api = FakeGitHub(state=state_of(issue("a", 1), issue("b", 2, lane=Lane.LOCAL)))
-        result = execute_tick(plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG), api)
+        result = execute_tick(
+            plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW), api
+        )
         assert (result.dispatched, result.reconciled) == (2, 2)
 
     def test_an_empty_plan_touches_nothing(self) -> None:
         api = FakeGitHub(state=RepoState(()))
-        result = execute_tick(plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG), api)
+        result = execute_tick(
+            plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW), api
+        )
         assert (result.dispatched, result.reconciled) == (0, 0)
         assert api.calls == ["fetch_state(demo)"]
 
@@ -178,13 +189,13 @@ class TestDegradedInput:
         # Only reachable from a stale recording, but assigning needs the node
         # id, so the honest move is to say so rather than guess a lookup.
         state = state_of(issue("a", 1, node_id=""))
-        plan = plan_tick(state, plan=PLAN, config=CONFIG)
+        plan = plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)
         assert dispatches(plan) == []
         assert plan.notices[0].code == "missing-node-id"
 
     def test_issues_from_another_plan_are_ignored(self) -> None:
         state = state_of(issue("a", 1))
-        assert plan_tick(state, plan="other", config=CONFIG).operations == ()
+        assert plan_tick(state, plan="other", config=CONFIG, now=NOW).operations == ()
 
 
 class TestStalledCi:
@@ -207,20 +218,20 @@ class TestStalledCi:
         )
 
     def test_the_pass_reports_the_held_runs(self) -> None:
-        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG)
+        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG, now=NOW)
         assert [notice.code for notice in plan.notices] == ["ci-approval-required"]
 
     def test_the_board_is_told_in_review_rather_than_auto_merging(self) -> None:
-        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG)
+        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG, now=NOW)
         assert plan.statuses[TaskId("a")] is Status.IN_REVIEW
 
     def test_a_green_pr_is_reported_as_auto_merging_and_silently(self) -> None:
-        plan = plan_tick(self._state(Checks.PASSING), plan=PLAN, config=CONFIG)
+        plan = plan_tick(self._state(Checks.PASSING), plan=PLAN, config=CONFIG, now=NOW)
         assert plan.statuses[TaskId("a")] is Status.AUTO_MERGING
         assert plan.notices == ()
 
     def test_the_summary_shows_the_reason_to_a_human(self) -> None:
-        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG)
+        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG, now=NOW)
         assert any("ci-approval-required" in line for line in summarise(plan))
 
     def test_a_stalled_task_still_occupies_its_lane(self) -> None:
@@ -232,7 +243,7 @@ class TestStalledCi:
             issue("b", 2),
         )
         config = SchedulerConfig(caps={Lane.CLOUD: 1})
-        plan = plan_tick(state, plan=PLAN, config=config)
+        plan = plan_tick(state, plan=PLAN, config=config, now=NOW)
         assert dispatches(plan) == []
         assert [deferral.reason for deferral in plan.deferred] == ["lane-cap"]
 
@@ -294,7 +305,7 @@ class TestMarkingAutoPrsReady:
 
     def _plan(self, verify: Verify, checks: Checks, *, draft: bool = True) -> TickPlan:
         state = self._state(verify, checks, draft=draft)
-        return plan_tick(state, plan=PLAN, config=SchedulerConfig())
+        return plan_tick(state, plan=PLAN, config=SchedulerConfig(), now=NOW)
 
     def test_a_green_auto_draft_is_marked_ready(self) -> None:
         plan = self._plan(Verify.AUTO, Checks.PASSING)
@@ -343,26 +354,26 @@ class TestMarkReadyConverges:
 
     def test_the_second_pass_plans_no_ready_op(self) -> None:
         api = FakeGitHub(state=self._state())
-        first = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        first = plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW)
         assert [op for op in first.operations if isinstance(op, MarkReady)]
 
         execute_tick(first, api)
-        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW)
         assert not [op for op in second.operations if isinstance(op, MarkReady)]
 
     def test_the_second_pass_reaches_auto_merging(self) -> None:
         # The point of clearing the draft: the task can now actually merge,
         # and the board says so on the very next pass without further help.
         api = FakeGitHub(state=self._state())
-        execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
-        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api)
+        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW)
         assert second.statuses[TaskId("a")] is Status.AUTO_MERGING
 
     def test_the_third_pass_is_empty(self) -> None:
         api = FakeGitHub(state=self._state())
         for _ in range(2):
-            execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
-        assert not plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+            execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api)
+        assert not plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW)
 
 
 class TestReadyIsNotCountedAsDispatch:
@@ -384,7 +395,7 @@ class TestReadyIsNotCountedAsDispatch:
             )
         )
         api = FakeGitHub(state=state)
-        result = execute_tick(plan_tick(state, plan=PLAN, config=SchedulerConfig()), api)
+        result = execute_tick(plan_tick(state, plan=PLAN, config=SchedulerConfig(), now=NOW), api)
         assert result.readied == 1
         assert result.dispatched == 0
 
@@ -418,16 +429,16 @@ class TestMergingConverges:
         )
 
     def test_a_green_auto_pr_is_merged(self) -> None:
-        plan = plan_tick(self._state(), plan=PLAN, config=SchedulerConfig())
+        plan = plan_tick(self._state(), plan=PLAN, config=SchedulerConfig(), now=NOW)
         assert MergePr(TaskId("a"), 7) in plan.operations
 
     def test_the_second_pass_plans_no_merge(self) -> None:
         api = FakeGitHub(state=self._state())
-        first = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        first = plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW)
         result = execute_tick(first, api)
         assert result.merged == 1
 
-        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW)
         assert not [op for op in second.operations if isinstance(op, MergePr)]
         assert second.statuses[TaskId("a")] is Status.DONE
 
@@ -435,7 +446,9 @@ class TestMergingConverges:
         # Nothing was handed to an agent; a pass reporting otherwise would
         # overstate what it did in the one place a human reads.
         api = FakeGitHub(state=self._state())
-        result = execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        result = execute_tick(
+            plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api
+        )
         assert result.dispatched == 0
 
     def test_a_merge_unblocks_the_dependent(self) -> None:
@@ -459,8 +472,8 @@ class TestMergingConverges:
             issue("b", number=4, depends=("a",)),
         )
         api = FakeGitHub(state=state)
-        execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
-        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig())
+        execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api)
+        second = plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW)
         # Unblocked and handed out in the same pass: `b`'s dependency closed
         # because the merge closed it, so the projection reads `Dispatched`.
         assert second.admitted == (TaskId("b"),)
@@ -501,17 +514,23 @@ class TestARefusedMergeDoesNotEndThePass:
 
     def test_the_pass_survives(self) -> None:
         api = self._Refusing(state=self._state())
-        result = execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        result = execute_tick(
+            plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api
+        )
         assert result.merged == 0
 
     def test_the_refusal_is_reported(self) -> None:
         api = self._Refusing(state=self._state())
-        result = execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        result = execute_tick(
+            plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api
+        )
         assert any("conflict" in notice.message for notice in result.refused)
 
     def test_the_board_is_still_written(self) -> None:
         # The regression that cost a live pass: operations are ordered merge
         # first, so an exception there silently dropped every board write.
         api = self._Refusing(state=self._state())
-        result = execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        result = execute_tick(
+            plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api
+        )
         assert result.reconciled > 0

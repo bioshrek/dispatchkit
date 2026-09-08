@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from fnmatch import fnmatch
 
@@ -35,16 +36,25 @@ from dispatchkit.config import SchedulerConfig
 from dispatchkit.errors import GraphError
 from dispatchkit.github import (
     DISPATCHKIT_LABEL,
+    LabelIssue,
     MarkReady,
     MergePr,
     Notice,
     RepoState,
     SetProjectField,
+    UnassignAgent,
 )
 from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 
 FIELD_STATUS = "Status"
 FIELD_ATTEMPTS = "Attempts"
+
+#: The cloud agent's own login. GitHub records a second AssignedEvent for the
+#: human who triggered the dispatch, so both the count of attempts and the
+#: reclaim have to name the agent rather than take the assignee list wholesale
+#: -- otherwise one dispatch reads as two, and a reclaim unassigns a watching
+#: human. Confirmed live: issue #3 carried `copilot-swe-agent` and `bioshrek`.
+AGENT_LOGINS = frozenset({"copilot-swe-agent", "Copilot"})
 
 LABEL_STUCK = "dispatch:stuck"
 LABEL_SPEND_APPROVED = "spend:approved"
@@ -61,6 +71,7 @@ class Status(Enum):
     DISPATCHED = "Dispatched"
     IN_REVIEW = "In Review"
     AUTO_MERGING = "Auto-merging"
+    STUCK = "Stuck"
     DONE = "Done"
 
 
@@ -78,7 +89,7 @@ class TaskItem:
     assignees: tuple[str, ...]
     labels: tuple[str, ...]
     open_prs: tuple[PullRequest, ...]
-    attempts: int
+    dispatches: tuple[datetime, ...]
     project_item_id: str | None
     fields: Mapping[str, str]
     node_id: str | None = None
@@ -98,6 +109,20 @@ class TaskItem:
     @property
     def touches(self) -> tuple[str, ...]:
         return self.block.touches
+
+    @property
+    def attempts(self) -> int:
+        """How many times this task has been handed to an agent.
+
+        Counted from the issue's own assignment history, not from the board:
+        the board is a derived view, and a number only it remembers would be
+        the one piece of scheduler state GitHub could not rebuild.
+        """
+        return len(self.dispatches)
+
+    @property
+    def stuck(self) -> bool:
+        return LABEL_STUCK in self.labels
 
     @property
     def claimed(self) -> bool:
@@ -175,7 +200,7 @@ def build_items(state: RepoState, *, plan: str) -> tuple[tuple[TaskItem, ...], t
                 assignees=issue.assignees,
                 labels=issue.labels,
                 open_prs=issue.open_prs,
-                attempts=_attempts(issue.fields),
+                dispatches=issue.dispatches,
                 project_item_id=issue.project_item_id,
                 fields=issue.fields,
                 node_id=issue.node_id,
@@ -193,6 +218,11 @@ def resolve(items: Sequence[TaskItem]) -> dict[TaskId, Status]:
 def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Status:
     if task.closed:
         return Status.DONE
+    if task.stuck:
+        # Read before `Ready`, because a stuck task is unassigned and would
+        # otherwise satisfy every readiness test while never being dispatched
+        # again -- the board claiming work is queued that never moves.
+        return Status.STUCK
     if task.open_prs:
         # A PR exists, so the work happened regardless of how it was claimed;
         # `verify` decides who closes it out. `Auto-merging` is a claim that
@@ -291,6 +321,43 @@ def merge_ops(items: Sequence[TaskItem], config: SchedulerConfig) -> tuple[Merge
             and _within_scope(pr.files, task.touches)
         ]
     return tuple(operations)
+
+
+def stall_ops(
+    items: Sequence[TaskItem],
+    config: SchedulerConfig,
+    now: datetime,
+) -> tuple[UnassignAgent | LabelIssue, ...]:
+    """Reclaim dispatches that produced nothing, and stop reclaiming forever.
+
+    The timeout asks one question: did this dispatch produce a pull request?
+    Not whether it was merged, and not whether review finished -- a long review
+    is not a stall, and reclaiming one would throw away real work.
+
+    Releasing the assignment *is* the retry. Assignment is the dispatch lock,
+    so an unassigned task rejoins the ready set on the next pass with nothing
+    else written down, and the attempt that just failed is still counted
+    because the timeline keeps it.
+    """
+    ops: list[UnassignAgent | LabelIssue] = []
+    for task in items:
+        if not _stalled(task, config, now):
+            continue
+        agent = tuple(name for name in task.assignees if name in AGENT_LOGINS)
+        ops.append(UnassignAgent(task.id, task.number, agent or task.assignees))
+        if task.attempts >= config.retry_budget:
+            # Handing it back now would spend a fourth attempt on a budget of
+            # three, so the reclaim is the last thing that happens to it.
+            ops.append(LabelIssue(task.id, task.number, add=(LABEL_STUCK,)))
+    return tuple(ops)
+
+
+def _stalled(task: TaskItem, config: SchedulerConfig, now: datetime) -> bool:
+    if task.closed or task.stuck or task.open_prs or not task.assignees:
+        return False
+    if not task.dispatches:
+        return False
+    return now - max(task.dispatches) >= config.stall_after
 
 
 def _within_scope(files: Sequence[str], touches: Sequence[str]) -> bool:

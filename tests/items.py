@@ -6,12 +6,18 @@ built the way the scheduler sees them: a machine block plus issue state.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from dispatchkit.block import MachineBlock
 from dispatchkit.github import IssueState, RepoState
 from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 from dispatchkit.resolve import TaskItem
 
 PLAN = "demo"
+
+#: Old enough that any stall timeout has passed. `attempts=N` synthesises N of
+#: these, so a test that only cares about the count says so and nothing else.
+_LONG_AGO = datetime(2020, 1, 1, tzinfo=UTC)
 
 
 def item(
@@ -29,6 +35,7 @@ def item(
     labels: tuple[str, ...] = ("dispatchkit",),
     open_prs: tuple[int | PullRequest, ...] = (),
     attempts: int = 0,
+    dispatches: tuple[datetime, ...] | None = None,
     fields: dict[str, str] | None = None,
     project_item_id: str | None = "PVTI_1",
 ) -> TaskItem:
@@ -49,7 +56,9 @@ def item(
         assignees=assignees,
         labels=labels,
         open_prs=_prs(open_prs),
-        attempts=attempts,
+        dispatches=(
+            dispatches if dispatches is not None else (_LONG_AGO,) * attempts
+        ),
         project_item_id=project_item_id,
         fields=fields if fields is not None else {},
     )

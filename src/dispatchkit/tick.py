@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 from dispatchkit.config import SchedulerConfig
 from dispatchkit.github import (
@@ -34,6 +35,7 @@ from dispatchkit.github import (
     Notice,
     RepoState,
     SetProjectField,
+    UnassignAgent,
 )
 from dispatchkit.model import Lane, TaskId
 from dispatchkit.resolve import (
@@ -48,6 +50,7 @@ from dispatchkit.resolve import (
     ready_ops,
     reconcile_ops,
     resolve,
+    stall_ops,
 )
 
 
@@ -79,9 +82,11 @@ class TickResult:
     #: ordinary outcomes, so they are reported rather than raised — and the
     #: pass carries on, because the board writes are queued behind them.
     refused: tuple[Notice, ...] = ()
+    #: Dispatches reclaimed after producing no pull request (D7).
+    reclaimed: int = 0
 
 
-def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPlan:
+def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig, now: datetime) -> TickPlan:
     items, notices = build_items(state, plan=plan)
     statuses = resolve(items)
     admission = admit(items, statuses, config)
@@ -105,11 +110,24 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
     # rather than needing a second write.
     projected = {**statuses, **dict.fromkeys(dispatched, Status.DISPATCHED)}
 
+    # A reclaimed task is unassigned by the time this pass ends, so the board
+    # is told what will be true rather than what was: `Ready` for one going
+    # back into the queue, `Stuck` for one that has spent its budget. Both are
+    # what the next pass derives unaided, so neither needs a second write.
+    stalls = stall_ops(items, config, now)
+    for stall in stalls:
+        match stall:
+            case UnassignAgent():
+                projected[stall.task_id] = Status.READY
+            case LabelIssue():
+                projected[stall.task_id] = Status.STUCK
+
     # Planned from the state as read, so the board is told what was true when
     # we looked. A draft cleared by this pass becomes `Auto-merging` on the
     # next one, which is the same convergence the whole resolver relies on.
     return TickPlan(
         operations=(
+            *stalls,
             *dispatch_ops,
             *ready_ops(items),
             *merge_ops(items, config),
@@ -126,13 +144,16 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
 
 
 def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
-    dispatched = reconciled = readied = merged = 0
+    dispatched = reconciled = readied = merged = reclaimed = 0
     refused: list[Notice] = []
     for operation in plan.operations:
         match operation:
             case AssignAgent():
                 api.assign_agent(number=operation.number, node_id=operation.node_id)
                 dispatched += 1
+            case UnassignAgent():
+                api.unassign_agent(number=operation.number, assignees=operation.assignees)
+                reclaimed += 1
             case LabelIssue():
                 api.edit_labels(number=operation.number, add=operation.add, remove=operation.remove)
                 dispatched += 1
@@ -149,7 +170,7 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
             case SetProjectField():
                 _set_field(api, plan, operation)
                 reconciled += 1
-    return TickResult(dispatched, reconciled, readied, merged, tuple(refused))
+    return TickResult(dispatched, reconciled, readied, merged, tuple(refused), reclaimed)
 
 
 def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:

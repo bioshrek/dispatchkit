@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Protocol
 
 from dispatchkit.model import PullRequest, TaskId
@@ -48,6 +49,10 @@ class IssueState:
     # ids, and the state query already returns it, so dispatch needs no extra
     # round trip.
     node_id: str | None = None
+    # When the agent was assigned, once per dispatch (D7). Read from the issue
+    # timeline rather than a board field, so the count of attempts stays
+    # derived from the repository like every other part of `Status`.
+    dispatches: tuple[datetime, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +110,21 @@ class AssignAgent:
 
 
 @dataclass(frozen=True, slots=True)
+class UnassignAgent:
+    """Take a stalled task back from the agent (D7).
+
+    Assignment is the dispatch lock, so releasing it *is* the retry: the task
+    rejoins the ready set on the next pass with no other bookkeeping. The
+    assignees are named rather than cleared wholesale, so a human who assigned
+    themselves to watch a task keeps their assignment.
+    """
+
+    task_id: TaskId
+    number: int
+    assignees: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class LabelIssue:
     """Claim a task for the local lane, or clear a claim."""
 
@@ -148,7 +168,7 @@ class MergePr:
 #: never creates, edits or closes an issue — `apply` owns the graph's shape and
 #: only a merged PR closes work. `MarkReady` is the one write that lands on a
 #: pull request rather than an issue, and it changes no content.
-DispatchOperation = AssignAgent | LabelIssue | MarkReady | MergePr | SetProjectField
+DispatchOperation = AssignAgent | UnassignAgent | LabelIssue | MarkReady | MergePr | SetProjectField
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +229,8 @@ class GitHubApi(Protocol):
     def set_project_field(self, *, item_id: str, field_name: str, value: str) -> None: ...
 
     def assign_agent(self, *, number: int, node_id: str) -> None: ...
+
+    def unassign_agent(self, *, number: int, assignees: Sequence[str]) -> None: ...
 
     def mark_ready(self, *, number: int) -> None: ...
 

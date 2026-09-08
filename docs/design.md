@@ -1404,6 +1404,56 @@ seeing every board at once, that is a read-side aggregation problem and does not
 the scheduler. Reconsider only if D7 surfaces state GitHub genuinely cannot express.
 
 
+### D7 — the stall, and a counter nothing was writing
+
+The retry budget was there from D4: `_gate` refused to admit a task whose
+`attempts` had reached `retry.budget`. It read that number off the Project
+board's `Attempts` field, **and nothing ever wrote it.** It was zero on every
+task on every pass, so the budget could not fire, and a dispatch that produced
+nothing sat assigned forever showing `Dispatched`. The gate was real code
+guarding a number that was structurally always zero — the same fault as the
+board asserting a state it never checked, one layer down.
+
+**Attempts are derived from the issue's assignment history, not stored.**
+Writing the counter to the board would have been the obvious fix and the wrong
+one: the board is a derived view, so a number only it remembered would be the
+single piece of scheduler state GitHub could not rebuild, and the "no stored
+state" property would be gone for a `+= 1`. The timeline already records every
+assignment, so `attempts` is `len(dispatches)` and the board's `Attempts` field
+becomes a display of it.
+
+**Two probes, two traps, both live.** Querying `ASSIGNED_EVENT` on the sandbox
+showed that one dispatch produces *two* `AssignedEvent`s — the bot and the
+human who triggered it. Counting events wholesale would have scored every
+attempt twice against a budget of three, halving it. Then reading the parsed
+state showed the agent appears under **two different logins depending on the
+field**: `copilot-swe-agent` in the timeline, `Copilot` in the assignee list.
+`AGENT_LOGINS` holds both, which is what makes the count right *and* keeps a
+reclaim from unassigning a human who was watching the issue.
+
+**Releasing the lock is the retry.** Assignment is the dispatch lock, so
+`UnassignAgent` is the entire mechanism: the task rejoins the ready set on the
+next pass with nothing else written down, and the attempt it just spent is
+still counted because the timeline is permanent. The convergence test is
+therefore unusual — the second plan is deliberately *not* empty — so what it
+pins is that each cycle costs exactly one attempt and the budget terminates.
+
+**The timeout asks whether anything was produced, not whether it finished.** A
+task with an open pull request is never reclaimed however long review takes;
+reclaiming there would throw away real work. Only a dispatch with no pull
+request at all can stall.
+
+**`Stuck` is a status, not just a label.** A stuck task is unassigned, so
+without a status of its own it satisfies every readiness test while never being
+dispatched again — the board advertising queued work that cannot move. The cost
+is a board migration, and `init` refused to perform it: adding an option to a
+populated single-select would delete the values of the 5 items using it. That
+refusal is correct, and on the sandbox it also proved cheap to override — the
+option was replaced by hand, all 5 values were lost, and the next pass rebuilt
+every one of them from the issues alone. A destructive migration of the board
+costs nothing precisely because the board never held anything.
+
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once
