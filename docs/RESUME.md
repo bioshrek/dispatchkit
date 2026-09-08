@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7 are implemented and green offline. 501 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.7 are implemented and green offline. 502 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -120,7 +120,18 @@ import from the vendored checkout. It still fails, on the one input only you can
 That failure also earned its keep. It arrived as a bare twelve-frame `RuntimeError` traceback:
 `init` and `doctor` both caught this class of error and `tick` did not, so the failure adopters
 are most likely to hit was the one presented worst. `tick --push` now reports
-`dispatchkit: cannot read <repo>: …` and exits 2.
+`dispatchkit: cannot read <repo>: …` and exits 2 — shipped as **`v0.1.1`**, since `v0.1.0` was
+cut minutes earlier and published tags are not moved.
+
+Two things were proven on the way. The sandbox is pinned to the new release through
+`DISPATCHKIT_REF`, so the override the template advertises has now actually been used rather than
+merely offered. And the pin test was strengthened: it asserted only that a `ref` existed, which
+`ref: main` would have satisfied — the precise thing a pin prevents, since a moving branch means
+every adopter runs whatever was last pushed here, in a job holding a token that can assign work.
+The default must now match a version tag.
+
+The scheduler's log now ends in one line: `dispatchkit: cannot read bioshrek/dispatchkit-sandbox:
+… set the GH_TOKEN environment variable`, exit 2.
 
 1. **Set the token — the last blocker, and only you can do it.**
    ```sh
