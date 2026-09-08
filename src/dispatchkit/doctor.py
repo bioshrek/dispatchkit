@@ -39,7 +39,14 @@ from dispatchkit.board import (
 #: default and without which nothing board-related works at all.
 REQUIRED_SCOPES = ("repo", "project")
 
+#: Actions configuration the unattended pass reads. Without them the scheduler
+#: runs on its cron and exits non-zero with empty arguments.
+REQUIRED_VARIABLES = ("DISPATCHKIT_PLAN", "DISPATCHKIT_PROJECT")
+REQUIRED_SECRETS = ("DISPATCHKIT_TOKEN",)
+
 _SCOPES = re.compile(r"Token scopes:\s*(?P<scopes>.*)$", re.MULTILINE)
+_PYTHONPATH = re.compile(r"^\s*PYTHONPATH:\s*(?P<path>\S+)\s*$", re.MULTILINE)
+_CHECKOUT_PATH = re.compile(r"^\s*path:\s*(\S+)\s*$", re.MULTILINE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +56,11 @@ class Diagnostics:
     scopes: tuple[str, ...] | None
     agent_available: bool
     board: BoardSnapshot
+    #: Actions variables and secret *names* configured on the repository. The
+    #: unattended pass reads its plan, project and token from these, so an
+    #: empty one is a scheduler that runs on a cron and does nothing.
+    variables: tuple[str, ...] = ()
+    secrets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +73,12 @@ class LocalFacts:
     workflow_exists: bool
     plans: Path
     plans_exists: bool
+    #: The workflow's text, so the source it puts on `PYTHONPATH` can be
+    #: checked against what the repository actually has.
+    workflow_text: str = ""
+    #: Does this repository carry `src/dispatchkit` itself? True here, false
+    #: in every repository `init` writes into.
+    vendored: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,12 +101,13 @@ def check_remote(diagnostics: Diagnostics) -> tuple[Check, ...]:
         _agent(diagnostics.agent_available),
         _fields(diagnostics.board),
         _labels(diagnostics.board),
+        _inputs(diagnostics),
     )
 
 
 def check_local(facts: LocalFacts) -> tuple[Check, ...]:
     """The checks the working tree can answer on its own, offline."""
-    return (_config(facts), _plans(facts), _workflow(facts))
+    return (_config(facts), _plans(facts), _workflow(facts), _workflow_source(facts))
 
 
 def healthy(checks: Sequence[Check]) -> bool:
@@ -201,6 +220,71 @@ def _workflow(facts: LocalFacts) -> Check:
         False,
         f"{facts.workflow_path} does not exist, so no pass ever runs unattended",
         "dispatchkit init --repo owner/name --project N",
+    )
+
+
+def _workflow_source(facts: LocalFacts) -> Check:
+    """Will the workflow be able to import dispatchkit when it runs?
+
+    Existing is not enough. A workflow that puts a directory on `PYTHONPATH`
+    which nothing ever creates fails on `No module named dispatchkit`, on a
+    schedule, with nobody reading the log — so the two halves are checked
+    against each other: whatever `PYTHONPATH` names must either be fetched by
+    a checkout step in the same file, or already be in this repository.
+    """
+    if not facts.workflow_exists:
+        # `workflow` already reports this, and pointing twice at one fix is
+        # noise.
+        return Check("workflow-source", True, "no workflow to check")
+
+    match = _PYTHONPATH.search(facts.workflow_text)
+    if match is None:
+        return Check(
+            "workflow-source",
+            False,
+            f"{facts.workflow_path} sets no PYTHONPATH, so the pass cannot import dispatchkit",
+            "dispatchkit init --repo owner/name --project N",
+        )
+
+    source = match.group("path")
+    fetched = set(_CHECKOUT_PATH.findall(facts.workflow_text))
+    if any(source == path or source.startswith(f"{path}/") for path in fetched):
+        return Check("workflow-source", True, f"the pass fetches dispatchkit into {source}")
+    if facts.vendored and source.split("/")[0] == "src":
+        return Check("workflow-source", True, "the pass runs this repository's own source")
+    return Check(
+        "workflow-source",
+        False,
+        f"{facts.workflow_path} puts `{source}` on PYTHONPATH, but nothing in this "
+        "repository or in the workflow provides it, so every pass will fail with "
+        "`No module named dispatchkit`",
+        "dispatchkit init --repo owner/name --project N, which writes a workflow that "
+        "fetches dispatchkit's source itself",
+    )
+
+
+def _inputs(diagnostics: Diagnostics) -> Check:
+    """The variables and the secret the unattended pass reads."""
+    missing = [name for name in REQUIRED_VARIABLES if name not in diagnostics.variables]
+    missing += [name for name in REQUIRED_SECRETS if name not in diagnostics.secrets]
+    if not missing:
+        return Check(
+            "workflow-inputs",
+            True,
+            f"the repository sets {_quoted((*REQUIRED_VARIABLES, *REQUIRED_SECRETS))}",
+        )
+    remedy = [
+        f"gh variable set {name}" for name in REQUIRED_VARIABLES if name in missing
+    ]
+    # Never `gh secret set NAME BODY`: a token on a command line lands in the
+    # shell history. `gh` prompts for the value when it is not given one.
+    remedy += [f"gh secret set {name}" for name in REQUIRED_SECRETS if name in missing]
+    return Check(
+        "workflow-inputs",
+        False,
+        f"the repository is missing {_quoted(missing)}, so an unattended pass "
+        "runs with no plan, no board or no token",
+        "; ".join(remedy),
     )
 
 

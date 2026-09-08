@@ -38,7 +38,7 @@ from dispatchkit.github import (
     RepoState,
     SetProjectField,
 )
-from dispatchkit.model import Lane, TaskId, Verify
+from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 
 FIELD_STATUS = "Status"
 FIELD_ATTEMPTS = "Attempts"
@@ -74,7 +74,7 @@ class TaskItem:
     closed: bool
     assignees: tuple[str, ...]
     labels: tuple[str, ...]
-    open_prs: tuple[int, ...]
+    open_prs: tuple[PullRequest, ...]
     attempts: int
     project_item_id: str | None
     fields: Mapping[str, str]
@@ -100,6 +100,11 @@ class TaskItem:
     def claimed(self) -> bool:
         """Has an agent taken this task? Cloud assigns; the local daemon labels."""
         return bool(self.assignees) or LABEL_LOCAL_CLAIM in self.labels
+
+    @property
+    def checks(self) -> Checks:
+        """CI's verdict across every open PR on this task, worst first."""
+        return Checks.combine(pr.checks for pr in self.open_prs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,8 +174,14 @@ def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Statu
         return Status.DONE
     if task.open_prs:
         # A PR exists, so the work happened regardless of how it was claimed;
-        # `verify` decides whether a human or CI is the one to close it out.
-        return Status.IN_REVIEW if task.verify is Verify.HUMAN else Status.AUTO_MERGING
+        # `verify` decides who closes it out. `Auto-merging` is a claim that
+        # CI is going to decide, so it is only made while CI is in a position
+        # to: a run held for approval, or a red one, needs a human, which is
+        # exactly what `In Review` means. Saying `Auto-merging` over a pipeline
+        # that will never start would be the board asserting something false.
+        if task.verify is Verify.AUTO and not task.checks.stalled:
+            return Status.AUTO_MERGING
+        return Status.IN_REVIEW
     if task.claimed:
         return Status.DISPATCHED
     # A dependency with no issue at all (deleted, or never applied) is not
@@ -178,6 +189,37 @@ def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Statu
     if all(dep in closed for dep in task.block.depends):
         return Status.READY
     return Status.BLOCKED
+
+
+def ci_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
+    """Report `verify: auto` tasks whose CI cannot run without a human.
+
+    Absorbing this into `In Review` alone would be quietly misleading: the
+    board would invite someone to review a pull request that cannot merge, and
+    the reason would be a checkbox two pages deep in the Actions tab. Only
+    `BLOCKED` is reported — a failing run is somebody's bug, not a gate that
+    can be clicked away, and suggesting otherwise would waste the reader's
+    time.
+    """
+    notices = []
+    for task in items:
+        if task.closed or task.verify is not Verify.AUTO:
+            continue
+        held = [pr.number for pr in task.open_prs if pr.checks is Checks.BLOCKED]
+        if not held:
+            continue
+        listed = ", ".join(f"#{number}" for number in held)
+        notices.append(
+            Notice(
+                "ci-approval-required",
+                f"#{task.number}",
+                f"{listed}: GitHub is holding the workflow runs for approval, so "
+                "`verify: auto` cannot complete. A maintainer must approve them "
+                "(Actions tab, or `gh api -X POST "
+                "repos/{owner}/{repo}/actions/runs/{id}/approve`).",
+            )
+        )
+    return tuple(notices)
 
 
 def reconcile_ops(

@@ -194,7 +194,21 @@ def execute_tree(plan: InitPlan) -> tuple[int, int]:
 def summarise(plan: InitPlan) -> list[str]:
     lines = [f"  {type(op).__name__} {_subject(op)}" for op in plan.operations]
     lines += [f"NOTE {notice}" for notice in plan.notices]
+    lines += [f"NEXT {step}" for step in NEXT_STEPS]
     return lines
+
+
+#: What `init` cannot do for the adopter, said at the point they would
+#: otherwise walk away believing the setup is finished. `init` holds no
+#: credential to install and has no business inventing a plan name, so these
+#: three stay manual — and an unattended pass with any of them unset runs on
+#: its cron and fails with empty arguments.
+NEXT_STEPS = (
+    "gh secret set DISPATCHKIT_TOKEN  (a classic PAT with `repo` and `project`; "
+    "user-owned Projects do not accept fine-grained tokens)",
+    "gh variable set DISPATCHKIT_PLAN --body <plan-name>",
+    "gh variable set DISPATCHKIT_PROJECT --body <project-number>",
+)
 
 
 def _subject(operation: InitOperation) -> str:
@@ -282,9 +296,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # `src/dispatchkit` is pure standard library, so the pass installs
-      # nothing: no dependency resolution to fail, no third-party code in a
-      # job that holds a token which can assign work.
+      # dispatchkit's own source, fetched beside the repository. Fetched and
+      # not installed: it is pure standard library, so there is no resolver to
+      # fail and no third-party code in a job holding a token that can assign
+      # work. Pinned to a tag, because an unpinned default branch would let
+      # somebody else choose what runs next to that token. Override the source
+      # or the tag with the DISPATCHKIT_SOURCE and DISPATCHKIT_REF repository
+      # variables.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.DISPATCHKIT_SOURCE || 'bioshrek/dispatchkit' }}
+          ref: ${{ vars.DISPATCHKIT_REF || 'v0.1.0' }}
+          path: .dispatchkit
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -294,9 +318,9 @@ jobs:
       # so a value carrying a quote would become a command.
       - name: Scheduler pass
         env:
-          # `src` on the path rather than an install step: there is nothing to
-          # install, and `pip install` would be a build the pass depends on.
-          PYTHONPATH: src
+          # The source that was just fetched, on the path. No install step:
+          # `pip install` would be a build the pass depends on.
+          PYTHONPATH: .dispatchkit/src
           GH_TOKEN: ${{ secrets.DISPATCHKIT_TOKEN }}
           REPO: ${{ github.repository }}
           PLAN: ${{ vars.DISPATCHKIT_PLAN }}

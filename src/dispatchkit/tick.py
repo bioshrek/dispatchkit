@@ -41,6 +41,7 @@ from dispatchkit.resolve import (
     TaskItem,
     admit,
     build_items,
+    ci_notices,
     reconcile_ops,
     resolve,
 )
@@ -101,7 +102,7 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
         statuses=projected,
         admitted=tuple(dispatched),
         deferred=admission.deferred,
-        notices=(*notices, *blocked_notices),
+        notices=(*notices, *blocked_notices, *ci_notices(items)),
     )
 
 

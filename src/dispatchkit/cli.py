@@ -313,6 +313,8 @@ def _facts(args: argparse.Namespace) -> LocalFacts | int:
         workflow_exists=workflow.exists(),
         plans=plans,
         plans_exists=plans.is_dir(),
+        workflow_text=workflow.read_text(encoding="utf-8") if workflow.exists() else "",
+        vendored=(root / "src" / "dispatchkit").is_dir(),
     )
 
 
@@ -325,10 +327,13 @@ def _doctor(args: argparse.Namespace) -> int:
     if args.repo and args.project is not None:
         api = GhCli(repo=args.repo, project=args.project)
         try:
+            variables, secrets = api.workflow_inputs()
             diagnostics = Diagnostics(
                 scopes=api.token_scopes(),
                 agent_available=api.agent_available(),
                 board=api.fetch_board(),
+                variables=variables,
+                secrets=secrets,
             )
         except RuntimeError as exc:
             # Every failure `doctor` exists to name arrives as a non-zero `gh`

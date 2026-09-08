@@ -17,9 +17,9 @@ import pytest
 from dispatchkit.cli import main
 from dispatchkit.config import SchedulerConfig
 from dispatchkit.github import AssignAgent, LabelIssue, RepoState, SetProjectField
-from dispatchkit.model import Lane, TaskId
+from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 from dispatchkit.resolve import LABEL_LOCAL_CLAIM, Status
-from dispatchkit.tick import TickPlan, execute_tick, plan_tick
+from dispatchkit.tick import TickPlan, execute_tick, plan_tick, summarise
 from tests.fake_github import FakeGitHub
 from tests.items import PLAN, issue, state_of
 
@@ -178,6 +178,56 @@ class TestDegradedInput:
     def test_issues_from_another_plan_are_ignored(self) -> None:
         state = state_of(issue("a", 1))
         assert plan_tick(state, plan="other", config=CONFIG).operations == ()
+
+
+class TestStalledCi:
+    """A pass must surface a `verify: auto` task whose CI cannot start.
+
+    This is the failure the sandbox actually hit: the coding agent opened its
+    PRs, GitHub parked the workflow runs pending approval, and nothing said so.
+    """
+
+    @staticmethod
+    def _state(checks: Checks) -> RepoState:
+        return state_of(
+            issue(
+                "a",
+                1,
+                verify=Verify.AUTO,
+                assignees=("copilot-swe-agent",),
+                open_prs=(PullRequest(6, checks),),
+            )
+        )
+
+    def test_the_pass_reports_the_held_runs(self) -> None:
+        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG)
+        assert [notice.code for notice in plan.notices] == ["ci-approval-required"]
+
+    def test_the_board_is_told_in_review_rather_than_auto_merging(self) -> None:
+        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG)
+        assert plan.statuses[TaskId("a")] is Status.IN_REVIEW
+
+    def test_a_green_pr_is_reported_as_auto_merging_and_silently(self) -> None:
+        plan = plan_tick(self._state(Checks.PASSING), plan=PLAN, config=CONFIG)
+        assert plan.statuses[TaskId("a")] is Status.AUTO_MERGING
+        assert plan.notices == ()
+
+    def test_the_summary_shows_the_reason_to_a_human(self) -> None:
+        plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG)
+        assert any("ci-approval-required" in line for line in summarise(plan))
+
+    def test_a_stalled_task_still_occupies_its_lane(self) -> None:
+        # It is genuinely in flight — an agent did the work and a PR is open.
+        # Freeing the slot would let the scheduler pile more work on a repo
+        # that already has a PR nobody can merge.
+        state = state_of(
+            issue("a", 1, verify=Verify.AUTO, open_prs=(PullRequest(6, Checks.BLOCKED),)),
+            issue("b", 2),
+        )
+        config = SchedulerConfig(caps={Lane.CLOUD: 1})
+        plan = plan_tick(state, plan=PLAN, config=config)
+        assert dispatches(plan) == []
+        assert [deferral.reason for deferral in plan.deferred] == ["lane-cap"]
 
 
 class TestTickCommand:

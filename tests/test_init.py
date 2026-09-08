@@ -29,10 +29,10 @@ from dispatchkit.board import (
     FieldSpec,
 )
 from dispatchkit.config import load_config
-from dispatchkit.doctor import Diagnostics, LocalFacts, check, healthy
+from dispatchkit.doctor import Diagnostics, LocalFacts, check
 from dispatchkit.init import (
     CONFIG_TEMPLATE,
-    WORKFLOW_TEMPLATE,
+    NEXT_STEPS,
     CreateField,
     CreateLabel,
     MakeDirectory,
@@ -40,6 +40,7 @@ from dispatchkit.init import (
     WriteFile,
     execute_init,
     plan_init,
+    summarise,
 )
 from dispatchkit.model import Lane
 from dispatchkit.resolve import FIELD_STATUS
@@ -98,6 +99,8 @@ def facts(root: Path) -> LocalFacts:
         workflow_exists=workflow.exists(),
         plans=plans,
         plans_exists=plans.exists(),
+        workflow_text=workflow.read_text(encoding="utf-8") if workflow.exists() else "",
+        vendored=(root / "src" / "dispatchkit").is_dir(),
     )
 
 
@@ -245,34 +248,52 @@ class TestIdempotency:
 
 
 class TestTheResultIsHealthy:
-    def test_doctor_passes_on_a_repository_init_just_set_up(self, tmp_path: Path) -> None:
-        """The two commands are one contract, so they are tested as one.
+    """The two commands are one contract, so they are tested as one.
 
-        `init` creating something `doctor` still complains about — or `doctor`
-        demanding something `init` never creates — is the failure mode that
-        makes an on-ramp worse than no on-ramp.
-        """
+    `init` creating something `doctor` still complains about — or `doctor`
+    demanding something `init` never creates — is the failure mode that makes
+    an on-ramp worse than no on-ramp.
+
+    There is exactly one permitted exception, and it is a real one: the token
+    and the two repository variables. `init` holds no credential to install
+    and must not invent a plan name, so it cannot supply them; what it can do
+    is finish by saying so, which `TestNextSteps` covers.
+    """
+
+    def _remaining(self, tmp_path: Path) -> list[str]:
         api = FakeBoard()
         execute_init(plan_init(api.fetch_board(), facts(tmp_path)), api)
-
         checks = check(
             Diagnostics(scopes=("repo", "project"), agent_available=True, board=api.fetch_board()),
             facts(tmp_path),
         )
-        assert healthy(checks), [c.detail for c in checks if not c.ok]
+        return [item.name for item in checks if not item.ok]
+
+    def test_only_the_human_supplied_inputs_are_left_outstanding(
+        self, tmp_path: Path
+    ) -> None:
+        assert self._remaining(tmp_path) == ["workflow-inputs"]
+
+    def test_the_workflow_it_writes_can_import_dispatchkit(self, tmp_path: Path) -> None:
+        # The regression that matters: `init` used to write a workflow that
+        # only worked in dispatchkit's own repository.
+        assert "workflow-source" not in self._remaining(tmp_path)
 
 
 class TestTemplatesMatchThisRepository:
-    """What `init` writes is what this repository runs — asserted, not hoped.
+    """What `init` writes is held to this repository's own standards.
 
-    `tests/test_workflow.py` asserts the permissions, triggers and script
-    safety of the file on disk. Pinning the template to that file is what
-    extends those assertions to every repository `init` ever touches.
+    The workflow is deliberately *not* pinned byte-for-byte to the one here.
+    It used to be, and the pin was wrong: this repository has `src/dispatchkit`
+    in its tree and an adopter does not, so a template identical to ours could
+    not run anywhere but here — which is exactly what happened. The guarantee
+    now lives in `tests/test_workflow.py`, which asserts every permission,
+    trigger and script-safety property against *both* files, plus the ones that
+    can only be true of one of them.
+
+    The config template is a different matter: it has no such asymmetry, so it
+    stays pinned.
     """
-
-    def test_the_workflow_template_is_this_repositorys_workflow(self) -> None:
-        on_disk = (ROOT / ".github" / "workflows" / "dispatchkit.yml").read_text(encoding="utf-8")
-        assert WORKFLOW_TEMPLATE == on_disk
 
     def test_the_config_template_is_this_repositorys_config(self) -> None:
         on_disk = (ROOT / ".github" / "dispatchkit.toml").read_text(encoding="utf-8")
@@ -289,3 +310,40 @@ class TestTemplatesMatchThisRepository:
         assert config.retry_budget == 3
         assert config.plans == Path("docs/plans")
         assert config.is_fenced(".github/workflows/dispatchkit.yml")
+
+
+class TestNextSteps:
+    """`init` must not leave the adopter believing the setup is complete.
+
+    Three things stay manual — a token, and the two variables naming the plan
+    and the board. Without them the scheduler runs on its cron and exits with
+    empty arguments, which is a failure nobody sees. Since `init` cannot
+    supply them, the least it can do is end by naming them.
+    """
+
+    def _lines(self, tmp_path: Path) -> list[str]:
+        return summarise(plan_init(complete_board(), facts(tmp_path)))
+
+    def test_it_names_the_token_and_both_variables(self, tmp_path: Path) -> None:
+        printed = "\n".join(self._lines(tmp_path))
+        assert "DISPATCHKIT_TOKEN" in printed
+        assert "DISPATCHKIT_PLAN" in printed
+        assert "DISPATCHKIT_PROJECT" in printed
+
+    def test_it_says_the_token_must_be_a_classic_pat(self, tmp_path: Path) -> None:
+        # A fine-grained token is the obvious modern choice and it silently
+        # cannot touch a user-owned Project, which is the default case.
+        printed = "\n".join(self._lines(tmp_path))
+        assert "classic" in printed
+
+    def test_the_steps_are_shown_even_when_there_is_nothing_to_do(
+        self, tmp_path: Path
+    ) -> None:
+        # A second `init` is a no-op on the board, but the manual steps are
+        # exactly what an adopter re-runs it to be reminded of.
+        plan = plan_init(complete_board(), facts(tmp_path))
+        assert [line for line in summarise(plan) if line.startswith("NEXT")]
+
+    def test_every_step_is_a_command_that_can_be_run(self, tmp_path: Path) -> None:
+        for step in NEXT_STEPS:
+            assert step.startswith("gh ")

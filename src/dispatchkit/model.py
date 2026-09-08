@@ -11,6 +11,7 @@ See `docs/automation_task_dispatch_requirements.md`, "Task graph format".
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import NewType
@@ -36,6 +37,66 @@ class Verify(Enum):
 
     AUTO = "auto"
     HUMAN = "human"
+
+
+class Checks(Enum):
+    """What CI is currently saying about a pull request (D5.6).
+
+    `verify: auto` hands merge authority to CI, so the scheduler has to know
+    whether CI actually holds an opinion. `BLOCKED` is the one that matters
+    and the one that is easy to miss: GitHub treats a coding agent as an
+    untrusted contributor and parks its workflow runs until a human approves
+    them, which is not a failure and not a pending run — it is a pipeline that
+    will never start on its own.
+    """
+
+    NONE = "none"
+    PASSING = "passing"
+    PENDING = "pending"
+    FAILING = "failing"
+    BLOCKED = "blocked"
+
+    @property
+    def stalled(self) -> bool:
+        """Is a human the only thing that can move this PR forward?
+
+        `NONE` is deliberately not a stall. Without stored state there is no
+        way to distinguish "the runs do not exist yet" from "this repository
+        has no CI", and the former is the normal state in the seconds after a
+        PR opens. `BLOCKED` is GitHub saying so explicitly, so that is the
+        signal acted on rather than an inference from absence.
+        """
+        return self in _STALLED
+
+    @classmethod
+    def combine(cls, parts: Iterable[Checks]) -> Checks:
+        """The verdict for a PR whose suites each reported separately.
+
+        Ordered by who has to act: a run nobody can start outranks one that
+        failed, which outranks one still going. A green suite never raises the
+        verdict, so one blocked suite is enough to stall the pull request.
+        """
+        return max(parts, key=_PRECEDENCE.index, default=cls.NONE)
+
+
+_STALLED = frozenset({Checks.BLOCKED, Checks.FAILING})
+
+#: Ascending severity. `combine` takes the maximum, so later wins.
+_PRECEDENCE = [
+    Checks.NONE,
+    Checks.PASSING,
+    Checks.PENDING,
+    Checks.FAILING,
+    Checks.BLOCKED,
+]
+
+
+@dataclass(frozen=True, slots=True)
+class PullRequest:
+    """An open PR linked to a task issue, with CI's current verdict on it."""
+
+    number: int
+    checks: Checks = Checks.NONE
 
 
 # Capability tags a task may demand of its runner. The cloud lane advertises

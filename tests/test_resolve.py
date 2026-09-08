@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from dispatchkit.config import SchedulerConfig
 from dispatchkit.github import SetProjectField
-from dispatchkit.model import Lane, TaskId, Verify
-from dispatchkit.resolve import Status, admit, reconcile_ops, resolve
+from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
+from dispatchkit.resolve import Status, admit, ci_notices, reconcile_ops, resolve
 from tests.items import item, items_of
 
 
@@ -74,6 +74,103 @@ class TestWorkInFlight:
         # The local daemon works from a label rather than an assignee, so a PR
         # is the more reliable signal that something is already happening.
         assert resolve(items_of(item("a", open_prs=(7,))))[TaskId("a")] is Status.IN_REVIEW
+
+
+class TestAutoMergeRequiresLiveCi:
+    """`Auto-merging` is a claim about CI, so CI has to be in a position to act.
+
+    The bug this class exists to prevent: the resolver used to return
+    `Auto-merging` for any `verify: auto` task with an open PR, without ever
+    looking at a check. A coding agent's PR has its workflow runs held for
+    human approval, so the board would sit on `Auto-merging` forever for a
+    pipeline that had not started and never would. Saying nothing is better
+    than saying something false; `In Review` is true in every one of these
+    cases, because a human is indeed the next mover.
+    """
+
+    @staticmethod
+    def _auto(checks: Checks) -> Status:
+        working = item(
+            "a",
+            assignees=("copilot",),
+            open_prs=(PullRequest(7, checks),),
+            verify=Verify.AUTO,
+        )
+        return resolve(items_of(working))[TaskId("a")]
+
+    def test_a_run_held_for_approval_is_not_auto_merging(self) -> None:
+        assert self._auto(Checks.BLOCKED) is Status.IN_REVIEW
+
+    def test_a_failing_pr_is_not_auto_merging(self) -> None:
+        assert self._auto(Checks.FAILING) is Status.IN_REVIEW
+
+    def test_a_green_pr_is_auto_merging(self) -> None:
+        assert self._auto(Checks.PASSING) is Status.AUTO_MERGING
+
+    def test_a_pr_whose_ci_is_still_running_is_auto_merging(self) -> None:
+        assert self._auto(Checks.PENDING) is Status.AUTO_MERGING
+
+    def test_a_pr_with_no_checks_yet_is_still_auto_merging(self) -> None:
+        # Absence is ambiguous and usually transient; only GitHub saying
+        # `ACTION_REQUIRED` is treated as a stall. See Checks.stalled.
+        assert self._auto(Checks.NONE) is Status.AUTO_MERGING
+
+    def test_one_blocked_pr_among_several_stalls_the_task(self) -> None:
+        working = item(
+            "a",
+            open_prs=(PullRequest(7, Checks.PASSING), PullRequest(8, Checks.BLOCKED)),
+            verify=Verify.AUTO,
+        )
+        assert resolve(items_of(working))[TaskId("a")] is Status.IN_REVIEW
+
+    def test_human_verify_is_unaffected_by_checks(self) -> None:
+        # `verify: human` never promised CI would decide, so a blocked run
+        # changes nothing about what the board should say.
+        working = item("a", open_prs=(PullRequest(7, Checks.BLOCKED),), verify=Verify.HUMAN)
+        assert resolve(items_of(working))[TaskId("a")] is Status.IN_REVIEW
+
+
+class TestCiNotices:
+    """A stalled pipeline must be *explained*, not merely absorbed.
+
+    `In Review` is true when CI is blocked, but on its own it tells a reader to
+    go and review a PR that nobody can merge. The notice carries the reason and
+    the remedy, which is the difference between a board that is quiet and a
+    board that is honest.
+    """
+
+    def test_a_blocked_run_produces_a_notice_naming_the_pr(self) -> None:
+        held = (PullRequest(7, Checks.BLOCKED),)
+        working = item("a", number=3, open_prs=held, verify=Verify.AUTO)
+        notices = ci_notices(items_of(working))
+        assert [notice.code for notice in notices] == ["ci-approval-required"]
+        assert notices[0].where == "#3"
+        assert "7" in notices[0].message
+
+    def test_the_remedy_is_stated(self) -> None:
+        working = item("a", open_prs=(PullRequest(7, Checks.BLOCKED),), verify=Verify.AUTO)
+        assert "approve" in ci_notices(items_of(working))[0].message.lower()
+
+    def test_a_failing_run_is_not_an_approval_problem(self) -> None:
+        # A red PR is the agent's problem or a reviewer's; it is not a gate
+        # someone can click away, so it must not suggest that it is.
+        working = item("a", open_prs=(PullRequest(7, Checks.FAILING),), verify=Verify.AUTO)
+        assert ci_notices(items_of(working)) == ()
+
+    def test_a_healthy_pr_produces_nothing(self) -> None:
+        working = item("a", open_prs=(PullRequest(7, Checks.PASSING),), verify=Verify.AUTO)
+        assert ci_notices(items_of(working)) == ()
+
+    def test_human_verify_tasks_are_not_reported(self) -> None:
+        # Nobody was waiting on CI, so a held run is not blocking the task.
+        working = item("a", open_prs=(PullRequest(7, Checks.BLOCKED),), verify=Verify.HUMAN)
+        assert ci_notices(items_of(working)) == ()
+
+    def test_a_closed_task_is_not_reported(self) -> None:
+        working = item(
+            "a", closed=True, open_prs=(PullRequest(7, Checks.BLOCKED),), verify=Verify.AUTO
+        )
+        assert ci_notices(items_of(working)) == ()
 
 
 class TestSyntheticShapes:

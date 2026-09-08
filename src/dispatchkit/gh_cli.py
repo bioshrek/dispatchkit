@@ -27,6 +27,7 @@ from typing import Any
 from dispatchkit.board import SINGLE_SELECT, BoardSnapshot, FieldSpec
 from dispatchkit.doctor import parse_labels, parse_project, parse_token_scopes
 from dispatchkit.github import IssueState, RepoState
+from dispatchkit.model import Checks, PullRequest
 
 # The coding agent is a bot actor, so it cannot be assigned with
 # `gh issue edit --add-assignee`: it has to be looked up by capability and
@@ -68,7 +69,19 @@ query($owner: String!, $repo: String!, $first: Int!) {
         timelineItems(first: 20, itemTypes: [CROSS_REFERENCED_EVENT]) {
           nodes {
             ... on CrossReferencedEvent {
-              source { ... on PullRequest { number state } }
+              source {
+                ... on PullRequest {
+                  number
+                  state
+                  commits(last: 1) {
+                    nodes {
+                      commit {
+                        checkSuites(first: 20) { nodes { status conclusion } }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -126,14 +139,45 @@ def _parse_issue(node: dict[str, Any]) -> IssueState:
     )
 
 
-def _parse_open_prs(node: dict[str, Any]) -> tuple[int, ...]:
+def _parse_open_prs(node: dict[str, Any]) -> tuple[PullRequest, ...]:
     """Open pull requests cross-referencing this issue, in the order recorded."""
-    numbers: list[int] = []
+    prs: list[PullRequest] = []
     for event in node.get("timelineItems", {}).get("nodes") or []:
         source = event.get("source") or {}
         if source.get("state") == "OPEN" and "number" in source:
-            numbers.append(int(source["number"]))
-    return tuple(numbers)
+            prs.append(PullRequest(int(source["number"]), _parse_checks(source)))
+    return tuple(prs)
+
+
+def _parse_checks(source: dict[str, Any]) -> Checks:
+    """CI's verdict on a PR's head commit, from its check suites.
+
+    Read from `checkSuites` rather than `statusCheckRollup` because a run held
+    for approval yields a suite with no check runs at all, and the rollup —
+    which is assembled from check runs — is then `null`. The rollup cannot
+    distinguish a stalled pipeline from a repository that has no CI.
+    """
+    commits = (source.get("commits") or {}).get("nodes") or []
+    if not commits:
+        return Checks.NONE
+    suites = ((commits[0].get("commit") or {}).get("checkSuites") or {}).get("nodes") or []
+    return Checks.combine(_suite_checks(suite) for suite in suites)
+
+
+def _suite_checks(suite: dict[str, Any]) -> Checks:
+    if suite.get("status") != "COMPLETED":
+        return Checks.PENDING
+    conclusion = suite.get("conclusion")
+    if conclusion == "ACTION_REQUIRED":
+        return Checks.BLOCKED
+    # Anything not known to be benign counts against the pull request: GitHub
+    # adds conclusions over time, and guessing green would auto-merge on a
+    # verdict this code has never seen.
+    return Checks.PASSING if conclusion in _BENIGN_CONCLUSIONS else Checks.FAILING
+
+
+#: Suite conclusions that do not stand in the way of a merge.
+_BENIGN_CONCLUSIONS = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
 
 
 def _parse_fields(item: dict[str, Any]) -> dict[str, str]:
@@ -436,6 +480,19 @@ def auth_status_command() -> list[str]:
     return ["gh", "auth", "status"]
 
 
+def variable_list_command(repo: str) -> list[str]:
+    return ["gh", "variable", "list", "--repo", repo, "--json", "name"]
+
+
+def secret_list_command(repo: str) -> list[str]:
+    """Secret *names* only — a secret's value is not readable, by design."""
+    return ["gh", "secret", "list", "--repo", repo, "--json", "name"]
+
+
+def parse_names(payload: Sequence[dict[str, Any]]) -> tuple[str, ...]:
+    return tuple(str(entry["name"]) for entry in payload)
+
+
 def parse_item_count(payload: dict[str, Any]) -> int:
     """How many items the board holds; unknown reads as populated.
 
@@ -556,6 +613,12 @@ class GhCli:
 
     def agent_available(self) -> bool:
         return self._agent_actor() is not None
+
+    def workflow_inputs(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """The Actions variable and secret names set on the repository."""
+        variables = parse_names(json.loads(_run(variable_list_command(self.repo))))
+        secrets = parse_names(json.loads(_run(secret_list_command(self.repo))))
+        return variables, secrets
 
     def _agent_actor(self) -> str | None:
         if self._actor is None:

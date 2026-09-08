@@ -16,14 +16,33 @@ from typing import Any
 import pytest
 import yaml
 
+from dispatchkit.init import WORKFLOW_TEMPLATE
+
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "dispatchkit.yml"
 
+#: Both workflows that exist: the one this repository runs, and the one `init`
+#: writes into somebody else's. They cannot be byte-identical — this repository
+#: already has `src/dispatchkit` in its tree and an adopter does not — so the
+#: guarantee is that every property below holds of both. Pinning them to each
+#: other, as this file used to, asserted a sameness that was not true and hid a
+#: template that could not run anywhere but here.
+SOURCES = {
+    "this repository": WORKFLOW.read_text(encoding="utf-8"),
+    "the init template": WORKFLOW_TEMPLATE,
+}
 
-@pytest.fixture(scope="module")
-def workflow() -> dict[Any, Any]:
-    loaded: dict[Any, Any] = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    # YAML 1.1 reads a bare `on:` as the boolean True, which is why this key
-    # is looked up defensively rather than by name.
+
+@pytest.fixture
+def template() -> dict[Any, Any]:
+    loaded: dict[Any, Any] = yaml.safe_load(WORKFLOW_TEMPLATE)
+    return loaded
+
+
+@pytest.fixture(params=sorted(SOURCES), ids=sorted(SOURCES))
+def workflow(request: pytest.FixtureRequest) -> dict[Any, Any]:
+    # YAML 1.1 reads a bare `on:` as the boolean True, which is why the `on`
+    # key is looked up defensively rather than by name.
+    loaded: dict[Any, Any] = yaml.safe_load(SOURCES[request.param])
     return loaded
 
 
@@ -37,11 +56,9 @@ def steps(workflow: dict[Any, Any]) -> list[dict[str, Any]]:
 
 
 class TestPermissions:
-    def test_the_token_can_never_write_to_the_tree(self) -> None:
+    def test_the_token_can_never_write_to_the_tree(self, workflow: dict[Any, Any]) -> None:
         # Least privilege, and the rule that only PRs mutate the repository.
-        assert yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["permissions"][
-            "contents"
-        ] == "read"
+        assert workflow["permissions"]["contents"] == "read"
 
     def test_it_holds_exactly_the_permissions_the_pass_needs(
         self, workflow: dict[Any, Any]
@@ -127,3 +144,51 @@ class TestDependencies:
                     roots.add(node.module.split(".")[0])
 
         assert roots - {"dispatchkit", "__future__"} <= sys.stdlib_module_names
+
+
+class TestTheTemplateCanRunWhereItIsWritten:
+    """`init` writes this into a repository that does not contain dispatchkit.
+
+    The bug: the template set `PYTHONPATH: src` and explained that there was
+    nothing to install. True here, false everywhere else — the scheduler died
+    on `No module named dispatchkit` in every repository `init` had ever
+    touched, and nothing caught it because the only test read this repository's
+    own copy, where `src/dispatchkit` happens to exist.
+    """
+
+    def test_it_fetches_the_dispatchkit_source(self, template: dict[Any, Any]) -> None:
+        checkouts = [step for step in steps(template) if "checkout" in step.get("uses", "")]
+        assert any("repository" in step.get("with", {}) for step in checkouts)
+
+    def test_the_source_lands_where_pythonpath_points(self, template: dict[Any, Any]) -> None:
+        # The two halves are written in different steps, so nothing but a test
+        # keeps them agreeing.
+        paths = {
+            step["with"]["path"]
+            for step in steps(template)
+            if "checkout" in step.get("uses", "") and "path" in step.get("with", {})
+        }
+        env = next(step["env"] for step in steps(template) if "run" in step)
+        assert any(path in env["PYTHONPATH"] for path in paths)
+
+    def test_the_source_checkout_is_pinned(self, template: dict[Any, Any]) -> None:
+        # An unpinned default branch is a third party deciding what runs in a
+        # job that holds a token which can assign work.
+        for step in steps(template):
+            with_ = step.get("with", {})
+            if "repository" in with_:
+                assert with_.get("ref")
+
+    def test_it_still_installs_nothing(self, template: dict[Any, Any]) -> None:
+        # Fetching source is not installing: no resolver, no build, no
+        # third-party code. The rule survives the fix.
+        scripts = " ".join(step.get("run", "") for step in steps(template))
+        assert "pip install" not in scripts
+        assert "uv sync" not in scripts
+
+    def test_this_repository_runs_its_own_source(self) -> None:
+        # The mirror image: here there is nothing to fetch, and fetching would
+        # test master rather than the branch under review.
+        here: dict[Any, Any] = yaml.safe_load(SOURCES["this repository"])
+        env = next(step["env"] for step in steps(here) if "run" in step)
+        assert env["PYTHONPATH"] == "src"

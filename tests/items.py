@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dispatchkit.block import MachineBlock
 from dispatchkit.github import IssueState, RepoState
-from dispatchkit.model import Lane, TaskId, Verify
+from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 from dispatchkit.resolve import TaskItem
 
 PLAN = "demo"
@@ -27,7 +27,7 @@ def item(
     closed: bool = False,
     assignees: tuple[str, ...] = (),
     labels: tuple[str, ...] = ("dispatchkit",),
-    open_prs: tuple[int, ...] = (),
+    open_prs: tuple[int | PullRequest, ...] = (),
     attempts: int = 0,
     fields: dict[str, str] | None = None,
     project_item_id: str | None = "PVTI_1",
@@ -48,7 +48,7 @@ def item(
         closed=closed,
         assignees=assignees,
         labels=labels,
-        open_prs=open_prs,
+        open_prs=_prs(open_prs),
         attempts=attempts,
         project_item_id=project_item_id,
         fields=fields if fields is not None else {},
@@ -71,7 +71,7 @@ def issue(
     closed: bool = False,
     assignees: tuple[str, ...] = (),
     labels: tuple[str, ...] = ("dispatchkit",),
-    open_prs: tuple[int, ...] = (),
+    open_prs: tuple[int | PullRequest, ...] = (),
     fields: dict[str, str] | None = None,
     node_id: str | None = None,
 ) -> IssueState:
@@ -98,7 +98,7 @@ def issue(
         project_item_id=f"PVTI_{number}",
         fields=fields if fields is not None else {},
         assignees=assignees,
-        open_prs=open_prs,
+        open_prs=_prs(open_prs),
         node_id=node_id if node_id is not None else f"I_{number}",
     )
 
@@ -123,3 +123,16 @@ def render_raw_block(block: MachineBlock) -> str:
 
 def state_of(*issues: IssueState) -> RepoState:
     return RepoState(issues)
+
+
+def _prs(entries: tuple[int | PullRequest, ...]) -> tuple[PullRequest, ...]:
+    """Accept a bare PR number where the checks do not matter to the test.
+
+    Most tests care only that *a* pull request exists. Spelling out
+    `PullRequest(7, Checks.NONE)` everywhere would bury the few tests where the
+    check state is the entire point.
+    """
+    return tuple(
+        entry if isinstance(entry, PullRequest) else PullRequest(entry, Checks.NONE)
+        for entry in entries
+    )

@@ -38,6 +38,7 @@ from dispatchkit.gh_cli import (
     state_command,
     update_issue_command,
 )
+from dispatchkit.model import Checks, PullRequest
 
 pytestmark = pytest.mark.replay
 
@@ -96,7 +97,7 @@ class TestParseState:
     def test_only_open_linked_pull_requests_count_as_work_in_flight(self) -> None:
         # The fixture's timeline carries a merged/closed PR, an open one, and a
         # cross-referencing issue. Only the open PR means "work is happening".
-        assert parse_state(recorded()).issues[1].open_prs == (42,)
+        assert parse_state(recorded()).issues[1].open_prs == (PullRequest(42, Checks.NONE),)
 
     def test_an_issue_with_no_timeline_has_no_open_prs(self) -> None:
         assert parse_state(recorded()).issues[0].open_prs == ()
@@ -110,6 +111,75 @@ class TestParseState:
         del node["timelineItems"]
         issue = parse_state(payload).issues[1]
         assert (issue.assignees, issue.open_prs) == ((), ())
+
+
+class TestParseCheckSuites:
+    """CI's verdict comes from check *suites*, not the status rollup.
+
+    This is not a stylistic preference. A workflow run held for approval
+    produces a suite whose conclusion is `ACTION_REQUIRED` and which contains
+    **zero check runs** — and `statusCheckRollup` is assembled from check runs,
+    so it comes back `null`. Reading the rollup would make a stalled pull
+    request indistinguishable from one in a repository with no CI at all.
+    Recorded against the live sandbox; see docs/design.md, D5.6.
+    """
+
+    @staticmethod
+    def _with_suites(*suites: dict[str, Any]) -> dict[str, Any]:
+        payload = recorded()
+        node = payload["data"]["repository"]["issues"]["nodes"][1]
+        for event in node["timelineItems"]["nodes"]:
+            source = event.get("source") or {}
+            if source.get("state") == "OPEN":
+                suite_nodes = {"nodes": list(suites)}
+                source["commits"] = {"nodes": [{"commit": {"checkSuites": suite_nodes}}]}
+        return payload
+
+    def _checks(self, *suites: dict[str, Any]) -> Checks:
+        return parse_state(self._with_suites(*suites)).issues[1].open_prs[0].checks
+
+    def test_a_run_awaiting_approval_is_blocked(self) -> None:
+        assert self._checks(
+            {"status": "COMPLETED", "conclusion": "ACTION_REQUIRED"}
+        ) is Checks.BLOCKED
+
+    def test_a_green_suite_is_passing(self) -> None:
+        assert self._checks({"status": "COMPLETED", "conclusion": "SUCCESS"}) is Checks.PASSING
+
+    def test_a_skipped_or_neutral_suite_does_not_count_against_the_pr(self) -> None:
+        assert self._checks(
+            {"status": "COMPLETED", "conclusion": "SKIPPED"},
+            {"status": "COMPLETED", "conclusion": "NEUTRAL"},
+        ) is Checks.PASSING
+
+    @pytest.mark.parametrize(
+        "conclusion", ["FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "STALE"]
+    )
+    def test_every_unsuccessful_conclusion_is_a_failure(self, conclusion: str) -> None:
+        assert self._checks({"status": "COMPLETED", "conclusion": conclusion}) is Checks.FAILING
+
+    @pytest.mark.parametrize("status", ["QUEUED", "IN_PROGRESS", "REQUESTED", "WAITING"])
+    def test_a_suite_that_has_not_finished_is_pending(self, status: str) -> None:
+        assert self._checks({"status": status, "conclusion": None}) is Checks.PENDING
+
+    def test_one_blocked_suite_stalls_a_pr_whose_other_suites_are_green(self) -> None:
+        assert self._checks(
+            {"status": "COMPLETED", "conclusion": "SUCCESS"},
+            {"status": "COMPLETED", "conclusion": "ACTION_REQUIRED"},
+        ) is Checks.BLOCKED
+
+    def test_an_unknown_conclusion_is_not_treated_as_success(self) -> None:
+        # GitHub adds enum members; guessing green would auto-merge on a
+        # verdict we do not understand.
+        assert self._checks({"status": "COMPLETED", "conclusion": "SOMETHING_NEW"}) is (
+            Checks.FAILING
+        )
+
+    def test_a_pr_with_no_suites_reports_none(self) -> None:
+        assert self._checks() is Checks.NONE
+
+    def test_a_payload_predating_the_check_query_degrades_to_none(self) -> None:
+        assert parse_state(recorded()).issues[1].open_prs[0].checks is Checks.NONE
 
 
 class TestFieldCatalog:

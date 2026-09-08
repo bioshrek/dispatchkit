@@ -13,15 +13,24 @@ from pathlib import Path
 import pytest
 
 from dispatchkit.cli import main
+from dispatchkit.init import WORKFLOW_TEMPLATE
 
 pytestmark = pytest.mark.unit
 
 
 def tree(root: Path) -> None:
-    """A repository as `init` would leave it, minus the board."""
+    """A repository as `init` would leave it, minus the board.
+
+    The workflow is the real template rather than a stub: `doctor` now checks
+    that whatever the workflow puts on `PYTHONPATH` is actually provided, and
+    a stub would either fail that check or, worse, be quietly adjusted until
+    it passed.
+    """
     (root / ".github" / "workflows").mkdir(parents=True)
     (root / ".github" / "dispatchkit.toml").write_text("[caps]\ncloud = 3\n", encoding="utf-8")
-    (root / ".github" / "workflows" / "dispatchkit.yml").write_text("on: {}\n", encoding="utf-8")
+    (root / ".github" / "workflows" / "dispatchkit.yml").write_text(
+        WORKFLOW_TEMPLATE, encoding="utf-8"
+    )
     (root / "docs" / "plans").mkdir(parents=True)
 
 
@@ -166,6 +175,9 @@ class TestBoardUnreachable:
 
         def token_scopes(self) -> tuple[str, ...] | None:
             return None
+
+        def workflow_inputs(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+            raise RuntimeError('gh api failed: project not found')
 
         def agent_available(self) -> bool:
             raise RuntimeError("gh api failed: project not found")

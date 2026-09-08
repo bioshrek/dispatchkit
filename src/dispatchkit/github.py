@@ -18,7 +18,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from dispatchkit.model import TaskId
+from dispatchkit.model import PullRequest, TaskId
 
 # Project (v2) fields `apply` owns. `Status` and `Attempts` are excluded on
 # purpose: they are derived scheduling state, recomputed on every pass.
@@ -43,7 +43,7 @@ class IssueState:
     # The scheduler's inputs (D4): assignment is the dispatch lock, and an open
     # linked PR is how "work is under way" is observed without a side table.
     assignees: tuple[str, ...] = ()
-    open_prs: tuple[int, ...] = ()
+    open_prs: tuple[PullRequest, ...] = ()
     # The GraphQL node id (D5). Assigning a bot actor is a mutation over node
     # ids, and the state query already returns it, so dispatch needs no extra
     # round trip.
