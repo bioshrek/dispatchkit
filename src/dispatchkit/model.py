@@ -106,6 +106,12 @@ class PullRequest:
     #: Empty means the question went unanswered, not that nothing changed — a
     #: pull request with no files does not exist. Treated as unknown scope.
     files: tuple[str, ...] = ()
+    #: Read from `mergeable == "MERGEABLE"`. A separate question from CI, and
+    #: conflating the two shipped a bug: a green pull request can conflict with
+    #: the base and merge nowhere. `UNKNOWN` — GitHub has not finished
+    #: computing it — resolves to False, so a merge waits a pass rather than
+    #: being attempted on a guess.
+    mergeable: bool = False
 
 
 # Capability tags a task may demand of its runner. The cloud lane advertises

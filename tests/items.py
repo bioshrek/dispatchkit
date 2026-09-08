@@ -131,8 +131,14 @@ def _prs(entries: tuple[int | PullRequest, ...]) -> tuple[PullRequest, ...]:
     Most tests care only that *a* pull request exists. Spelling out
     `PullRequest(7, Checks.NONE)` everywhere would bury the few tests where the
     check state is the entire point.
+
+    The shorthand is mergeable, which is the ordinary case at GitHub — the
+    field defaults to false on `PullRequest` itself, where the safe reading of
+    an unanswered question has to win.
     """
     return tuple(
-        entry if isinstance(entry, PullRequest) else PullRequest(entry, Checks.NONE)
+        entry
+        if isinstance(entry, PullRequest)
+        else PullRequest(entry, Checks.NONE, mergeable=True)
         for entry in entries
     )

@@ -109,6 +109,15 @@ class TaskItem:
         return Checks.combine(pr.checks for pr in self.open_prs)
 
     @property
+    def mergeable(self) -> bool:
+        """Can every open PR actually be merged into the base?
+
+        `all`, and false when there are no PRs at all, because this only ever
+        gates a claim that a merge is coming.
+        """
+        return bool(self.open_prs) and all(pr.mergeable for pr in self.open_prs)
+
+    @property
     def draft(self) -> bool:
         """Is any open PR still a draft, and so unmergeable?
 
@@ -192,7 +201,15 @@ def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Statu
         # that will never start would be the board asserting something false.
         # A draft is the same lie by a different route — green CI merges
         # nothing while the PR cannot be merged at all.
-        if task.verify is Verify.AUTO and not task.checks.stalled and not task.draft:
+        # A conflicting pull request is the same lie by a third route: green,
+        # out of draft, and unmergeable until a human rebases it. Only a human
+        # can move it, so `In Review` is the honest word.
+        if (
+            task.verify is Verify.AUTO
+            and not task.checks.stalled
+            and not task.draft
+            and task.mergeable
+        ):
             return Status.AUTO_MERGING
         return Status.IN_REVIEW
     if task.claimed:
@@ -246,6 +263,9 @@ def merge_ops(
 
     - `verify: auto`, because `human` means a person merges.
     - Not a draft, because a draft merges nothing (D5.7).
+    - Actually mergeable. Green is a statement about CI, not about whether the
+      branch still applies; a passing pull request that conflicts with the base
+      merges nowhere, and asking anyway is a hard error.
     - `Checks.PASSING` exactly, not merely "not stalled" (D5.6). `NONE` is an
       absence of evidence and is the state an unconfigured repository sits in
       forever.
@@ -260,6 +280,7 @@ def merge_ops(
             MergePr(task.id, pr.number)
             for pr in task.open_prs
             if not pr.draft
+            and pr.mergeable
             and pr.checks is Checks.PASSING
             and pr.files
             and not any(config.is_fenced(path) for path in pr.files)

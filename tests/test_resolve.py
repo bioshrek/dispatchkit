@@ -101,7 +101,7 @@ class TestAutoMergeRequiresLiveCi:
         working = item(
             "a",
             assignees=("copilot",),
-            open_prs=(PullRequest(7, checks),),
+            open_prs=(PullRequest(7, checks, mergeable=True),),
             verify=Verify.AUTO,
         )
         return resolve(items_of(working))[TaskId("a")]
@@ -420,7 +420,7 @@ class TestDraftBlocksAutoMerge:
         working = item(
             "a",
             assignees=("copilot",),
-            open_prs=(PullRequest(7, checks, draft=draft),),
+            open_prs=(PullRequest(7, checks, draft=draft, mergeable=True),),
             verify=Verify.AUTO,
         )
         return resolve(items_of(working))[TaskId("a")]
@@ -459,7 +459,7 @@ class TestReadyOps:
             "a",
             number=3,
             assignees=("copilot",),
-            open_prs=(PullRequest(7, checks, draft=draft),),
+            open_prs=(PullRequest(7, checks, draft=draft, mergeable=True),),
             verify=verify,
         )
         return ready_ops(items_of(working))
@@ -509,7 +509,9 @@ class TestMergeOps:
             "a",
             number=3,
             assignees=("copilot",),
-            open_prs=(PullRequest(7, checks, draft=draft, files=files),),
+            open_prs=(
+                PullRequest(7, checks, draft=draft, files=files, mergeable=True),
+            ),
             verify=verify,
             closed=closed,
         )
@@ -544,3 +546,67 @@ class TestMergeOps:
         # An empty file list is not an empty pull request; it is a question we
         # failed to get an answer to, and the fence cannot be applied to it.
         assert self._ops(files=()) == ()
+
+
+class TestMergeNeedsAMergeablePr:
+    """Green is not the same question as mergeable, and D9 shipped confusing them.
+
+    Found live: PR #7 was `Checks.PASSING`, out of draft, outside the fence —
+    and `CONFLICTING`. The pass asked GitHub to merge it and got a hard error.
+    The board had again asserted something it never checked, which is the third
+    time the same shape of bug has surfaced in this system.
+    """
+
+    @staticmethod
+    def _ops(mergeable: bool) -> tuple[MergePr, ...]:
+        working = item(
+            "a",
+            number=3,
+            verify=Verify.AUTO,
+            open_prs=(
+                PullRequest(
+                    7,
+                    Checks.PASSING,
+                    draft=False,
+                    files=("src/app.py",),
+                    mergeable=mergeable,
+                ),
+            ),
+        )
+        return merge_ops(items_of(working), SchedulerConfig())
+
+    def test_a_mergeable_pr_merges(self) -> None:
+        assert self._ops(True) == (MergePr(TaskId("a"), 7),)
+
+    def test_a_conflicting_pr_does_not(self) -> None:
+        assert self._ops(False) == ()
+
+
+class TestConflictBlocksAutoMerging:
+    """A conflicting pull request needs a human, so the board must say so.
+
+    The fourth time this exact shape of bug has been found here: `Auto-merging`
+    claimed over a pull request that would never merge. D5.6 was CI it never
+    checked, D5.7 was draft, D9 was mergeability at the merge site — and the
+    *status* still had to be taught the same lesson separately.
+    """
+
+    @staticmethod
+    def _status(mergeable: bool) -> Status:
+        working = item(
+            "a",
+            verify=Verify.AUTO,
+            open_prs=(
+                PullRequest(
+                    7, Checks.PASSING, draft=False, files=("s.py",), mergeable=mergeable
+                ),
+            ),
+        )
+        return resolve(items_of(working))[TaskId("a")]
+
+    def test_a_mergeable_pr_is_auto_merging(self) -> None:
+        assert self._status(True) is Status.AUTO_MERGING
+
+    def test_a_conflicting_pr_falls_back_to_in_review(self) -> None:
+        # Only a human can rebase it, which is what `In Review` means here.
+        assert self._status(False) is Status.IN_REVIEW

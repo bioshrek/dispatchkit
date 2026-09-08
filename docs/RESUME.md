@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7 are implemented and green offline. 504 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.7 are implemented and green offline. 536 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -157,22 +157,39 @@ the check now says it saw the *name* only. Verify a token before setting it —
 
 The cron is live (`7,37 * * * *`), so the sandbox now schedules itself.
 
-1. **Next: D9**, and it is the last unchecked claim. `Auto-merging` is still a status nothing
-   fulfils — there is no merge code in the package, `allow_auto_merge` is `false` on the sandbox
-   and `main` has no branch protection, so no required check exists for a merge to wait on.
-   `top-n` reached `Done` because a human merged it.
+**D9 landed, and `Auto-merging` is now an action.** `stopwords` went from `Auto-merging` to
+`Done` with no human in the loop: `pass complete: 0 dispatched, 1 board write(s), 1 PR(s) merged`,
+the squash closed issue #2, the next pass read `Done`, the one after wrote nothing.
 
-   It is the same class of unchecked claim D5.6 and D5.7 removed, one level up: either D9 makes
-   it true or the board value should be renamed. D9 is designed, so build it. Its prerequisites
-   are not set on the sandbox and `doctor` cannot yet see them — enabling `allow_auto_merge` and
-   adding branch protection with a required check comes first, and that backlog item is now on
-   the critical path rather than a nicety.
+Three things it changed that are worth knowing before touching this code:
 
-2. **Watch `stopwords` and `encoding-fallback` finish.** Both are `verify: human` with open draft
-   PRs (#7, #8). Reviewing and merging them exercises the propagation again and finally releases
-   `json-output`, which is deferred behind `encoding-fallback` on `cli.py`.
+- **Never `gh pr merge --auto`.** On a branch with no protection it merges instantly, silently,
+  exit 0, no check consulted. The GraphQL mutation it wraps refuses that case, so the flag is
+  strictly less safe than the API. The adapter does a direct squash merge and there is a test
+  asserting `--auto` and `--admin` are both absent.
+- **Branch protection is a second lock, not the first.** Every gate lives in `merge_ops`.
+  `doctor`'s new `merge-gate` check reports an unprotected branch as *single-gated* rather than
+  broken. The sandbox is now protected (`check` required) and `allow_auto_merge` is on.
+- **`mergeable` is its own question.** Green, non-draft and mergeable are three separate fields
+  and conflating them shipped a bug live. It defaults to `False`, so `UNKNOWN` waits a pass.
 
-3. **Decide on the `[WIP]` gap.** `encoding-fallback` reported `In Review` while its PR was still
+1. **Next: scope drift**, which now has live evidence behind it. `stopwords` declared
+   `touches = ["src/wordfreq/count.py", "tests/test_count.py"]` and its PR edited
+   `src/wordfreq/cli.py` and `tests/test_cli.py`; `top-n` edited `cli.py` too. The file-scope
+   exclusion reasons about *declared* scope, so it never fired, the two ran concurrently, and the
+   collision needed a human. The check — a PR's file list must be a subset of its task's
+   `touches` — is the last unbuilt row of D9's `subset/fence/drift`, and dispatchkit already reads
+   both sides of it.
+
+2. **Then acceptance ⊆ CI**, the other unbuilt guardrail: reject `verify = "auto"` unless the
+   task's `acceptance` command is one the CI workflow already runs, so "green" means "acceptance
+   passed" rather than "something passed".
+
+3. **Watch `encoding-fallback` finish.** It is `verify: human` with an open draft PR (#8);
+   merging it releases `json-output`, which is deferred behind it on `cli.py`. `stopwords` (#7)
+   is merged. `document-flags` is the remaining `verify: auto` task.
+
+4. **Decide on the `[WIP]` gap.** `encoding-fallback` reported `In Review` while its PR was still
    titled `[WIP]` and the agent was still pushing to it. Nobody can review that. `draft` cannot
    separate it, since Copilot leaves finished PRs in draft too; the signal is the
    `copilot_work_finished` timeline event, which `STATE_QUERY` does not request.

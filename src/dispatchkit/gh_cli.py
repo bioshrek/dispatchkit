@@ -74,6 +74,7 @@ query($owner: String!, $repo: String!, $first: Int!) {
                   number
                   state
                   isDraft
+                  mergeable
                   files(first: 100) { nodes { path } }
                   commits(last: 1) {
                     nodes {
@@ -153,6 +154,7 @@ def _parse_open_prs(node: dict[str, Any]) -> tuple[PullRequest, ...]:
                     _parse_checks(source),
                     draft=bool(source.get("isDraft")),
                     files=_parse_files(source),
+                    mergeable=source.get("mergeable") == "MERGEABLE",
                 )
             )
     return tuple(prs)

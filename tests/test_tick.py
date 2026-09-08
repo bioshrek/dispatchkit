@@ -202,7 +202,7 @@ class TestStalledCi:
                 1,
                 verify=Verify.AUTO,
                 assignees=("copilot-swe-agent",),
-                open_prs=(PullRequest(6, checks),),
+                open_prs=(PullRequest(6, checks, mergeable=True),),
             )
         )
 
@@ -290,7 +290,7 @@ class TestMarkingAutoPrsReady:
                 number=3,
                 verify=verify,
                 assignees=("copilot",),
-                open_prs=(PullRequest(7, checks, draft=draft),),
+                open_prs=(PullRequest(7, checks, draft=draft, mergeable=True),),
             )
         )
 
@@ -339,7 +339,7 @@ class TestMarkReadyConverges:
                 number=3,
                 verify=Verify.AUTO,
                 assignees=("copilot",),
-                open_prs=(PullRequest(7, Checks.PASSING, draft=True),),
+                open_prs=(PullRequest(7, Checks.PASSING, draft=True, mergeable=True),),
             )
         )
 
@@ -382,7 +382,7 @@ class TestReadyIsNotCountedAsDispatch:
                 number=3,
                 verify=Verify.AUTO,
                 assignees=("copilot",),
-                open_prs=(PullRequest(7, Checks.PASSING, draft=True),),
+                open_prs=(PullRequest(7, Checks.PASSING, draft=True, mergeable=True),),
             )
         )
         api = FakeGitHub(state=state)
@@ -407,7 +407,13 @@ class TestMergingConverges:
                 verify=Verify.AUTO,
                 assignees=("copilot",),
                 open_prs=(
-                    PullRequest(7, Checks.PASSING, draft=False, files=("src/app.py",)),
+                    PullRequest(
+                        7,
+                        Checks.PASSING,
+                        draft=False,
+                        files=("src/app.py",),
+                        mergeable=True,
+                    ),
                 ),
             )
         )
@@ -443,7 +449,13 @@ class TestMergingConverges:
                 verify=Verify.AUTO,
                 assignees=("copilot",),
                 open_prs=(
-                    PullRequest(7, Checks.PASSING, draft=False, files=("src/app.py",)),
+                    PullRequest(
+                        7,
+                        Checks.PASSING,
+                        draft=False,
+                        files=("src/app.py",),
+                        mergeable=True,
+                    ),
                 ),
             ),
             issue("b", number=4, depends=("a",)),
@@ -454,3 +466,53 @@ class TestMergingConverges:
         # Unblocked and handed out in the same pass: `b`'s dependency closed
         # because the merge closed it, so the projection reads `Dispatched`.
         assert second.admitted == (TaskId("b"),)
+
+
+class TestARefusedMergeDoesNotEndThePass:
+    """GitHub refusing a merge is a normal event, not a crash.
+
+    Live, a conflicting pull request took the whole pass down with a traceback
+    — and because the merge is planned before the board writes, the pass also
+    lost every reconciliation that came after it. A refusal has to be reported
+    and stepped over, exactly like the CI notices are.
+    """
+
+    class _Refusing(FakeGitHub):
+        def merge_pr(self, *, number: int) -> None:
+            raise RuntimeError("gh pr failed: GraphQL: Pull Request has merge conflicts")
+
+    def _state(self) -> RepoState:
+        return state_of(
+            issue(
+                "a",
+                number=3,
+                verify=Verify.AUTO,
+                assignees=("copilot",),
+                open_prs=(
+                    PullRequest(
+                        7,
+                        Checks.PASSING,
+                        draft=False,
+                        files=("src/app.py",),
+                        mergeable=True,
+                    ),
+                ),
+            )
+        )
+
+    def test_the_pass_survives(self) -> None:
+        api = self._Refusing(state=self._state())
+        result = execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        assert result.merged == 0
+
+    def test_the_refusal_is_reported(self) -> None:
+        api = self._Refusing(state=self._state())
+        result = execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        assert any("conflict" in notice.message for notice in result.refused)
+
+    def test_the_board_is_still_written(self) -> None:
+        # The regression that cost a live pass: operations are ordered merge
+        # first, so an exception there silently dropped every board write.
+        api = self._Refusing(state=self._state())
+        result = execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
+        assert result.reconciled > 0

@@ -1245,6 +1245,72 @@ Copilot also leaves a *finished* PR in draft; the signal that separates them is 
 `copilot_work_finished` timeline event, which the state query does not currently request.
 
 
+### D9 — the merge, and what the repository does not enforce
+
+`Auto-merging` finally does something. `merge_ops` emits a `MergePr` for a `verify: auto` task
+whose pull request is out of draft, green, mergeable and outside the blast-radius fence, and the
+adapter performs a direct squash merge. Live, `stopwords` went from `Auto-merging` to `Done`
+without a human: the pass reported `1 PR(s) merged`, the squash closed issue #2 through
+`Closes #2`, the next pass read `Done`, and the one after that wrote nothing.
+
+**The guardrail this deliverable was built on turned out to be false.** The design said branch
+protection was the real enforcement and that a misconfigured scheduler fails closed. Probing a
+throwaway pull request on the sandbox showed the opposite, in the worst direction:
+
+```
+$ gh pr merge 9 --auto --squash      # allow_auto_merge: false, no branch protection
+$ gh pr view 9 --json state,mergedAt
+{"mergedAt":"...","state":"MERGED"}
+```
+
+No output, exit 0, merged instantly, no check consulted. `--auto` does not mean "merge once the
+requirements are met"; where there are no requirements it degrades to "merge now". The GraphQL
+mutation it is named after refuses that exact case — `Auto merge is not allowed for this
+repository` — so **the CLI flag is strictly less safe than the thing it wraps**. That is why the
+adapter merges directly and why `merge_command` has a test asserting the *absence* of `--auto`.
+
+A second flag is absent for a related reason. Branch protection refuses a red pull request even
+for a repository admin, and the scheduler's token usually belongs to one — but `--admin`
+overrides precisely that. Without omitting it, the second lock would not exist.
+
+The two calls turn out to be complements rather than alternatives, which is worth stating because
+it is not documented. `enablePullRequestAutoMerge` is refused on a pull request that is `CLEAN`
+("Pull request is in clean status") and accepted on one that is `BLOCKED`; a direct merge is the
+reverse. Auto-merge is for the window while checks are *pending*. Dispatchkit polls on a cron and
+therefore sees settled states, so the direct merge is the one that fits — and it is the one branch
+protection independently gates.
+
+**So the enforcement story is inverted from the design's.** Every gate is checked in `merge_ops`,
+which stands on its own; branch protection is a *second* lock where it exists, never the first.
+`doctor` gained `merge-gate`, which reports an unprotected branch not as broken but as
+single-gated: dispatchkit's reading of CI is then the only thing between an agent and `main`.
+`init` cannot fix this either — it cannot know which status check an adopter's `acceptance` runs —
+so it joins `NEXT_STEPS`.
+
+**Then the live run found the same old bug a fourth time.** `stopwords` was green, out of draft,
+outside the fence — and `CONFLICTING`. The pass asked GitHub to merge it and took a twelve-frame
+traceback, which also discarded every board write queued behind the merge. Two fixes: `merge_ops`
+and `_status_of` now require `mergeable`, and a refused merge became a `Notice` rather than an
+exception, because a conflict is an ordinary outcome and a pass must survive it.
+
+That is D5.6 (CI unchecked), D5.7 (draft unchecked) and now mergeability unchecked — three
+different fields, one habit. The generalisation is now explicit: *green is not a synonym for
+anything else.* Each precondition for a merge is a separate question, and `mergeable` defaults to
+`False` on `PullRequest` so that `UNKNOWN` — GitHub still computing — waits a pass rather than
+being guessed at.
+
+**What the conflict was actually evidence of.** `stopwords` declared
+`touches = ["src/wordfreq/count.py", "tests/test_count.py"]`, and its pull request edited
+`src/wordfreq/cli.py` and `tests/test_cli.py`. `top-n` edited `cli.py` too. The file-scope
+exclusion never fired, because it reasons about *declared* scope and the agent had drifted outside
+its own — so the two ran concurrently and collided, and a human had to resolve it by hand.
+
+This is the `subset/fence/drift` row of the D9 plan, and only two of the three shipped. Drift is
+now the one with live evidence behind it: the check is that a pull request's file list is a subset
+of its task's `touches`, and dispatchkit already reads both. It is the next thing to build, and it
+would have prevented this conflict rather than merely reporting it afterwards.
+
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once

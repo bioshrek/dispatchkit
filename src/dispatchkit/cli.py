@@ -288,6 +288,8 @@ def _tick(args: argparse.Namespace) -> int:
     if result.merged:
         line += f", {result.merged} PR(s) merged"
     print(line)
+    for notice in result.refused:
+        print(f"NOTE {notice}")
     return EXIT_OK
 
 

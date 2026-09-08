@@ -75,6 +75,10 @@ class TickResult:
     readied: int = 0
     #: Pull requests squash-merged. The only count here that changed `main`.
     merged: int = 0
+    #: Merges GitHub refused. A conflict, a protection rule or a race are all
+    #: ordinary outcomes, so they are reported rather than raised — and the
+    #: pass carries on, because the board writes are queued behind them.
+    refused: tuple[Notice, ...] = ()
 
 
 def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPlan:
@@ -125,6 +129,7 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
 
 def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
     dispatched = reconciled = readied = merged = 0
+    refused: list[Notice] = []
     for operation in plan.operations:
         match operation:
             case AssignAgent():
@@ -139,12 +144,18 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
                 api.mark_ready(number=operation.number)
                 readied += 1
             case MergePr():
-                api.merge_pr(number=operation.number)
+                try:
+                    api.merge_pr(number=operation.number)
+                except RuntimeError as exc:
+                    refused.append(
+                        Notice("merge-refused", f"#{operation.number}", str(exc))
+                    )
+                    continue
                 merged += 1
             case SetProjectField():
                 _set_field(api, plan, operation)
                 reconciled += 1
-    return TickResult(dispatched, reconciled, readied, merged)
+    return TickResult(dispatched, reconciled, readied, merged, tuple(refused))
 
 
 def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:
