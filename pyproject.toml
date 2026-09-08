@@ -1,6 +1,6 @@
 [project]
 name = "dispatchkit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Dispatch a dependency-ordered task graph to GitHub coding agents, idempotently"
 requires-python = ">=3.12"
 readme = "README.md"

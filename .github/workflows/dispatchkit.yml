@@ -29,6 +29,11 @@ concurrency:
 
 jobs:
   tick:
+    # Skip until this repository has actually been set up. `init` writes the
+    # workflow but cannot supply a plan name or a project number, so a fresh
+    # install would otherwise fail on its cron twice an hour forever, which is
+    # how a scheduler teaches people to ignore it.
+    if: vars.DISPATCHKIT_PLAN != '' && vars.DISPATCHKIT_PROJECT != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -308,6 +308,11 @@ concurrency:
 
 jobs:
   tick:
+    # Skip until this repository has actually been set up. `init` writes the
+    # workflow but cannot supply a plan name or a project number, so a fresh
+    # install would otherwise fail on its cron twice an hour forever, which is
+    # how a scheduler teaches people to ignore it.
+    if: vars.DISPATCHKIT_PLAN != '' && vars.DISPATCHKIT_PROJECT != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -322,7 +327,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.DISPATCHKIT_SOURCE || 'bioshrek/dispatchkit' }}
-          ref: ${{ vars.DISPATCHKIT_REF || 'v0.1.1' }}
+          ref: ${{ vars.DISPATCHKIT_REF || 'v0.2.0' }}
           path: .dispatchkit
 
       - uses: actions/setup-python@v5

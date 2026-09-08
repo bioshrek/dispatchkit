@@ -205,3 +205,21 @@ class TestTheTemplateCanRunWhereItIsWritten:
         here: dict[Any, Any] = yaml.safe_load(SOURCES["this repository"])
         env = next(step["env"] for step in steps(here) if "run" in step)
         assert env["PYTHONPATH"] == "src"
+
+
+def test_the_pass_is_skipped_until_the_repository_is_configured(
+    workflow: dict[Any, Any],
+) -> None:
+    """An unconfigured repository must not fail every half hour.
+
+    Found on dispatchkit's own repository, which carries the workflow but has
+    never been given a plan or a project: the cron fired on schedule and died
+    on `--project: invalid int value: ''`, twice an hour, for as long as it had
+    been installed. A repository that has not been set up yet is not a failure
+    to alert on, and a scheduler that cries wolf every thirty minutes is one
+    nobody reads.
+    """
+    job = workflow["jobs"]["tick"]
+    condition = job.get("if", "")
+    assert "DISPATCHKIT_PLAN" in condition
+    assert "DISPATCHKIT_PROJECT" in condition
