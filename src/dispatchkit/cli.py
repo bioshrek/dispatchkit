@@ -259,7 +259,11 @@ def _tick(args: argparse.Namespace) -> int:
             print("dispatchkit: --push requires --repo owner/name and --project N", file=sys.stderr)
             return EXIT_UNREADABLE
         api = GhCli(repo=args.repo, project=args.project)
-        state = api.fetch_state(plan=args.plan)
+        try:
+            state = api.fetch_state(plan=args.plan)
+        except RuntimeError as exc:
+            print(f"dispatchkit: cannot read {args.repo}: {exc}", file=sys.stderr)
+            return EXIT_UNREADABLE
     elif args.state is not None:
         loaded = _load_state(args.state)
         if isinstance(loaded, int):

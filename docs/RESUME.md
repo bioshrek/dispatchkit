@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7 are implemented and green offline. 499 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.7 are implemented and green offline. 501 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -107,15 +107,28 @@ pair** — `json-output` was immediately deferred against `encoding-fallback`, s
 `cli.py` and `test_cli.py`. Copilot opened PR #8 within the minute; the next pass dispatched
 nothing and wrote once. Assignment is still the lock.
 
-1. **Publish this repository — the hard blocker.** The sandbox scheduler still cannot run,
-   because the workflow template checks out `bioshrek/dispatchkit@v0.1.0` and there is nothing
-   there. Every pass so far has been run by hand from the laptop; a pass has never executed
-   inside Actions at all.
+**Published.** [`bioshrek/dispatchkit`](https://github.com/bioshrek/dispatchkit) is public, its
+own CI is green, and `v0.1.0` is tagged — the ref the workflow template pins. The local branch was
+`master` and had to be renamed to `main` first, or `ci.yml`'s `branches: [main]` would never have
+fired.
+
+The sandbox scheduler now gets as far as running dispatchkit inside Actions, which it never had
+before: the log shows `PYTHONPATH: .dispatchkit/src`, `PLAN: wordfreq`, `PROJECT: 2` and a real
+import from the vendored checkout. It still fails, on the one input only you can supply —
+`GH_TOKEN:` is empty.
+
+That failure also earned its keep. It arrived as a bare twelve-frame `RuntimeError` traceback:
+`init` and `doctor` both caught this class of error and `tick` did not, so the failure adopters
+are most likely to hit was the one presented worst. `tick --push` now reports
+`dispatchkit: cannot read <repo>: …` and exits 2.
+
+1. **Set the token — the last blocker, and only you can do it.**
    ```sh
-   gh repo create dispatchkit --public --source . --remote origin --push
-   git tag v0.1.0 && git push origin v0.1.0
+   gh secret set DISPATCHKIT_TOKEN --repo bioshrek/dispatchkit-sandbox
    ```
-   Then `doctor` against the sandbox and watch the scheduled run go green on its own.
+   A **classic** PAT with `repo` and `project`. Fine-grained tokens cannot touch a user-owned
+   Project, and the sandbox board is user-owned. Then re-run the workflow and watch a pass
+   complete inside Actions for the first time.
 
 2. **Then D9**, which is what makes `Auto-merging` true. Note it is *currently a claim nothing
    fulfils*: dispatchkit contains no merge code at all, and the sandbox has `allow_auto_merge:

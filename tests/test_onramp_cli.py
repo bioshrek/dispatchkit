@@ -211,3 +211,73 @@ class TestBoardUnreachable:
 
         assert code == 2
         assert "project not found" in capsys.readouterr().err
+
+
+class TestTickCannotReachGitHub:
+    """A pass that cannot read the repository must say so, not traceback.
+
+    This is the scheduler's most likely first failure, and it was found by
+    running it: with `DISPATCHKIT_TOKEN` unset the workflow died with a bare
+    `RuntimeError` stack, twelve frames deep, ending in a `gh` message about
+    an environment variable. `init` and `doctor` already caught this; `tick`
+    was the one path that did not, so the failure adopters are most likely to
+    hit was the one presented worst.
+    """
+
+    class Unreachable:
+        def __init__(self, *, repo: str, project: int) -> None:
+            self.repo, self.project = repo, project
+
+        def fetch_state(self, *, plan: str) -> object:
+            raise RuntimeError(
+                "gh api failed: gh: To use GitHub CLI in a GitHub Actions "
+                "workflow, set the GH_TOKEN environment variable."
+            )
+
+    def test_it_reports_the_failure_and_exits_two(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tree(tmp_path)
+        monkeypatch.setattr("dispatchkit.cli.GhCli", self.Unreachable)
+
+        code = main(
+            [
+                "tick",
+                "--plan",
+                "demo",
+                "--push",
+                "--repo",
+                "o/n",
+                "--project",
+                "1",
+                "--config",
+                str(tmp_path / ".github" / "dispatchkit.toml"),
+            ]
+        )
+
+        assert code == 2
+        err = capsys.readouterr().err
+        assert "cannot read" in err
+        assert "GH_TOKEN" in err
+
+    def test_it_does_not_raise(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tree(tmp_path)
+        monkeypatch.setattr("dispatchkit.cli.GhCli", self.Unreachable)
+        # The whole point: a missing token is a configuration problem, and a
+        # stack trace tells the reader nothing they can act on.
+        main(
+            [
+                "tick",
+                "--plan",
+                "demo",
+                "--push",
+                "--repo",
+                "o/n",
+                "--project",
+                "1",
+                "--config",
+                str(tmp_path / ".github" / "dispatchkit.toml"),
+            ]
+        )
