@@ -1,0 +1,380 @@
+{
+  "data": {
+    "repository": {
+      "issues": {
+        "nodes": [
+          {
+            "assignees": {
+              "nodes": []
+            },
+            "body": "Printing every word is unusable on anything longer than a paragraph. Add a\n`--top N` option to `wordfreq` that prints only the N most frequent words.\n\n- The limit belongs in `cli.py`. `count_words` already returns the full list in\n  a stable order, and it should keep doing so \u2014 slicing is a presentation\n  concern, and the JSON task will need the same unsliced list.\n- Default to printing everything, so today's behaviour is unchanged when the\n  flag is absent.\n- `--top 0` should print nothing rather than everything; reject a negative N\n  with a non-zero exit and a message on stderr, matching how a missing file is\n  already handled.\n\nAdd tests to `tests/test_cli.py` whose names contain `top`, since the\nacceptance command selects on that.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k top && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: top-n\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: human\nspend: false\ndepends: []\ntouches: [src/wordfreq/cli.py, tests/test_cli.py]\n-->\n",
+            "id": "I_kwDOUSWj2M8AAAABQSGhww",
+            "labels": {
+              "nodes": [
+                {
+                  "name": "dispatchkit"
+                },
+                {
+                  "name": "lane:cloud"
+                },
+                {
+                  "name": "verify:human"
+                },
+                {
+                  "name": "plan:wordfreq"
+                }
+              ]
+            },
+            "number": 1,
+            "projectItems": {
+              "nodes": [
+                {
+                  "fieldValues": {
+                    "nodes": [
+                      {
+                        "__typename": "ProjectV2ItemFieldRepositoryValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldLabelValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Title"
+                        },
+                        "text": "Limit output with --top N"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Task ID"
+                        },
+                        "text": "top-n"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Lane"
+                        },
+                        "name": "cloud"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Verify"
+                        },
+                        "name": "human"
+                      }
+                    ]
+                  },
+                  "id": "PVTI_lAHOAG4oEc4Bi1mRzg5-d94"
+                }
+              ]
+            },
+            "state": "OPEN",
+            "timelineItems": {
+              "nodes": []
+            },
+            "title": "Limit output with --top N"
+          },
+          {
+            "assignees": {
+              "nodes": []
+            },
+            "body": "`the` wins every count, which makes the output nearly useless. Add opt-in\nstopword filtering.\n\n- Add a `--stopwords` flag to `cli.py` and the filtering itself to `count.py`,\n  next to the counting it modifies. Keep the two separable: `count_words`\n  should take the stopword set as an argument rather than reaching for a\n  global, so it stays testable without the CLI.\n- Ship a small built-in English list (roughly the usual 25\u201350: articles,\n  pronouns, prepositions, auxiliaries). Put it in `count.py` as a frozenset.\n- Filtering happens after tokenising and before counting.\n- Off by default. Existing output must not change when the flag is absent.\n\nAdd tests to `tests/test_count.py` whose names contain `stopword`, since the\nacceptance command selects on that.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k stopword && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: stopwords\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: human\nspend: false\ndepends: []\ntouches: [src/wordfreq/count.py, tests/test_count.py]\n-->\n",
+            "id": "I_kwDOUSWj2M8AAAABQSGrDw",
+            "labels": {
+              "nodes": [
+                {
+                  "name": "dispatchkit"
+                },
+                {
+                  "name": "lane:cloud"
+                },
+                {
+                  "name": "verify:human"
+                },
+                {
+                  "name": "plan:wordfreq"
+                }
+              ]
+            },
+            "number": 2,
+            "projectItems": {
+              "nodes": [
+                {
+                  "fieldValues": {
+                    "nodes": [
+                      {
+                        "__typename": "ProjectV2ItemFieldRepositoryValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldLabelValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Title"
+                        },
+                        "text": "Filter stopwords with --stopwords"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Task ID"
+                        },
+                        "text": "stopwords"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Lane"
+                        },
+                        "name": "cloud"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Verify"
+                        },
+                        "name": "human"
+                      }
+                    ]
+                  },
+                  "id": "PVTI_lAHOAG4oEc4Bi1mRzg5-eM0"
+                }
+              ]
+            },
+            "state": "OPEN",
+            "timelineItems": {
+              "nodes": []
+            },
+            "title": "Filter stopwords with --stopwords"
+          },
+          {
+            "assignees": {
+              "nodes": []
+            },
+            "body": "`cli.py` calls `read_text(encoding=\"utf-8\")`, so a Latin-1 file raises\n`UnicodeDecodeError` \u2014 an uncaught traceback, not the clean exit-2 error that a\nmissing file already gets.\n\n- Catch the decode failure and re-read with a fallback rather than giving up:\n  reading a file with a few undecodable bytes should still produce counts.\n  `errors=\"replace\"` on a second attempt is enough; a full charset guess is out\n  of scope.\n- Say something on stderr when the fallback is used, so a surprising count is\n  explainable. Do not make it an error: exit 0, because the command worked.\n- The existing `OSError` path (missing file, exit 2) must keep behaving.\n\nAdd tests to `tests/test_cli.py` whose names contain `encoding`, since the\nacceptance command selects on that. Write the fixture bytes with\n`Path.write_bytes`, not a str, or the test proves nothing.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k encoding && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: encoding-fallback\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: human\nspend: false\ndepends: []\ntouches: [src/wordfreq/cli.py, tests/test_cli.py]\n-->\n",
+            "id": "I_kwDOUSWj2M8AAAABQSGyTg",
+            "labels": {
+              "nodes": [
+                {
+                  "name": "dispatchkit"
+                },
+                {
+                  "name": "lane:cloud"
+                },
+                {
+                  "name": "verify:human"
+                },
+                {
+                  "name": "plan:wordfreq"
+                }
+              ]
+            },
+            "number": 3,
+            "projectItems": {
+              "nodes": [
+                {
+                  "fieldValues": {
+                    "nodes": [
+                      {
+                        "__typename": "ProjectV2ItemFieldRepositoryValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldLabelValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Title"
+                        },
+                        "text": "Survive a non-UTF-8 file"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Task ID"
+                        },
+                        "text": "encoding-fallback"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Lane"
+                        },
+                        "name": "cloud"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Verify"
+                        },
+                        "name": "human"
+                      }
+                    ]
+                  },
+                  "id": "PVTI_lAHOAG4oEc4Bi1mRzg5-eYE"
+                }
+              ]
+            },
+            "state": "OPEN",
+            "timelineItems": {
+              "nodes": []
+            },
+            "title": "Survive a non-UTF-8 file"
+          },
+          {
+            "assignees": {
+              "nodes": []
+            },
+            "body": "The current output is aligned columns, which nothing downstream can consume.\nAdd `--json`.\n\n- Emit a JSON array of objects, one per word, in the same order the text output\n  uses: `[{\"word\": \"a\", \"total\": 2}]`. An array, not an object keyed by word,\n  because order is meaningful here and JSON objects do not promise it.\n- It must honour `--top N`, which is why this task waits on that one. Apply the\n  same limit to the same list; do not re-implement the slice.\n- Print nothing else on stdout in this mode \u2014 no header, no summary. Anything\n  extra makes the output unparseable, which defeats the flag.\n- An empty input is `[]`, not an empty string.\n\nAdd tests to `tests/test_cli.py` whose names contain `json`, and assert by\n`json.loads`-ing the captured stdout rather than by string matching.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k json && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: json-output\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: human\nspend: false\ndepends: [top-n]\ntouches: [src/wordfreq/cli.py, tests/test_cli.py]\n-->\n",
+            "id": "I_kwDOUSWj2M8AAAABQSG5eg",
+            "labels": {
+              "nodes": [
+                {
+                  "name": "dispatchkit"
+                },
+                {
+                  "name": "lane:cloud"
+                },
+                {
+                  "name": "verify:human"
+                },
+                {
+                  "name": "plan:wordfreq"
+                }
+              ]
+            },
+            "number": 4,
+            "projectItems": {
+              "nodes": [
+                {
+                  "fieldValues": {
+                    "nodes": [
+                      {
+                        "__typename": "ProjectV2ItemFieldRepositoryValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldLabelValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Title"
+                        },
+                        "text": "Emit machine-readable counts with --json"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Task ID"
+                        },
+                        "text": "json-output"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Lane"
+                        },
+                        "name": "cloud"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Verify"
+                        },
+                        "name": "human"
+                      }
+                    ]
+                  },
+                  "id": "PVTI_lAHOAG4oEc4Bi1mRzg5-ejQ"
+                }
+              ]
+            },
+            "state": "OPEN",
+            "timelineItems": {
+              "nodes": []
+            },
+            "title": "Emit machine-readable counts with --json"
+          },
+          {
+            "assignees": {
+              "nodes": []
+            },
+            "body": "Four flags landed and the README still documents none of them. Bring it up to\ndate; this task waits on all four so the surface it describes is final.\n\n- Document `--top`, `--stopwords`, `--json` and the non-UTF-8 fallback, each\n  with a short worked example in the existing style.\n- Replace the \"Why the payload is unfinished on purpose\" list: those gaps are\n  now closed, and leaving them there would be a lie about the code.\n- Keep it a README, not a manual. A few lines per flag.\n\nThe acceptance greps for `--top`, `--stopwords`, `--json` and `encoding`, and\nruns the test suite to make sure the documentation edit did not break anything.\n\n## Acceptance\n\n```sh\nuv run pytest -q && grep -q -- '--top' README.md && grep -q -- '--stopwords' README.md && grep -q -- '--json' README.md && grep -q -- 'encoding' README.md\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: document-flags\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: auto\nspend: false\ndepends: [top-n, stopwords, json-output, encoding-fallback]\ntouches: [README.md]\n-->\n",
+            "id": "I_kwDOUSWj2M8AAAABQSG_uw",
+            "labels": {
+              "nodes": [
+                {
+                  "name": "dispatchkit"
+                },
+                {
+                  "name": "lane:cloud"
+                },
+                {
+                  "name": "verify:auto"
+                },
+                {
+                  "name": "plan:wordfreq"
+                }
+              ]
+            },
+            "number": 5,
+            "projectItems": {
+              "nodes": [
+                {
+                  "fieldValues": {
+                    "nodes": [
+                      {
+                        "__typename": "ProjectV2ItemFieldRepositoryValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldLabelValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Title"
+                        },
+                        "text": "Document the new flags in the README"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "field": {
+                          "name": "Task ID"
+                        },
+                        "text": "document-flags"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Lane"
+                        },
+                        "name": "cloud"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "field": {
+                          "name": "Verify"
+                        },
+                        "name": "auto"
+                      }
+                    ]
+                  },
+                  "id": "PVTI_lAHOAG4oEc4Bi1mRzg5-erw"
+                }
+              ]
+            },
+            "state": "OPEN",
+            "timelineItems": {
+              "nodes": []
+            },
+            "title": "Document the new flags in the README"
+          }
+        ]
+      }
+    }
+  }
+}

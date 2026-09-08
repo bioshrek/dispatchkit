@@ -966,6 +966,47 @@ dispatch paths — `create_issue`, `item_add`, `item_edit`, `assign_agent` — r
 unexecuted, and `tests/fixtures/search_issues.json` is still renderer-generated rather than
 recorded.
 
+### D5 live run record — the first real `apply` (2026-09-08)
+
+Against `bioshrek/dispatchkit-sandbox` and project 2, with the `wordfreq` plan's five tasks.
+
+- **`apply --push` created 5 issues, 5 project items and 15 field values**, then converged: a
+  second run planned nothing. In between, a corrected graph produced `0 created, 5 updated, 0
+  project items, 0 fields set` — the update path touching only what changed, which is the property
+  that makes re-applying a reviewed graph safe rather than merely idempotent-looking.
+- **The renderer-generated fixture had the right shape all along.** Comparing every path in the
+  real GraphQL response against `tests/fixtures/search_issues.json` found *zero* divergence in
+  either direction. That was the largest standing unknown in the project, since the fixture had
+  been written from the same code that reads it and so proved only internal consistency.
+- **The real response is now recorded** as `tests/fixtures/live_state.json`, with
+  `tests/test_live_payload.py` asserting against it in the `replay` tier. It is kept *alongside*
+  the generated fixture rather than replacing it: this snapshot is pre-dispatch, so it has no
+  assignees and no PRs, and swapping it in would have quietly deleted the coverage of the
+  dispatched and in-review states.
+- **The machine block survived GitHub.** The block is written into a body that GitHub stores,
+  renders and re-serves, which is exactly where an HTML comment or its whitespace could be eaten.
+  Parsed back out of the recorded bytes it is intact, `v: 1` included.
+- **`apply` writes `Task ID`, `Lane` and `Verify`, and deliberately not `Status`.** Visible in the
+  recorded payload, and worth stating: `Status` is a derived view that a scheduler pass owns.
+
+The first `tick` dry run, against that recorded state, is the design's own argument played back:
+
+```
+top-n: Dispatched      stopwords: Dispatched      encoding-fallback: Ready
+json-output: Blocked   document-flags: Blocked
+dispatch: top-n stopwords
+  defer encoding-fallback: file-scope-conflict (overlaps top-n)
+```
+
+Three tasks were ready and the cloud cap was 3, yet only two dispatched — `encoding-fallback` and
+`top-n` both touch `cli.py`, so `touches` deferred it. That is the advisory-scope rule doing on
+real data exactly what it was designed to do, and it is the first evidence that the readiness
+resolver, the dependency gate and the scope heuristic compose.
+
+**The gap this leaves:** `tick --push` has still not run, so `assign_agent` remains the last
+unexecuted mutation — and it is the one that spends a Copilot quota and starts autonomous work,
+which makes it the right place to stop and ask.
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once
