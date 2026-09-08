@@ -327,7 +327,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ${{ vars.DISPATCHKIT_SOURCE || 'bioshrek/dispatchkit' }}
-          ref: ${{ vars.DISPATCHKIT_REF || 'v0.2.0' }}
+          ref: ${{ vars.DISPATCHKIT_REF || 'v0.2.1' }}
           path: .dispatchkit
 
       - uses: actions/setup-python@v5
