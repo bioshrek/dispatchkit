@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: uv sync
+        run: uv sync --all-groups
+
+      # Tiers 1-2 only (`not live`, the pytest default). Sockets are blocked
+      # for both, so CI cannot reach GitHub even by mistake.
+      - name: pytest
+        run: uv run pytest -q
+
+      - name: ruff
+        run: uv run ruff check .
+
+      - name: mypy --strict
+        run: uv run mypy
+
+      - name: import-linter
+        run: uv run lint-imports

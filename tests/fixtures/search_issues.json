@@ -1,0 +1,191 @@
+{
+  "data": {
+    "repository": {
+      "issues": {
+        "nodes": [
+          {
+            "id": "I_kwDOports",
+            "number": 12,
+            "title": "ports",
+            "body": "ports\n\n## Acceptance\n\n```sh\ntrue\n```\n\n_Milestone M._\n\n<!-- dispatchkit\nid: ports\nplan: demo\nmilestone: M\nlane: cloud\nrequires: []\nverify: auto\nspend: false\ndepends: []\ntouches: []\n-->\n",
+            "state": "OPEN",
+            "labels": {
+              "nodes": [
+                {
+                  "name": "dispatchkit"
+                },
+                {
+                  "name": "plan:demo"
+                },
+                {
+                  "name": "lane:cloud"
+                },
+                {
+                  "name": "verify:auto"
+                }
+              ]
+            },
+            "projectItems": {
+              "nodes": [
+                {
+                  "id": "PVTI_lADOBQfyVc0FoZzgAKLM",
+                  "fieldValues": {
+                    "nodes": [
+                      {
+                        "__typename": "ProjectV2ItemFieldLabelValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "text": "ports",
+                        "field": {
+                          "name": "Task ID"
+                        }
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "name": "cloud",
+                        "field": {
+                          "name": "Lane"
+                        }
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "name": "auto",
+                        "field": {
+                          "name": "Verify"
+                        }
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "name": "Ready",
+                        "field": {
+                          "name": "Status"
+                        }
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldNumberValue",
+                        "number": 0,
+                        "field": {
+                          "name": "Attempts"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "assignees": {
+              "nodes": []
+            },
+            "timelineItems": {
+              "nodes": []
+            }
+          },
+          {
+            "id": "I_kwDOadapter",
+            "number": 13,
+            "title": "Adapter (old title)",
+            "body": "adapter\n\n## Acceptance\n\n```sh\ntrue\n```\n\n_Milestone M._\n\n<!-- dispatchkit\nid: adapter\nplan: demo\nmilestone: M\nlane: local\nrequires: [gpu]\nverify: human\nspend: false\ndepends: [ports]\ntouches: []\n-->\n",
+            "state": "OPEN",
+            "labels": {
+              "nodes": [
+                {
+                  "name": "dispatchkit"
+                },
+                {
+                  "name": "plan:demo"
+                },
+                {
+                  "name": "lane:local"
+                },
+                {
+                  "name": "verify:human"
+                }
+              ]
+            },
+            "projectItems": {
+              "nodes": [
+                {
+                  "id": "PVTI_lADOBQfyVc0FoZzgAKLN",
+                  "fieldValues": {
+                    "nodes": [
+                      {
+                        "__typename": "ProjectV2ItemFieldLabelValue"
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldTextValue",
+                        "text": "adapter",
+                        "field": {
+                          "name": "Task ID"
+                        }
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "name": "local",
+                        "field": {
+                          "name": "Lane"
+                        }
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "name": "human",
+                        "field": {
+                          "name": "Verify"
+                        }
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                        "name": "Blocked",
+                        "field": {
+                          "name": "Status"
+                        }
+                      },
+                      {
+                        "__typename": "ProjectV2ItemFieldNumberValue",
+                        "number": 0,
+                        "field": {
+                          "name": "Attempts"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "assignees": {
+              "nodes": [
+                {
+                  "login": "copilot-swe-agent"
+                }
+              ]
+            },
+            "timelineItems": {
+              "nodes": [
+                {
+                  "source": {
+                    "__typename": "PullRequest",
+                    "number": 41,
+                    "state": "CLOSED"
+                  }
+                },
+                {
+                  "source": {
+                    "__typename": "PullRequest",
+                    "number": 42,
+                    "state": "OPEN"
+                  }
+                },
+                {
+                  "source": {
+                    "__typename": "Issue",
+                    "number": 7
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

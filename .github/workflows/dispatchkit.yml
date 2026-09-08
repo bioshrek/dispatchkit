@@ -1,0 +1,60 @@
+name: dispatchkit scheduler
+
+# One idempotent scheduler pass: resolve every task's status from the issues,
+# tell the board, and hand out whatever the caps allow. Event-driven for
+# latency; cron as the self-healing safety net, offset off :00/:30 because the
+# alert platform throttles hardest on the hour and the half hour.
+on:
+  issues:
+    types: [closed, reopened, labeled]
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+# Least privilege. Never `contents: write` — only pull requests mutate the
+# tree, so a compromised pass cannot commit.
+permissions:
+  issues: write
+  repository-projects: write
+  contents: read
+
+# One pass at a time. Not cancel-in-progress: interrupting between assigning an
+# issue and recording it is harmless but pointless, and the next pass would
+# only have to redo it.
+concurrency:
+  group: dispatchkit-dispatch
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `src/dispatchkit` is pure standard library, so the pass installs
+      # nothing: no dependency resolution to fail, no third-party code in a
+      # job that holds a token which can assign work.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Values arrive as environment variables, never as `${{ }}` inside the
+      # script: expressions are substituted before the shell parses the line,
+      # so a value carrying a quote would become a command.
+      - name: Scheduler pass
+        env:
+          # `src` on the path rather than an install step: there is nothing to
+          # install, and `pip install` would be a build the pass depends on.
+          PYTHONPATH: src
+          GH_TOKEN: ${{ secrets.DISPATCHKIT_TOKEN }}
+          REPO: ${{ github.repository }}
+          PLAN: ${{ vars.DISPATCHKIT_PLAN }}
+          PROJECT: ${{ vars.DISPATCHKIT_PROJECT }}
+        run: |
+          python -m dispatchkit tick \
+            --plan "$PLAN" \
+            --repo "$REPO" \
+            --project "$PROJECT" \
+            --push

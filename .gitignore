@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.DS_Store
+
+# Recorded live state, useful for a local dry run but never committed: it is a
+# snapshot of somebody's real issues.
+state.json
