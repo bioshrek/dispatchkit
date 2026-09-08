@@ -1,0 +1,34 @@
+# Scheduler settings for `dispatchkit`. Every key here has a default, so this
+# file is optional — it exists to make the defaults visible and reviewable.
+#
+# `dispatchkit doctor` reports which file it was read from.
+
+[caps]
+# Concurrent cloud agent tasks. Bounded by review capacity, not by API limits:
+# more open PRs than a person can read is a queue, not throughput.
+cloud = 3
+# Concurrent local tasks. One, because the local daemon shares a working tree.
+local = 1
+
+[retry]
+# Attempts before a task is labelled `dispatch:stuck` and left alone.
+budget = 3
+
+[paths]
+# Where committed task graphs live: `<plans>/<plan>.tasks.toml`.
+plans = "docs/plans"
+
+# The blast-radius fence: paths auto-merge must never touch unattended, because
+# the pipeline may not rewrite its own rules, its own routing or its own merge
+# permissions without a human. Omit the section to get the default, which is
+# derived from the settings above:
+#
+#   [fence]
+#   paths = [
+#       ".github/workflows/**",
+#       ".github/dispatchkit.toml",
+#       "dispatchkit.toml",
+#       "docs/plans/*.tasks.toml",
+#   ]
+#
+# Setting it replaces that list rather than adding to it.

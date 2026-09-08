@@ -106,6 +106,7 @@ def issue(
 def render_raw_block(block: MachineBlock) -> str:
     """Render a `MachineBlock` back into body text, for building fixtures."""
     values = {
+        "v": str(block.version),
         "id": block.id,
         "plan": block.plan,
         "milestone": block.milestone,

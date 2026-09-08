@@ -1,12 +1,12 @@
 # Resume notes
 
-Written at the end of the extraction session, for whoever picks this up next. `docs/design.md`
-holds the design and the D1–D5 decision records; this file holds only what is *not* in there:
-current state, the open decisions, and the exact next actions.
+Written for whoever picks this up next. `docs/design.md` holds the design and the D1–D5.5
+decision records; this file holds only what is *not* in there: current state, the open decisions,
+and the exact next actions.
 
 ## Where things stand
 
-D1–D5 are implemented and green offline. 256 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.5 are implemented and green offline. 365 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -16,12 +16,11 @@ clean via `make check`.
 | D3 | `apply` (graph → issues + board), idempotent | done, offline only |
 | D4 | Readiness resolver + admission | done |
 | D5 | Cloud dispatch + workflow | code done; **the live end-to-end run has never happened** |
+| D5.5 | Block version key, configurable paths/fence, `doctor`, `init` | done, offline only |
 | D6–D9 | Local daemon, retry/reclaim, alerting, auto-merge | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
-`tools/dispatch/`) on the session dated 2026-09-08. The product was renamed `taskflow` →
-`dispatchkit` during extraction, including the issue label and the machine-block marker.
-`art_strategy` has been restored to its pre-extraction state and is intended to become adopter #1.
+`tools/dispatch/`) on 2026-09-08. `art_strategy` is intended to become adopter #1.
 
 ## Immediate next actions
 
@@ -37,21 +36,19 @@ This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived
    gh auth refresh -s project
    ```
    (Verified 2026-09-08: the account's token has `repo`, `read:org`, `gist`, `admin:public_key` —
-   no `project`.)
+   no `project`. `dispatchkit doctor` now reports exactly this, with the command that fixes it.)
 
-3. **Create the board.** `gh project field-create` supports single-select options, and
-   `field-delete` exists, so this is fully scriptable. The catch: a new project ships a built-in
-   `Status` field with `Todo`/`In Progress`/`Done`, and the option names must be *ours*. Either
-   delete that field and recreate it, or update its options via the `updateProjectV2Field`
-   mutation — **untested, verify before relying on it**. Fields needed:
-
-   | Field | Type | Options |
-   |---|---|---|
-   | `Status` | single select | `Blocked`, `Ready`, `Dispatched`, `In Review`, `Auto-merging`, `Done` |
-   | `Lane` | single select | `cloud`, `local` |
-   | `Verify` | single select | `auto`, `human` |
-   | `Task ID` | text | — |
-   | `Attempts` | number | — |
+3. **Create the board, then let `init` fill it in.** The Project itself still has to be created by
+   hand (`gh project create`); everything after that is one command:
+   ```sh
+   uv run dispatchkit doctor --repo <owner>/dispatchkit --project <n>   # what is missing
+   uv run dispatchkit init   --repo <owner>/dispatchkit --project <n> --push
+   uv run dispatchkit doctor --repo <owner>/dispatchkit --project <n>   # expect all `ok`
+   ```
+   `init` creates every field with its options, every label, and any missing file. The built-in
+   `Status` field carrying `Todo`/`In Progress`/`Done` is handled: on an empty board it is deleted
+   and recreated; on a populated one you get a notice naming the `field-delete` command, because
+   deleting a field deletes its values and that is not a machine's call.
 
 4. **Write the first plan graph** — `docs/plans/<plan>.tasks.toml`. Per the design's "synthetic
    tasks, but never no-ops" rule these must be real chores producing real diffs and real CI time.
@@ -71,31 +68,31 @@ This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived
 
 ## Known gaps, in the order they will bite
 
+- **`gh project field-create`'s option syntax is assumed, not verified.** D5.5 sends
+  `--single-select-options "Blocked,Ready,Dispatched,In Review,Auto-merging,Done"` as a single
+  argument. If `gh` wants a repeated flag instead, `init` fails on its very first operation.
+  Check this before anything else in step 3.
 - **`tests/fixtures/search_issues.json` is renderer-generated, not recorded.** It is
   GraphQL-shaped but has never been compared against a real response. The live run's first job is
-  to re-record it. Until then, `GhCli`'s subprocess paths — the Project field/option lookups,
-  `item-add`, `item-edit`, `assign_agent` — are entirely unexecuted code.
-- **The machine block has no version key.** It is a wire format written into other people's
-  issues. Adding `v: 1` costs one key now and a migration later. Do it before any issue exists in
-  the wild. (Decided during extraction; not yet implemented.)
-- **The blast-radius fence is hardcoded** to `.github/workflows/`, `dispatch.toml` and
-  `docs/plans/*.tasks.toml`. For adopters it must be config — and note the middle path still says
-  `dispatch.toml`, which this repo's config no longer is. The fence therefore currently does not
-  cover its own config file. Fix when D9 lands, or sooner.
-- **Config location and graph path are conventions, not settings.** `dispatchkit.toml` at the repo
-  root claims a name in somebody else's tree; `.github/dispatchkit.toml` is the better home.
-- **A single-select value with no matching option falls back to `--text`**, which `gh` will reject
-  confusingly. `GhCli.set_project_field` should fail with a message naming the field and the
-  missing option. This *will* happen during board bootstrap.
-- **No `init` or `doctor` command.** Both were agreed as the adoption on-ramp: `init` creates the
-  board, fields, labels, workflow and config idempotently; `doctor` checks scopes, agent
-  availability, board fields, labels and branch protection, and prints what is missing. `doctor`
-  is also the live tier's assertion set.
+  to re-record it. Until then every `GhCli` subprocess path — the Project field lookups,
+  `item-add`, `item-edit`, `assign_agent`, and D5.5's `fetch_board`, `create_field`,
+  `delete_field`, `token_scopes` — is argv-checked but unexecuted code.
+- **`doctor` cannot see branch protection or the merge queue.** Both are D9 prerequisites and both
+  belong in the check set; they were left out because nothing consumes them yet.
+- **`init` cannot create the Project itself.** `gh project create` needs an owner-type decision
+  (user vs. org) that changes the token requirements, so it is deliberately a human's first step.
+- **`plan:*` labels are created by `apply`, not by `init`.** `init` creates only the labels that
+  do not depend on a graph. Correct, but worth knowing when a board looks half-configured.
+- **The config moved to `.github/dispatchkit.toml`.** A root `dispatchkit.toml` is still read, and
+  announced when it is used. Both locations are inside the blast-radius fence.
 
 ## Decisions taken, so they are not relitigated
 
 - **Extract before D6**, because the local daemon adds a second install target and because
   adoption pressure changes the wire format — cheaper while no issues exist.
+- **Harden before the live run, not during it.** D5.5 pulled the version key, the configurable
+  paths and the on-ramp forward rather than discovering them mid-trial. All three were cheap
+  exactly once: while no issue, no board and no adopter existed.
 - **Renamed to `dispatchkit`** in both product and distribution: `taskflow` on PyPI is
   OpenStack's, at 6.4.0.
 - **Concurrency caps stay per-repo**, not per-owner. Consequence: the state query stays
@@ -111,9 +108,8 @@ This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived
 
 Real, small, independently useful — exactly what the design asks test tasks to be:
 
-- add the `v: 1` machine-block version key and its compatibility rule
-- make the blast-radius fence and graph path configurable
-- `GhCli.set_project_field`: fail loudly on a missing single-select option
-- `dispatchkit doctor`
-- `dispatchkit init`
-- move the config to `.github/dispatchkit.toml`
+- re-record `search_issues.json` from a real `gh api graphql` response
+- `dispatchkit doctor`: check branch protection and the merge queue (D9's prerequisites)
+- `dispatchkit doctor --json`, so a workflow can gate on it
+- `dispatchkit init`: create the Project itself, once the owner-type question is settled
+- D6: the local daemon — claim, worktree, heartbeat, spend gate

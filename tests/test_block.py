@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from dispatchkit.block import parse_block, render_block
+from dispatchkit.block import BLOCK_VERSION, parse_block, render_block
 from dispatchkit.errors import GraphError
 from dispatchkit.model import Dependency, Lane, Task, TaskId, Verify
 
@@ -38,11 +38,60 @@ def codes(body: str) -> list[str]:
     return [issue.code for issue in excinfo.value.issues]
 
 
+class TestVersion:
+    """`v` is a wire-format version, and it comes first for a reason.
+
+    The block is written into other people's issues, so the only cheap moment
+    to add a version key is before any issue exists. Its whole job is to make a
+    future incompatible change *fail loudly on the old reader* rather than be
+    misread as a valid block with surprising values.
+    """
+
+    def test_the_version_is_the_first_key_in_the_block(self) -> None:
+        lines = render_block(make_task(), plan="p").splitlines()
+        assert lines[1] == f"v: {BLOCK_VERSION}"
+
+    def test_the_parsed_block_carries_the_version_it_was_written_with(self) -> None:
+        assert parse_block(render_block(make_task(), plan="p")).version == BLOCK_VERSION
+
+    def test_a_block_from_a_newer_dispatchkit_is_refused_not_guessed_at(self) -> None:
+        body = render_block(make_task(), plan="p").replace(
+            f"v: {BLOCK_VERSION}", f"v: {BLOCK_VERSION + 1}"
+        )
+        assert codes(body) == ["block-version"]
+
+    def test_the_refusal_names_both_versions_so_the_fix_is_obvious(self) -> None:
+        body = render_block(make_task(), plan="p").replace(f"v: {BLOCK_VERSION}", "v: 99")
+        with pytest.raises(GraphError) as excinfo:
+            parse_block(body)
+        message = excinfo.value.issues[0].message
+        assert "99" in message and str(BLOCK_VERSION) in message
+
+    def test_a_newer_block_is_refused_before_its_other_keys_are_read(self) -> None:
+        # A newer writer may have changed what any other key means, so this is
+        # the one error that must be reported alone rather than in a batch.
+        body = render_block(make_task(), plan="p").replace(f"v: {BLOCK_VERSION}", "v: 99")
+        assert codes(body.replace("lane: cloud", "lane: root")) == ["block-version"]
+
+    def test_a_block_written_before_versioning_is_rejected_as_incomplete(self) -> None:
+        body = render_block(make_task(), plan="p").replace(f"v: {BLOCK_VERSION}\n", "")
+        assert codes(body) == ["missing-key"]
+
+    def test_a_non_numeric_version_is_rejected(self) -> None:
+        body = render_block(make_task(), plan="p").replace(f"v: {BLOCK_VERSION}", "v: one")
+        assert codes(body) == ["invalid-type"]
+
+    def test_a_version_below_the_first_one_is_rejected(self) -> None:
+        body = render_block(make_task(), plan="p").replace(f"v: {BLOCK_VERSION}", "v: 0")
+        assert codes(body) == ["invalid-type"]
+
+
 class TestRendering:
     def test_renders_the_documented_shape(self) -> None:
         rendered = render_block(make_task(), plan="refactor")
         assert rendered.splitlines() == [
             "<!-- dispatchkit",
+            "v: 1",
             "id: m5a-values",
             "plan: refactor",
             "milestone: M5a",

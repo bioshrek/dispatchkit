@@ -13,16 +13,26 @@ from typing import Any
 
 import pytest
 
+from dispatchkit.board import SINGLE_SELECT, TEXT, FieldSpec
 from dispatchkit.gh_cli import (
     AGENT_LOGIN,
+    FieldCatalog,
+    ProjectFieldError,
     assign_command,
+    auth_status_command,
     create_issue_command,
+    field_create_command,
+    field_delete_command,
+    field_list_command,
     item_add_command,
     item_edit_command,
     label_command,
+    label_list_command,
     parse_agent_actor,
     parse_field_catalog,
+    parse_item_count,
     parse_state,
+    project_view_command,
     state_command,
     update_issue_command,
 )
@@ -122,6 +132,60 @@ class TestFieldCatalog:
         assert catalog.option_id("Task ID", "anything") is None
 
 
+class TestFieldResolution:
+    """Resolving a field/value pair to ids, and failing loudly when it can't.
+
+    This is the error the board bootstrap produces: a `Status` field carrying
+    GitHub's built-in `Todo`/`In Progress`/`Done` instead of ours. Falling back
+    to `--text` there sends `gh` a single-select field with a text value, which
+    it rejects with a message about neither the field nor the option.
+    """
+
+    def catalog(self) -> FieldCatalog:
+        return parse_field_catalog(
+            {
+                "fields": [
+                    {"id": "PVTF_1", "name": "Task ID"},
+                    {
+                        "id": "PVTF_2",
+                        "name": "Status",
+                        "options": [
+                            {"id": "opt_todo", "name": "Todo"},
+                            {"id": "opt_done", "name": "Done"},
+                        ],
+                    },
+                ]
+            }
+        )
+
+    def test_a_single_select_value_resolves_to_its_option_id(self) -> None:
+        assert self.catalog().resolve("Status", "Done") == ("PVTF_2", "opt_done")
+
+    def test_a_text_field_resolves_to_no_option(self) -> None:
+        assert self.catalog().resolve("Task ID", "ports") == ("PVTF_1", None)
+
+    def test_a_missing_option_is_named_along_with_the_ones_that_exist(self) -> None:
+        with pytest.raises(ProjectFieldError) as caught:
+            self.catalog().resolve("Status", "Dispatched")
+        message = str(caught.value)
+        assert "Status" in message and "Dispatched" in message
+        assert "Todo" in message and "Done" in message
+
+    def test_a_missing_field_is_named_along_with_the_board_it_is_missing_from(self) -> None:
+        with pytest.raises(ProjectFieldError) as caught:
+            self.catalog().resolve("Attempts", "1")
+        message = str(caught.value)
+        assert "Attempts" in message
+        assert "Task ID" in message and "Status" in message
+
+    def test_the_remedy_points_at_the_command_that_fixes_it(self) -> None:
+        # A board this tool did not create is the normal case, so the error
+        # has to say what to run, not just what is wrong.
+        with pytest.raises(ProjectFieldError) as caught:
+            self.catalog().resolve("Attempts", "1")
+        assert "dispatchkit init" in str(caught.value)
+
+
 class TestCommands:
     def test_commands_are_argv_lists_never_shell_strings(self) -> None:
         commands = [
@@ -170,6 +234,68 @@ class TestCommands:
         )
         assert "--single-select-option-id" in command
         assert "--text" not in command
+
+
+class TestBoardCommands:
+    """The commands `doctor` and `init` add (D5.5), argv-checked offline."""
+
+    def test_a_single_select_field_is_created_with_its_options(self) -> None:
+        command = field_create_command(
+            1, "owner", FieldSpec("Status", SINGLE_SELECT, ("Ready", "In Review"))
+        )
+        assert command[:3] == ["gh", "project", "field-create"]
+        assert command[command.index("--data-type") + 1] == "SINGLE_SELECT"
+        assert command[command.index("--single-select-options") + 1] == "Ready,In Review"
+
+    def test_a_text_field_is_created_without_an_options_flag(self) -> None:
+        # `gh` rejects `--single-select-options` on a text field.
+        command = field_create_command(1, "owner", FieldSpec("Task ID", TEXT))
+        assert "--single-select-options" not in command
+        assert command[command.index("--data-type") + 1] == "TEXT"
+
+    def test_an_option_containing_a_space_stays_one_argument(self) -> None:
+        command = field_create_command(
+            1, "owner", FieldSpec("Status", SINGLE_SELECT, ("In Review", "Auto-merging"))
+        )
+        assert "In Review,Auto-merging" in command
+
+    def test_a_field_is_deleted_by_id_not_by_name(self) -> None:
+        assert field_delete_command("PVTF_1") == [
+            "gh",
+            "project",
+            "field-delete",
+            "--id",
+            "PVTF_1",
+        ]
+
+    def test_the_field_list_asks_for_json(self) -> None:
+        assert "--format" in field_list_command(1, "owner")
+        assert "json" in field_list_command(1, "owner")
+
+    def test_labels_are_listed_by_name_only(self) -> None:
+        command = label_list_command("owner/repo")
+        assert command[:3] == ["gh", "label", "list"]
+        assert command[command.index("--json") + 1] == "name"
+
+    def test_every_new_command_is_an_argv_list(self) -> None:
+        commands = [
+            field_create_command(1, "owner", FieldSpec("Lane", SINGLE_SELECT, ("cloud",))),
+            field_delete_command("PVTF_1"),
+            field_list_command(1, "owner"),
+            label_list_command("owner/repo"),
+            project_view_command(1, "owner"),
+            auth_status_command(),
+        ]
+        for command in commands:
+            assert command[0] == "gh"
+            assert all(isinstance(part, str) for part in command)
+
+    def test_the_item_count_is_read_from_the_project_view(self) -> None:
+        assert parse_item_count({"items": {"totalCount": 12}}) == 12
+
+    def test_a_project_view_without_a_count_reads_as_populated(self) -> None:
+        # Fail safe: "unknown" must not license deleting a field.
+        assert parse_item_count({}) > 0
 
 
 class TestAgentAssignment:

@@ -185,6 +185,7 @@ make that review checkable rather than a matter of opinion: the validator reject
 
   ```yaml
   <!-- dispatchkit
+  v: 1
   id: m5a-values
   plan: refactor
   milestone: M5a
@@ -227,7 +228,7 @@ A single idempotent pass, safe to run repeatedly:
 3. **Reconcile** — write back `Status` for every item so the board is always truthful, not just
    for the ones being dispatched.
 4. **Admit** — take ready tasks in plan order, subject to per-lane concurrency caps
-   (`cloud: 3`, `local: 1` by default, configurable in `dispatchkit.toml`) and the file-scope
+   (`cloud: 3`, `local: 1` by default, configurable in `.github/dispatchkit.toml`) and the file-scope
    exclusion below. Caps are what keep review load bounded and PRs from stacking into conflict.
 5. **Dispatch** — per lane, below.
 
@@ -491,9 +492,11 @@ Three guardrails keep `auto` honest:
 1. **Acceptance must be a subset of CI.** The validator rejects `verify = "auto"` unless the
    task's `acceptance` command is one the CI workflow already runs, so "green CI" literally
    means "acceptance passed" rather than "some unrelated checks passed".
-2. **Blast-radius fence.** Auto-merge is refused for any PR touching `.github/workflows/`,
-   `dispatchkit.toml`, or `docs/plans/*.tasks.toml` — the pipeline may not rewrite its own rules,
-   its own routing, or its own merge permissions unattended.
+2. **Blast-radius fence.** Auto-merge is refused for any PR touching a path in `fence.paths`,
+   which defaults to `.github/workflows/**`, the config file itself and
+   `<paths.plans>/*.tasks.toml` — the pipeline may not rewrite its own rules, its own routing, or
+   its own merge permissions unattended. It is configuration, and it is derived from the settings
+   it protects, so moving the plans directory moves the fence with it.
 3. **Branch protection is the real enforcement.** The scheduler's token has no admin bypass, so
    auto-merge can only ever fire on a genuinely green, protected branch. A misconfigured
    scheduler fails closed.
@@ -590,6 +593,7 @@ real chores on real code rather than no-ops.
 | D3   | `apply` (graph → issues/project), idempotent           | Replay tests against a recorded GitHub API fixture                                            |
 | D4   | Readiness resolver as a pure function                  | Unit tests over synthetic graphs incl. diamond, cycle                                         |
 | D5   | Cloud dispatch + workflow                              | One real task end-to-end on a throwaway plan                                                  |
+| D5.5 | Block version key, configurable fence/paths, `doctor`, `init` | `init` against a synthetic board, then `doctor` green on the result                    |
 | D6   | Local daemon: claim, worktree, heartbeat, spend gate   | One real capability-gated task end-to-end                                                     |
 | D7   | Timeout/retry/stuck + stale-heartbeat reclaim          | Fixture with a stalled dispatch and a dead daemon                                             |
 | D8   | Lark alerting with transition-only dedupe              | Fixture asserting one alert, not one per cron pass, plus a non-zero `code` treated as failure |
@@ -838,6 +842,90 @@ The extraction left three conventions that are now presumptuous and should becom
 before the first outside adopter: the root `dispatchkit.toml` location, the
 `docs/plans/<plan>.tasks.toml` graph path, and the hardcoded blast-radius fence paths — which,
 having been written against the old config filename, no longer cover the config file itself.
+
+### D5.5 decision record — pre-live hardening and the adoption on-ramp (shipped)
+
+D5's remaining half is a live run against a repository, a board and an agent seat that do not
+exist yet. Everything that makes that run cheap, safe or repeatable was pulled forward into one
+step rather than discovered during it: the wire format got its version key, the three
+presumptuous conventions became configuration, and the two commands that stand a repository up —
+`doctor` and `init` — got built.
+
+- **The block is versioned, and `v: 1` is the first key.** It is a wire format written into other
+  people's issues, so the only free moment to add it is before any issue exists. A block claiming
+  a version this build does not know is refused *before its other keys are read*, and reported
+  alone: a newer writer may have changed what any other key means, so a partial read is a misread,
+  not a degradation. A missing `v` is an ordinary missing key, because nothing in the wild
+  predates it.
+- **The fence is derived from the config, not written next to it.** The old list named
+  `dispatch.toml`, a filename the config had not had since the rename, so the fence did not cover
+  its own config file — the one file whose unattended edit would let the pipeline rewrite its own
+  routing. It is now built from the settings it protects: both documented config locations, the
+  configured plans directory, and `.github/workflows/**`. Moving `paths.plans` moves the fence
+  with it, which is the property that makes the coupling worth having.
+- **`fnmatch`, not a shell glob.** `*` crosses `/`, so every pattern matches more paths than an
+  adopter probably intends. That errs toward fencing, and the only consequence of an
+  over-broad fence is a human looking at a PR.
+- **`.github/dispatchkit.toml` is the home; the repository root still works.** The config claims a
+  filename in somebody else's tree, and `.github/` is the directory already conceded to tooling. A
+  root config is still found, and is announced when it is used, because silently reading a
+  different file than the one someone edited is worse than a line of output.
+- **`set_project_field` fails with the option list in the message.** The silent version fell back
+  to `--text` for any value it could not find an option id for, which `gh` rejects with a message
+  about neither the field nor the value. It now raises `ProjectFieldError` — its own type because
+  it is a *configuration* failure, where the fix is `dispatchkit init`, not a retry.
+- **`doctor` is a pure function of a snapshot, so it is also the live tier's assertion set.** The
+  whole check set runs offline against synthetic diagnostics; pointed at a real repository it is
+  the same function over a real one. Two checks earn their asymmetry: an undeterminable token
+  scope passes (a workflow token has no scope line, and failing every CI run over that is a false
+  alarm), and a missing config passes (every setting has a default, so no config is a legitimate
+  choice — the check exists to say which file *would* be read).
+- **`init` never mutates a field it did not create, unless the board is empty.** GitHub's built-in
+  `Status` ships with `Todo`/`In Progress`/`Done`: right name, wrong options, and no CLI path to
+  add options to an existing single select. Fixing it means deleting the field, which deletes its
+  values — free on an empty board, destructive on a populated one. So the item count decides, and
+  a populated board gets a notice naming the `field-delete` command instead of an operation
+  nobody asked for. `gh project view`'s item count is read *fail-safe*: an absent count reads as
+  populated, so "unknown" can never license a delete.
+- **`init` is split at the token boundary, not at the dry-run boundary.** `--local` writes the
+  config, the workflow and the plans directory and touches no board, which is precisely the half
+  that works before `gh auth refresh -s project` has been run — the first thing a new adopter
+  hits. Ordering inside the board half is load-bearing once: a recreated field is deleted before
+  it is created, because two fields cannot share a name.
+- **The templates `init` writes are this repository's own files, pinned by a test.** The workflow
+  it hands an adopter is byte-identical to the one `tests/test_workflow.py` asserts the
+  permissions, cron offset and expression-injection safety of. Any other arrangement means the
+  file under test and the file shipped are two files.
+- **`doctor` and `init` are tested as one contract.** A test runs `init` against an in-memory
+  board and a temporary tree and then asserts `doctor` passes on the result. `init` creating
+  something `doctor` still complains about — or `doctor` demanding something `init` never
+  creates — is the failure that makes an on-ramp worse than no on-ramp.
+- **A separate `BoardApi` port, not more methods on `GitHubApi`.** Standing a board up and running
+  a scheduler pass are different jobs with different blast radii; the pass should not be handed a
+  client that can delete a field. `board.py` carries the contract and its port, above `resolve`
+  because the required `Status` options are generated from the `Status` enum — a new status
+  cannot be added without the board growing an option for it.
+- **Only what the API reports is checked.** `gh project field-list` cannot distinguish a text
+  field from a number field, so the field contract checks presence and, for single selects,
+  option coverage — a subset test, since somebody else's extra option on our field costs nothing.
+  Claiming to verify a field's kind would be a check that cannot fail.
+- **The root join has exactly one owner.** Two bugs found in review, both from the same shape.
+  `LocalFacts` is built from `--root`, so its paths are already absolute-or-rooted; `execute_tree`
+  joined `--root` on again, and a relative root wrote everything to `<root>/<root>/` while the
+  summary printed `<root>/` — reporting one thing and doing another, and never converging. Only
+  the absolute `tmp_path` roots in the tests hid it. The fix is that the plan's paths *are* the
+  paths written; `execute_tree` takes no root at all.
+- **A `gh` failure is `doctor`'s answer, not its crash.** `token_scopes` was written to survive a
+  logged-out `gh`, but `agent_available` and `fetch_board` go through `_run`, which raises. So
+  precisely the first-adopter cases the command exists to name — no `project` scope, wrong project
+  number, no board yet — produced a traceback. They now come back as a failing `board` check with
+  its remedy, alongside the local checks, and exit 2 rather than 1: the board was not read, so the
+  verdict is "could not be carried out", not "unhealthy".
+
+**The gap this leaves:** `doctor` still cannot see branch protection or the merge queue, which are
+D9's prerequisites; it will grow those checks when D9 needs them. And every new adapter path —
+`fetch_board`, `create_field`, `delete_field`, `token_scopes` — is, like the rest of `GhCli`,
+argv-checked but never executed. The live run is still the live run.
 
 ## First real plan
 

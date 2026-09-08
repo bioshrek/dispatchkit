@@ -70,6 +70,9 @@ type = "layers"
 layers = [
     "dispatchkit.cli",
     "dispatchkit.gh_cli",
+    "dispatchkit.init",
+    "dispatchkit.doctor",
+    "dispatchkit.board",
     "dispatchkit.tick",
     "dispatchkit.apply",
     "dispatchkit.resolve",

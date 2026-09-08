@@ -15,6 +15,12 @@ bodies are attacker-influencable:
 
 Rendering is deterministic: `apply` diffs bodies to decide whether to update,
 so an unstable renderer would rewrite every issue on every pass.
+
+The block is versioned. `v` is the first key, and a block claiming a version
+this build does not know is refused outright rather than read key by key — a
+newer writer may have changed what any other key *means*, so a partial read is
+a misread. The key costs one line now; retrofitting it once issues exist in
+other people's repositories costs a migration.
 """
 
 from __future__ import annotations
@@ -26,9 +32,25 @@ from dataclasses import dataclass
 from dispatchkit.errors import GraphError, GraphIssue
 from dispatchkit.model import CAPABILITIES, SLUG, Lane, Task, TaskId, Verify
 
+#: Wire-format version of the machine block. Bump only for a change an older
+#: reader would misread; additive keys an old reader must ignore are not
+#: expressible in this grammar, so in practice every change bumps it.
+BLOCK_VERSION = 1
+
 OPEN = "<!-- dispatchkit"
 CLOSE = "-->"
-KEYS = ("id", "plan", "milestone", "lane", "requires", "verify", "spend", "depends", "touches")
+KEYS = (
+    "v",
+    "id",
+    "plan",
+    "milestone",
+    "lane",
+    "requires",
+    "verify",
+    "spend",
+    "depends",
+    "touches",
+)
 
 _PLAIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
 _LINE = re.compile(r"^(?P<key>[a-z_]+):[ ](?P<value>.*)$")
@@ -47,10 +69,14 @@ class MachineBlock:
     spend: bool
     depends: tuple[TaskId, ...]
     touches: tuple[str, ...]
+    #: The wire-format version the block was written with. Defaulted so test
+    #: and fixture builders need not repeat it; parsing never defaults it.
+    version: int = BLOCK_VERSION
 
 
 def render_block(task: Task, *, plan: str) -> str:
     values = {
+        "v": str(BLOCK_VERSION),
         "id": _scalar(task.id),
         "plan": _scalar(plan),
         "milestone": _scalar(task.milestone),
@@ -87,16 +113,44 @@ def parse_block(body: str) -> MachineBlock:
     for key in KEYS:
         if key not in raw:
             issues.append(GraphIssue("missing-key", "block", f"missing key `{key}`"))
+
+    version = _read_version(raw.get("v"), issues)
     if issues:
         raise GraphError(issues)
 
-    block = _build(raw, issues)
+    block = _build(raw, version, issues)
     if issues:
         raise GraphError(issues)
     return block
 
 
-def _build(raw: dict[str, str], issues: list[GraphIssue]) -> MachineBlock:
+def _read_version(raw: str | None, issues: list[GraphIssue]) -> int:
+    """Read `v`, refusing a future version before any other key is trusted."""
+    if raw is None:
+        return BLOCK_VERSION  # already reported as a missing key
+    if not raw.isdigit() or int(raw) < 1:
+        issues.append(
+            GraphIssue("invalid-type", "block", f"`v` must be a version >= 1, got {raw!r}")
+        )
+        return BLOCK_VERSION
+    version = int(raw)
+    if version > BLOCK_VERSION:
+        # Reported alone, and raised here: a newer writer may have changed what
+        # any other key means, so reading on would be guessing.
+        raise GraphError(
+            [
+                GraphIssue(
+                    "block-version",
+                    "block",
+                    f"block is v{version}; this dispatchkit understands v{BLOCK_VERSION}. "
+                    "Upgrade dispatchkit rather than reading it with an older grammar",
+                )
+            ]
+        )
+    return version
+
+
+def _build(raw: dict[str, str], version: int, issues: list[GraphIssue]) -> MachineBlock:
     task_id = _slug(_read_scalar(raw["id"], "id", issues), "id", issues)
     plan = _slug(_read_scalar(raw["plan"], "plan", issues), "plan", issues)
     depends = tuple(
@@ -118,6 +172,7 @@ def _build(raw: dict[str, str], issues: list[GraphIssue]) -> MachineBlock:
         spend=_read_bool(raw["spend"], issues),
         depends=tuple(TaskId(dep) for dep in depends),
         touches=_read_list(raw["touches"], "touches", issues),
+        version=version,
     )
 
 

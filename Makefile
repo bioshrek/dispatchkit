@@ -1,4 +1,4 @@
-.PHONY: check test lint types imports validate resolve tick
+.PHONY: check test lint types imports doctor validate resolve tick
 
 # The whole gate, in the order that fails fastest.
 check: test lint types imports
@@ -14,6 +14,10 @@ types:
 
 imports:
 	uv run lint-imports
+
+# Can this repository run a pass at all? Offline without REPO/PROJECT.
+doctor:
+	uv run dispatchkit doctor $(if $(REPO),--repo $(REPO) --project $(PROJECT),)
 
 # Check a task graph before it is reviewed or applied. Exit 0 valid, 1 invalid,
 # 2 unreadable.

@@ -24,10 +24,25 @@ touches = ["src/app/adapters/**"]
 ```
 
 ```sh
+dispatchkit init     --repo o/n --project 3 --push    # board, labels, config, workflow
+dispatchkit doctor   --repo o/n --project 3           # scopes, agent, fields, labels
 dispatchkit validate docs/plans/refactor.tasks.toml   # shape, cycles, lints
 dispatchkit apply    docs/plans/refactor.tasks.toml --push --repo o/n --project 3
 dispatchkit tick     --plan refactor --push --repo o/n --project 3
 ```
+
+## Getting started
+
+`init` is idempotent and safe to re-run; it never overwrites a file that already exists. Its
+`--local` form writes the config, the workflow and the plans directory without touching a board,
+which is the half that works before `gh auth refresh -s project` has been run. `doctor` reports
+what is still missing and, for each failure, the command that fixes it — with no `--repo` it
+checks the working tree alone and never opens a socket.
+
+Settings live in `.github/dispatchkit.toml` (a root `dispatchkit.toml` is still read): the
+per-lane concurrency caps, the retry budget, where task graphs live, and the blast-radius fence —
+the paths auto-merge may never touch unattended, which defaults to the workflow, the config and
+the graph files, so the pipeline cannot rewrite its own rules while nobody is looking.
 
 ## What it actually does
 
@@ -54,9 +69,10 @@ keep it that way. The job that holds a token which can assign work runs no third
 
 ## Status
 
-Early. D1–D5 of the plan in [docs/design.md](docs/design.md) are implemented and covered offline;
-the first live end-to-end run has not happened yet. The local daemon (D6), retry/reclaim (D7),
-alerting (D8) and `verify: auto` merge (D9) are designed but unbuilt.
+Early. D1–D5.5 of the plan in [docs/design.md](docs/design.md) are implemented and covered
+offline; the first live end-to-end run has not happened yet. The local daemon (D6), retry/reclaim
+(D7), alerting (D8) and `verify: auto` merge (D9) are designed but unbuilt.
+[docs/RESUME.md](docs/RESUME.md) has the current state and the next actions.
 
 ## Development
 

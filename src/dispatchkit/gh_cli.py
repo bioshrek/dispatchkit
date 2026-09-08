@@ -24,6 +24,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from dispatchkit.board import SINGLE_SELECT, BoardSnapshot, FieldSpec
+from dispatchkit.doctor import parse_labels, parse_project, parse_token_scopes
 from dispatchkit.github import IssueState, RepoState
 
 # The coding agent is a bot actor, so it cannot be assigned with
@@ -148,6 +150,14 @@ def _parse_fields(item: dict[str, Any]) -> dict[str, str]:
     return fields
 
 
+class ProjectFieldError(RuntimeError):
+    """A board field or single-select option the project does not have.
+
+    Its own type because it is a *configuration* failure, not an API failure:
+    the fix is to run `dispatchkit init`, not to retry.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class FieldCatalog:
     """Project (v2) field ids, and option ids for single-select fields."""
@@ -157,6 +167,33 @@ class FieldCatalog:
 
     def option_id(self, field_name: str, value: str) -> str | None:
         return self.options.get(field_name, {}).get(value)
+
+    def resolve(self, field_name: str, value: str) -> tuple[str, str | None]:
+        """`(field id, option id or None)`, or raise naming what is missing.
+
+        The silent version of this returned `None` for the option id and let
+        the caller send `--text`, which `gh` rejects with a message about
+        neither the field nor the value.
+        """
+        if field_name not in self.ids:
+            raise ProjectFieldError(
+                f"the project has no `{field_name}` field "
+                f"(it has: {_names(self.ids)}); run `dispatchkit init` to create it"
+            )
+        if field_name not in self.options:
+            return self.ids[field_name], None  # a text or number field
+        option = self.options[field_name].get(value)
+        if option is None:
+            raise ProjectFieldError(
+                f"the `{field_name}` field has no `{value}` option "
+                f"(it has: {_names(self.options[field_name])}); "
+                "run `dispatchkit init` to see what the board is missing"
+            )
+        return self.ids[field_name], option
+
+
+def _names(mapping: dict[str, str]) -> str:
+    return ", ".join(f"`{name}`" for name in sorted(mapping)) or "nothing"
 
 
 def parse_field_catalog(payload: dict[str, Any]) -> FieldCatalog:
@@ -303,6 +340,67 @@ def item_edit_command(
     return command + ["--text", value]
 
 
+def field_list_command(project: int, owner: str) -> list[str]:
+    return [
+        "gh",
+        "project",
+        "field-list",
+        str(project),
+        "--owner",
+        owner,
+        "--format",
+        "json",
+    ]
+
+
+def project_view_command(project: int, owner: str) -> list[str]:
+    return ["gh", "project", "view", str(project), "--owner", owner, "--format", "json"]
+
+
+def field_create_command(project: int, owner: str, spec: FieldSpec) -> list[str]:
+    command = [
+        "gh",
+        "project",
+        "field-create",
+        str(project),
+        "--owner",
+        owner,
+        "--name",
+        spec.name,
+        "--data-type",
+        spec.data_type,
+    ]
+    if spec.data_type == SINGLE_SELECT:
+        # One argument, comma-joined: options carry spaces and hyphens, and
+        # `gh` rejects the flag entirely on a field that is not a single select.
+        command += ["--single-select-options", ",".join(spec.options)]
+    return command
+
+
+def field_delete_command(field_id: str) -> list[str]:
+    return ["gh", "project", "field-delete", "--id", field_id]
+
+
+def label_list_command(repo: str) -> list[str]:
+    return ["gh", "label", "list", "--repo", repo, "--json", "name", "--limit", "200"]
+
+
+def auth_status_command() -> list[str]:
+    return ["gh", "auth", "status"]
+
+
+def parse_item_count(payload: dict[str, Any]) -> int:
+    """How many items the board holds; unknown reads as populated.
+
+    The count is what licenses deleting and recreating a mis-optioned field,
+    so an absent count must never read as "empty and therefore safe".
+    """
+    items = payload.get("items")
+    if isinstance(items, dict) and isinstance(items.get("totalCount"), int):
+        return int(items["totalCount"])
+    return 1
+
+
 @dataclass
 class GhCli:
     """Production adapter. Unverified until D5 runs it against a scratch repo."""
@@ -349,15 +447,14 @@ class GhCli:
         return str(payload["id"])
 
     def set_project_field(self, *, item_id: str, field_name: str, value: str) -> None:
-        catalog = self._field_catalog()
-        field_id = catalog.ids[field_name]
+        field_id, option_id = self._field_catalog().resolve(field_name, value)
         _run(
             item_edit_command(
                 project_id=self._project_node_id(),
                 item_id=item_id,
                 field_id=field_id,
                 value=value,
-                option_id=catalog.option_id(field_name, value),
+                option_id=option_id,
             )
         )
 
@@ -377,6 +474,38 @@ class GhCli:
             return
         _run(edit_labels_command(self.repo, number, add, remove))
 
+    # --- the board and diagnostics ports (D5.5) ----------------------------
+
+    def fetch_board(self) -> BoardSnapshot:
+        """The project's fields and item count, plus the repository's labels."""
+        fields = json.loads(_run(field_list_command(self.project, self.owner)))
+        view = json.loads(_run(project_view_command(self.project, self.owner)))
+        labels = parse_labels(json.loads(_run(label_list_command(self.repo))))
+        return parse_project(fields, items=parse_item_count(view), labels=labels)
+
+    def create_field(self, spec: FieldSpec) -> None:
+        _run(field_create_command(self.project, self.owner, spec))
+        self._catalog = None  # the cached ids are now a pass out of date
+
+    def delete_field(self, *, field_id: str) -> None:
+        _run(field_delete_command(field_id))
+        self._catalog = None
+
+    def token_scopes(self) -> tuple[str, ...] | None:
+        """`None` when the token does not report them, as a workflow token does not."""
+        completed = subprocess.run(  # noqa: S603 - argv list, never a shell
+            auth_status_command(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        # `gh auth status` prints to stderr and exits non-zero when logged out,
+        # which is a diagnosis rather than a crash.
+        return parse_token_scopes(completed.stdout + completed.stderr)
+
+    def agent_available(self) -> bool:
+        return self._agent_actor() is not None
+
     def _agent_actor(self) -> str | None:
         if self._actor is None:
             owner, name = self.repo.split("/", 1)
@@ -385,39 +514,13 @@ class GhCli:
 
     def _field_catalog(self) -> FieldCatalog:
         if self._catalog is None:
-            payload = json.loads(
-                _run(
-                    [
-                        "gh",
-                        "project",
-                        "field-list",
-                        str(self.project),
-                        "--owner",
-                        self.owner,
-                        "--format",
-                        "json",
-                    ]
-                )
-            )
+            payload = json.loads(_run(field_list_command(self.project, self.owner)))
             self._catalog = parse_field_catalog(payload)
         return self._catalog
 
     def _project_node_id(self) -> str:
         if self._project_id is None:
-            payload = json.loads(
-                _run(
-                    [
-                        "gh",
-                        "project",
-                        "view",
-                        str(self.project),
-                        "--owner",
-                        self.owner,
-                        "--format",
-                        "json",
-                    ]
-                )
-            )
+            payload = json.loads(_run(project_view_command(self.project, self.owner)))
             self._project_id = str(payload["id"])
         return self._project_id
 

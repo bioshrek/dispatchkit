@@ -7,7 +7,7 @@
             "id": "I_kwDOports",
             "number": 12,
             "title": "ports",
-            "body": "ports\n\n## Acceptance\n\n```sh\ntrue\n```\n\n_Milestone M._\n\n<!-- dispatchkit\nid: ports\nplan: demo\nmilestone: M\nlane: cloud\nrequires: []\nverify: auto\nspend: false\ndepends: []\ntouches: []\n-->\n",
+            "body": "ports\n\n## Acceptance\n\n```sh\ntrue\n```\n\n_Milestone M._\n\n<!-- dispatchkit\nv: 1\nid: ports\nplan: demo\nmilestone: M\nlane: cloud\nrequires: []\nverify: auto\nspend: false\ndepends: []\ntouches: []\n-->\n",
             "state": "OPEN",
             "labels": {
               "nodes": [
@@ -85,7 +85,7 @@
             "id": "I_kwDOadapter",
             "number": 13,
             "title": "Adapter (old title)",
-            "body": "adapter\n\n## Acceptance\n\n```sh\ntrue\n```\n\n_Milestone M._\n\n<!-- dispatchkit\nid: adapter\nplan: demo\nmilestone: M\nlane: local\nrequires: [gpu]\nverify: human\nspend: false\ndepends: [ports]\ntouches: []\n-->\n",
+            "body": "adapter\n\n## Acceptance\n\n```sh\ntrue\n```\n\n_Milestone M._\n\n<!-- dispatchkit\nv: 1\nid: adapter\nplan: demo\nmilestone: M\nlane: local\nrequires: [gpu]\nverify: human\nspend: false\ndepends: [ports]\ntouches: []\n-->\n",
             "state": "OPEN",
             "labels": {
               "nodes": [

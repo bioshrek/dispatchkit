@@ -1,20 +1,22 @@
-"""`dispatch` — validate, apply and run task graphs (D1–D5).
+"""`dispatchkit` — validate, apply and run task graphs (D1–D5.5).
 
+    uv run dispatchkit doctor   [--repo o/n --project N]
+    uv run dispatchkit init     [--local | --push --repo o/n --project N]
     uv run dispatchkit validate docs/plans/<plan>.tasks.toml
     uv run dispatchkit apply    docs/plans/<plan>.tasks.toml [--push]
     uv run dispatchkit resolve  --state state.json --plan <plan>
     uv run dispatchkit tick     --plan <plan> [--repo o/n --project N --push]
 
-Exit codes: 0 success, 1 the graph is invalid (or `--strict` lints tripped),
-2 the command could not be carried out (unreadable file, missing routing
-options). Keeping "couldn't run it" distinct from "ran it and the graph is
-wrong" matters once this is called from a workflow, where the two want
-different responses.
+Exit codes: 0 success, 1 the graph is invalid (or `--strict` lints tripped, or
+`doctor` found something wrong), 2 the command could not be carried out
+(unreadable file, missing routing options). Keeping "couldn't run it" distinct
+from "ran it and the answer is no" matters once this is called from a
+workflow, where the two want different responses.
 
-`apply` is a dry run unless `--push` is given, and on a dry run no client is
-constructed at all — reconciling a graph into a real tracker is not something
-to do by accident. `resolve` is read-only in every mode: it reports what the
-scheduler sees and what it would do, and nothing else.
+`apply`, `tick` and `init` are dry runs unless `--push` is given, and on a dry
+run no client is constructed at all — reconciling a graph into a real tracker
+is not something to do by accident. `resolve` and `doctor` are read-only in
+every mode.
 """
 
 from __future__ import annotations
@@ -26,16 +28,29 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from dispatchkit.apply import execute_plan, plan_apply
-from dispatchkit.config import DEFAULT_PATH, load_config
+from dispatchkit.board import BoardSnapshot
+from dispatchkit.config import SchedulerConfig, find_config, load_config
+from dispatchkit.doctor import (
+    Check,
+    Diagnostics,
+    LocalFacts,
+    check_local,
+    check_remote,
+    healthy,
+    summarise,
+)
 from dispatchkit.errors import GraphError, GraphIssue
 from dispatchkit.gh_cli import GhCli, parse_state
 from dispatchkit.github import RepoState
+from dispatchkit.init import WORKFLOW_PATH, execute_init, execute_tree, plan_init
+from dispatchkit.init import summarise as summarise_init
 from dispatchkit.lints import lint_graph
 from dispatchkit.metrics import plan_shape
 from dispatchkit.model import TaskGraph, TaskId
 from dispatchkit.parse import parse_graph
 from dispatchkit.resolve import admit, build_items, reconcile_ops, resolve
-from dispatchkit.tick import execute_tick, plan_tick, summarise
+from dispatchkit.tick import execute_tick, plan_tick
+from dispatchkit.tick import summarise as summarise_tick
 from dispatchkit.validate import validate_graph
 
 EXIT_OK = 0
@@ -49,7 +64,7 @@ def plan_name(path: Path) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="dispatch", description=__doc__)
+    parser = argparse.ArgumentParser(prog="dispatchkit", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     validate = sub.add_parser("validate", help="check a task graph file")
@@ -81,8 +96,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     resolve_cmd.add_argument(
         "--config",
         type=Path,
-        default=DEFAULT_PATH,
-        help="scheduler config (default: dispatchkit.toml)",
+        default=None,
+        help="scheduler config (default: .github/dispatchkit.toml, then dispatchkit.toml)",
     )
 
     tick_cmd = sub.add_parser("tick", help="run one scheduler pass (dispatch included)")
@@ -96,11 +111,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     tick_cmd.add_argument(
         "--config",
         type=Path,
-        default=DEFAULT_PATH,
-        help="scheduler config (default: dispatchkit.toml)",
+        default=None,
+        help="scheduler config (default: .github/dispatchkit.toml, then dispatchkit.toml)",
     )
 
+    doctor_cmd = sub.add_parser(
+        "doctor", help="check whether this repository can run a scheduler pass"
+    )
+    doctor_cmd.add_argument("--root", type=Path, default=Path(), help="repository root")
+    doctor_cmd.add_argument("--repo", help="owner/name; also checks the board when given")
+    doctor_cmd.add_argument("--project", type=int, help="Project (v2) number")
+    doctor_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
+
+    init_cmd = sub.add_parser("init", help="create the board, labels, config and workflow")
+    init_cmd.add_argument("--root", type=Path, default=Path(), help="repository root")
+    init_cmd.add_argument("--repo", help="owner/name; required with --push")
+    init_cmd.add_argument("--project", type=int, help="Project (v2) number; required with --push")
+    init_cmd.add_argument(
+        "--push", action="store_true", help="create the board and labels too (needs a token)"
+    )
+    init_cmd.add_argument(
+        "--local",
+        action="store_true",
+        help="write the config, workflow and plans directory only — no token needed",
+    )
+    init_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
+
     args = parser.parse_args(argv)
+    if args.command == "doctor":
+        return _doctor(args)
+    if args.command == "init":
+        return _init(args)
     if args.command == "tick":
         return _tick(args)
     if args.command == "apply":
@@ -158,7 +199,7 @@ def _apply(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     if not args.repo or args.project is None:
-        print("dispatch: --push requires --repo owner/name and --project N", file=sys.stderr)
+        print("dispatchkit: --push requires --repo owner/name and --project N", file=sys.stderr)
         return EXIT_UNREADABLE
 
     api = GhCli(repo=args.repo, project=args.project)
@@ -179,10 +220,9 @@ def _resolve(args: argparse.Namespace) -> int:
     if isinstance(state, int):
         return state
 
-    try:
-        config = load_config(args.config)
-    except GraphError as exc:
-        return _report(args.config, list(exc.issues))
+    config = _config(args)
+    if isinstance(config, int):
+        return config
 
     items, notices = build_items(state, plan=args.plan)
     for notice in notices:
@@ -210,14 +250,13 @@ def _resolve(args: argparse.Namespace) -> int:
 
 
 def _tick(args: argparse.Namespace) -> int:
-    try:
-        config = load_config(args.config)
-    except GraphError as exc:
-        return _report(args.config, list(exc.issues))
+    config = _config(args)
+    if isinstance(config, int):
+        return config
 
     if args.push:
         if not args.repo or args.project is None:
-            print("dispatch: --push requires --repo owner/name and --project N", file=sys.stderr)
+            print("dispatchkit: --push requires --repo owner/name and --project N", file=sys.stderr)
             return EXIT_UNREADABLE
         api = GhCli(repo=args.repo, project=args.project)
         state = api.fetch_state(plan=args.plan)
@@ -227,11 +266,11 @@ def _tick(args: argparse.Namespace) -> int:
             return loaded
         api, state = None, loaded
     else:
-        print("dispatch: a dry run needs --state; use --push to run for real", file=sys.stderr)
+        print("dispatchkit: a dry run needs --state; use --push to run for real", file=sys.stderr)
         return EXIT_UNREADABLE
 
     plan = plan_tick(state, plan=args.plan, config=config)
-    for line in summarise(plan):
+    for line in summarise_tick(plan):
         print(line)
 
     if api is None:
@@ -243,11 +282,136 @@ def _tick(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _config(args: argparse.Namespace) -> SchedulerConfig | int:
+    return _load_config(args.config if args.config is not None else find_config())
+
+
+def _load_config(path: Path) -> SchedulerConfig | int:
+    """Load the scheduler config, or return the exit code the caller should use."""
+    if path.name == "dispatchkit.toml" and path.parent.name != ".github" and path.exists():
+        print(f"NOTE the config is read from {path}; `.github/{path.name}` is its home")
+    try:
+        return load_config(path)
+    except GraphError as exc:
+        return _report(path, list(exc.issues))
+
+
+def _facts(args: argparse.Namespace) -> LocalFacts | int:
+    """What the working tree provides, read once for `doctor` and `init`."""
+    root: Path = args.root
+    config_path = args.config if args.config is not None else find_config(root)
+    config = _load_config(config_path)
+    if isinstance(config, int):
+        return config
+
+    workflow = root / WORKFLOW_PATH
+    plans = root / config.plans
+    return LocalFacts(
+        config_path=config_path,
+        config_exists=config_path.exists(),
+        workflow_path=workflow,
+        workflow_exists=workflow.exists(),
+        plans=plans,
+        plans_exists=plans.is_dir(),
+    )
+
+
+def _doctor(args: argparse.Namespace) -> int:
+    facts = _facts(args)
+    if isinstance(facts, int):
+        return facts
+
+    checks = check_local(facts)
+    if args.repo and args.project is not None:
+        api = GhCli(repo=args.repo, project=args.project)
+        try:
+            diagnostics = Diagnostics(
+                scopes=api.token_scopes(),
+                agent_available=api.agent_available(),
+                board=api.fetch_board(),
+            )
+        except RuntimeError as exc:
+            # Every failure `doctor` exists to name arrives as a non-zero `gh`
+            # exit: no `project` scope, wrong number, no board yet, logged
+            # out. Reporting it is the answer, so it is a failed check and
+            # not a traceback — but the board is unread, so the verdict is
+            # "could not be carried out" rather than "unhealthy".
+            checks = (_unreachable(exc),) + checks
+            for line in summarise(checks):
+                print(line)
+            return EXIT_UNREADABLE
+        checks = check_remote(diagnostics) + checks
+    else:
+        print("NOTE the board was not inspected; pass --repo owner/name --project N to check it")
+
+    for line in summarise(checks):
+        print(line)
+    return EXIT_OK if healthy(checks) else EXIT_INVALID
+
+
+def _unreachable(exc: RuntimeError) -> Check:
+    return Check(
+        name="board",
+        ok=False,
+        detail=str(exc),
+        remedy=(
+            "check --repo and --project name a board that exists, and that the token "
+            "carries the `project` scope: `gh auth refresh -s project`"
+        ),
+    )
+
+
+def _init(args: argparse.Namespace) -> int:
+    facts = _facts(args)
+    if isinstance(facts, int):
+        return facts
+
+    if args.push and (not args.repo or args.project is None):
+        print("dispatchkit: --push requires --repo owner/name and --project N", file=sys.stderr)
+        return EXIT_UNREADABLE
+
+    api = GhCli(repo=args.repo, project=args.project) if args.push else None
+    try:
+        board = api.fetch_board() if api is not None else BoardSnapshot()
+    except RuntimeError as exc:
+        print(f"dispatchkit: cannot read the board: {exc}", file=sys.stderr)
+        return EXIT_UNREADABLE
+    plan = plan_init(board, facts)
+
+    for line in summarise_init(plan):
+        print(line)
+
+    if api is not None:
+        try:
+            result = execute_init(plan, api)
+        except RuntimeError as exc:
+            # Stopping part-way is safe to report plainly: every operation is
+            # idempotent, so the remedy is always to re-run.
+            print(f"dispatchkit: init stopped: {exc}; re-run once fixed", file=sys.stderr)
+            return EXIT_UNREADABLE
+        print(
+            f"init: {result.fields} field(s), {result.labels} label(s), "
+            f"{result.files} file(s), {result.directories} directory(ies)"
+        )
+        return EXIT_OK
+
+    if args.local:
+        files, directories = execute_tree(plan)
+        print(f"init: {files} file(s), {directories} directory(ies); the board was not touched")
+        return EXIT_OK
+
+    print(
+        f"dry run against an empty board: {len(plan.operations)} operation(s). "
+        "Re-run with --push --repo owner/name --project N, or --local for the files alone"
+    )
+    return EXIT_OK
+
+
 def _load_state(path: Path) -> RepoState | int:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"dispatch: cannot read {path}: {exc}", file=sys.stderr)
+        print(f"dispatchkit: cannot read {path}: {exc}", file=sys.stderr)
         return EXIT_UNREADABLE
     return parse_state(payload)
 
@@ -257,10 +421,10 @@ def _load(path: Path) -> TaskGraph | int:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        print(f"dispatch: graph file not found: {path}", file=sys.stderr)
+        print(f"dispatchkit: graph file not found: {path}", file=sys.stderr)
         return EXIT_UNREADABLE
     except OSError as exc:
-        print(f"dispatch: cannot read {path}: {exc}", file=sys.stderr)
+        print(f"dispatchkit: cannot read {path}: {exc}", file=sys.stderr)
         return EXIT_UNREADABLE
 
     try:
@@ -283,7 +447,7 @@ def _read_specs(graph: TaskGraph, path: Path) -> dict[TaskId, str] | int:
         try:
             specs[task.id] = (path.parent / task.body_file).read_text(encoding="utf-8")
         except OSError as exc:
-            print(f"dispatch: cannot read body_file for `{task.id}`: {exc}", file=sys.stderr)
+            print(f"dispatchkit: cannot read body_file for `{task.id}`: {exc}", file=sys.stderr)
             return EXIT_UNREADABLE
     return specs
 
