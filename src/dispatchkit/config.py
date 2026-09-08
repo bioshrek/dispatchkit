@@ -140,9 +140,7 @@ def _read_caps(
     return caps
 
 
-def _read_budget(
-    document: Mapping[str, object], path: Path, issues: list[GraphIssue]
-) -> int:
+def _read_budget(document: Mapping[str, object], path: Path, issues: list[GraphIssue]) -> int:
     retry = _table(document, "retry")
     issues.extend(
         GraphIssue("unknown-key", str(path), f"unknown `retry` key `{key}`")
@@ -155,9 +153,7 @@ def _read_budget(
     return budget
 
 
-def _read_plans(
-    document: Mapping[str, object], path: Path, issues: list[GraphIssue]
-) -> Path:
+def _read_plans(document: Mapping[str, object], path: Path, issues: list[GraphIssue]) -> Path:
     paths = _table(document, "paths")
     issues.extend(
         GraphIssue("unknown-key", str(path), f"unknown `paths` key `{key}`")

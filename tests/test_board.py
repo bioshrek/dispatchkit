@@ -117,7 +117,7 @@ class TestMismatch:
             labels=snapshot.labels,
             items=0,
         )
-        (spec, existing), = mismatched_fields(replaced)
+        ((spec, existing),) = mismatched_fields(replaced)
         assert spec.name == FIELD_STATUS
         assert "Todo" in existing.options
 

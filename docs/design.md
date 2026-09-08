@@ -1311,6 +1311,56 @@ of its task's `touches`, and dispatchkit already reads both. It is the next thin
 would have prevented this conflict rather than merely reporting it afterwards.
 
 
+### D9.1 — the two guardrails that make `verify: auto` mean something
+
+D9 shipped the merge with one of its three guardrails. The fence was there; `subset` and `drift`
+were not, and both turned out to have live evidence waiting for them.
+
+**Acceptance must be a subset of CI.** `merge_ops` merges on green check suites, and nothing
+established that those suites run the task's own `acceptance`. On a repository whose CI does not
+cover it, "green" means "something unrelated passed" — and dispatchkit would have merged on that.
+The validator now refuses `verify = "auto"` unless every `&&`-clause of `acceptance` is covered by
+a command CI runs.
+
+Pointed at the live sandbox it failed on its first run, which is the point:
+
+```
+acceptance-not-in-ci: [document-flags] `verify = "auto"` merges on green CI, but not run by CI:
+  `grep -q -- '--top' README.md`; `grep -q -- '--stopwords' README.md`; ...
+```
+
+The graph's own comment had said `auto` was safe "because the acceptance is a grep: there is
+nothing here for a human to judge". That reasoning was right about *judgment* and wrong about *who
+runs the grep* — nobody did. The remedy is the general lesson: **an acceptance CI cannot run is a
+sign the acceptance is not a test.** `document-flags` now asserts the README's contents from
+`tests/test_readme.py`, so the check lives in the pipeline that decides the merge.
+
+Two details are load-bearing. Coverage is *prefix*-based, so a task may narrow what CI runs
+(`uv run pytest -q` covers `uv run pytest -q -k stopword`) but never widen it; that is a
+conservative approximation, and it is wrong in the safe direction, since its failure mode is
+refusing a task CI does cover. And only workflows that trigger on `pull_request` count —
+otherwise the hole reappears in miniature, with a cron-only workflow's `run:` steps satisfying a
+rule about checks that never appear on the pull request. Both are scanned off the YAML text rather
+than parsed, because `src/dispatchkit` is pure standard library and `pyyaml` is dev-only.
+
+**Scope drift.** `merge_ops` now refuses a pull request whose files are not all inside its task's
+declared `touches`. The evidence is the collision from the D9 live run: `stopwords` declared
+`count.py` and `test_count.py` and its pull request edited `cli.py` and `test_cli.py`. The
+concurrency exclusion reasons about *declared* scope, so it had nothing to go on, and `stopwords`
+ran alongside `top-n` — which was editing `cli.py` — until they conflicted and a human untangled
+them.
+
+Checking the rest of the graph afterwards sharpened the point: `encoding-fallback` declared
+exactly the two files its pull request touched, and `stopwords` had drifted into *those same
+files*. So one agent's undeclared edit defeated two separate exclusions at once. Declared scope is
+only as good as the declaration, and this is the check that makes the declaration binding.
+
+An empty `touches` refuses to merge. It reads as "conflicts with nothing" for the concurrency
+exclusion, which is the right permissive answer to a scheduling question; here it is an
+unanswerable question about whether an agent stayed where it said it would, and the answer to
+those is no.
+
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once

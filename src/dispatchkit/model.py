@@ -261,7 +261,5 @@ class TaskGraph:
 
         if len(order) != len(self.tasks):
             cycle = self.find_cycle()
-            raise GraphError(
-                [GraphIssue("cycle", self.plan, " -> ".join(cycle) or "cyclic graph")]
-            )
+            raise GraphError([GraphIssue("cycle", self.plan, " -> ".join(cycle) or "cyclic graph")])
         return tuple(order)

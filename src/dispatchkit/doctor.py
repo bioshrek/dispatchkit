@@ -156,7 +156,7 @@ def _agent(available: bool) -> Check:
             False,
             "the coding agent is not among this repository's assignable actors",
             "enable the GitHub coding agent, or route these tasks to the local lane "
-            "with `lane = \"local\"`",
+            'with `lane = "local"`',
         )
     return Check("coding-agent", True, "the coding agent can be assigned")
 
@@ -286,9 +286,7 @@ def _inputs(diagnostics: Diagnostics) -> Check:
             "secret's value, so whether the token is accepted is only learnt "
             "from a pass",
         )
-    remedy = [
-        f"gh variable set {name}" for name in REQUIRED_VARIABLES if name in missing
-    ]
+    remedy = [f"gh variable set {name}" for name in REQUIRED_VARIABLES if name in missing]
     # Never `gh secret set NAME BODY`: a token on a command line lands in the
     # shell history. `gh` prompts for the value when it is not given one.
     remedy += [f"gh secret set {name}" for name in REQUIRED_SECRETS if name in missing]
@@ -365,9 +363,7 @@ def parse_labels(payload: Sequence[dict[str, Any]]) -> tuple[str, ...]:
     return tuple(str(entry["name"]) for entry in payload)
 
 
-def parse_project(
-    fields: dict[str, Any], *, items: int, labels: Sequence[str]
-) -> BoardSnapshot:
+def parse_project(fields: dict[str, Any], *, items: int, labels: Sequence[str]) -> BoardSnapshot:
     """`gh project field-list` plus the item count and the repository's labels."""
     return BoardSnapshot(
         fields=tuple(

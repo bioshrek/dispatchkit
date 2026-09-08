@@ -40,8 +40,7 @@ pytestmark = pytest.mark.unit
 def healthy_board() -> BoardSnapshot:
     return BoardSnapshot(
         fields=tuple(
-            ExistingField(spec.name, f"PVTF_{spec.name}", spec.options)
-            for spec in REQUIRED_FIELDS
+            ExistingField(spec.name, f"PVTF_{spec.name}", spec.options) for spec in REQUIRED_FIELDS
         ),
         labels=REQUIRED_LABELS,
         items=0,
@@ -132,9 +131,7 @@ class TestToken:
     def test_scopes_that_cannot_be_determined_are_reported_rather_than_assumed(self) -> None:
         # A workflow token has no `gh auth status` scope line at all. Claiming
         # it passed would be a lie; claiming it failed would be a false alarm.
-        unknown = next(
-            c for c in check(healthy(scopes=None), local()) if c.name == "token-scopes"
-        )
+        unknown = next(c for c in check(healthy(scopes=None), local()) if c.name == "token-scopes")
         assert unknown.ok is True
         assert "could not" in unknown.detail.lower()
 

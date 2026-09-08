@@ -118,9 +118,7 @@ def plan_apply(
 
         merged, stale = _merge_labels(issue.labels, labels)
         if (issue.title, issue.body, set(issue.labels)) != (task.title, body, set(merged)):
-            operations.append(
-                UpdateIssue(task.id, issue.number, task.title, body, merged, stale)
-            )
+            operations.append(UpdateIssue(task.id, issue.number, task.title, body, merged, stale))
 
         if issue.project_item_id is None:
             operations.append(AddProjectItem(task.id, issue.number))
@@ -171,9 +169,7 @@ def execute_plan(plan: ApplyPlan, api: GitHubApi) -> ApplyResult:
                 updated += 1
             case AddProjectItem():
                 resolved = (
-                    operation.number
-                    if operation.number is not None
-                    else numbers[operation.task_id]
+                    operation.number if operation.number is not None else numbers[operation.task_id]
                 )
                 items[operation.task_id] = api.add_project_item(issue_number=resolved)
                 added += 1

@@ -145,18 +145,21 @@ class TestParseCheckSuites:
         return parse_state(self._with_suites(*suites)).issues[1].open_prs[0].checks
 
     def test_a_run_awaiting_approval_is_blocked(self) -> None:
-        assert self._checks(
-            {"status": "COMPLETED", "conclusion": "ACTION_REQUIRED"}
-        ) is Checks.BLOCKED
+        assert (
+            self._checks({"status": "COMPLETED", "conclusion": "ACTION_REQUIRED"}) is Checks.BLOCKED
+        )
 
     def test_a_green_suite_is_passing(self) -> None:
         assert self._checks({"status": "COMPLETED", "conclusion": "SUCCESS"}) is Checks.PASSING
 
     def test_a_skipped_or_neutral_suite_does_not_count_against_the_pr(self) -> None:
-        assert self._checks(
-            {"status": "COMPLETED", "conclusion": "SKIPPED"},
-            {"status": "COMPLETED", "conclusion": "NEUTRAL"},
-        ) is Checks.PASSING
+        assert (
+            self._checks(
+                {"status": "COMPLETED", "conclusion": "SKIPPED"},
+                {"status": "COMPLETED", "conclusion": "NEUTRAL"},
+            )
+            is Checks.PASSING
+        )
 
     @pytest.mark.parametrize(
         "conclusion", ["FAILURE", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "STALE"]
@@ -169,10 +172,13 @@ class TestParseCheckSuites:
         assert self._checks({"status": status, "conclusion": None}) is Checks.PENDING
 
     def test_one_blocked_suite_stalls_a_pr_whose_other_suites_are_green(self) -> None:
-        assert self._checks(
-            {"status": "COMPLETED", "conclusion": "SUCCESS"},
-            {"status": "COMPLETED", "conclusion": "ACTION_REQUIRED"},
-        ) is Checks.BLOCKED
+        assert (
+            self._checks(
+                {"status": "COMPLETED", "conclusion": "SUCCESS"},
+                {"status": "COMPLETED", "conclusion": "ACTION_REQUIRED"},
+            )
+            is Checks.BLOCKED
+        )
 
     def test_an_unknown_conclusion_is_not_treated_as_success(self) -> None:
         # GitHub adds enum members; guessing green would auto-merge on a
@@ -430,9 +436,7 @@ class TestAgentAssignment:
     def test_ids_are_never_interpolated_into_the_query_text(self) -> None:
         # They arrive as `-F` variables, so a hostile id cannot rewrite the
         # mutation body.
-        query = next(
-            part for part in assign_command("I_1", "BOT_9") if part.startswith("query=")
-        )
+        query = next(part for part in assign_command("I_1", "BOT_9") if part.startswith("query="))
         assert "I_1" not in query and "BOT_9" not in query
 
 
@@ -585,11 +589,7 @@ class TestParsePullRequestFiles:
     @staticmethod
     def _pr(files: object) -> PullRequest:
         node = {
-            "timelineItems": {
-                "nodes": [
-                    {"source": {"number": 7, "state": "OPEN", "files": files}}
-                ]
-            }
+            "timelineItems": {"nodes": [{"source": {"number": 7, "state": "OPEN", "files": files}}]}
         }
         return _parse_open_prs(node)[0]
 

@@ -89,9 +89,7 @@ class TestEconomicFloor:
     def test_threshold_follows_the_configured_overhead(self) -> None:
         g = graph(task("a", estimate_minutes=20), task("b", estimate_minutes=90))
         config = LintConfig(overhead_minutes=30)  # floor becomes 90 minutes
-        assert [i.where for i in lint_graph(g, config) if i.code == "under-economic-floor"] == [
-            "a"
-        ]
+        assert [i.where for i in lint_graph(g, config) if i.code == "under-economic-floor"] == ["a"]
 
     def test_missing_estimates_are_silent(self) -> None:
         # Where estimates come from is an open question; absent one, the lint

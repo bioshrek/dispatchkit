@@ -81,9 +81,7 @@ class TestDoctorOffline:
         assert main(["doctor", "--root", str(tmp_path)]) == 1
         assert "graphs" in capsys.readouterr().out
 
-    def test_a_broken_config_is_reported_as_unusable_not_as_unhealthy(
-        self, tmp_path: Path
-    ) -> None:
+    def test_a_broken_config_is_reported_as_unusable_not_as_unhealthy(self, tmp_path: Path) -> None:
         tree(tmp_path)
         (tmp_path / ".github" / "dispatchkit.toml").write_text("caps = [\n", encoding="utf-8")
         assert main(["doctor", "--root", str(tmp_path)]) == 1
@@ -177,7 +175,7 @@ class TestBoardUnreachable:
             return None
 
         def workflow_inputs(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
-            raise RuntimeError('gh api failed: project not found')
+            raise RuntimeError("gh api failed: project not found")
 
         def agent_available(self) -> bool:
             raise RuntimeError("gh api failed: project not found")
@@ -205,9 +203,7 @@ class TestBoardUnreachable:
         tree(tmp_path)
         monkeypatch.setattr("dispatchkit.cli.GhCli", self.Unreachable)
 
-        code = main(
-            ["init", "--root", str(tmp_path), "--push", "--repo", "o/n", "--project", "1"]
-        )
+        code = main(["init", "--root", str(tmp_path), "--push", "--repo", "o/n", "--project", "1"])
 
         assert code == 2
         assert "project not found" in capsys.readouterr().err

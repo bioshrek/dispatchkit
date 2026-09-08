@@ -45,10 +45,7 @@ def singleton() -> TaskGraph:
 def chain(length: int = 4) -> TaskGraph:
     names = [f"t{i}" for i in range(length)]
     return graph(
-        *(
-            task(name, depends=() if i == 0 else (names[i - 1],))
-            for i, name in enumerate(names)
-        )
+        *(task(name, depends=() if i == 0 else (names[i - 1],)) for i, name in enumerate(names))
     )
 
 

@@ -134,9 +134,7 @@ def _parse_issue(node: dict[str, Any]) -> IssueState:
         closed=node["state"] == "CLOSED",
         project_item_id=item["id"] if item else None,
         fields=_parse_fields(item) if item else {},
-        assignees=tuple(
-            user["login"] for user in (node.get("assignees", {}).get("nodes") or [])
-        ),
+        assignees=tuple(user["login"] for user in (node.get("assignees", {}).get("nodes") or [])),
         open_prs=_parse_open_prs(node),
         node_id=node.get("id"),
     )

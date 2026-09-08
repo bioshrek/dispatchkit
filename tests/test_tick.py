@@ -258,9 +258,7 @@ class TestTickCommand:
         assert "dry run" in out
         assert "dispatch: ports" in out
 
-    def test_pushing_without_a_target_is_refused(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_pushing_without_a_target_is_refused(self, capsys: pytest.CaptureFixture[str]) -> None:
         # Constructing a client by accident is exactly what must not happen.
         assert main(["tick", "--plan", PLAN, "--push"]) == 2
         assert "--repo" in capsys.readouterr().err
@@ -406,6 +404,7 @@ class TestMergingConverges:
                 number=3,
                 verify=Verify.AUTO,
                 assignees=("copilot",),
+                touches=("src/**",),
                 open_prs=(
                     PullRequest(
                         7,
@@ -436,9 +435,7 @@ class TestMergingConverges:
         # Nothing was handed to an agent; a pass reporting otherwise would
         # overstate what it did in the one place a human reads.
         api = FakeGitHub(state=self._state())
-        result = execute_tick(
-            plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api
-        )
+        result = execute_tick(plan_tick(api.state, plan=PLAN, config=SchedulerConfig()), api)
         assert result.dispatched == 0
 
     def test_a_merge_unblocks_the_dependent(self) -> None:
@@ -448,6 +445,7 @@ class TestMergingConverges:
                 number=3,
                 verify=Verify.AUTO,
                 assignees=("copilot",),
+                touches=("src/**",),
                 open_prs=(
                     PullRequest(
                         7,
@@ -488,6 +486,7 @@ class TestARefusedMergeDoesNotEndThePass:
                 number=3,
                 verify=Verify.AUTO,
                 assignees=("copilot",),
+                touches=("src/**",),
                 open_prs=(
                     PullRequest(
                         7,

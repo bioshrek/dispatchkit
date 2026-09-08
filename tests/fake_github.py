@@ -92,8 +92,7 @@ class FakeGitHub:
         # counting, so a second pass over the same PR changes nothing.
         for issue in self.state.issues:
             replacement = tuple(
-                replace(pr, draft=False) if pr.number == number else pr
-                for pr in issue.open_prs
+                replace(pr, draft=False) if pr.number == number else pr for pr in issue.open_prs
             )
             if replacement != issue.open_prs:
                 self._replace(issue.number, open_prs=replacement)

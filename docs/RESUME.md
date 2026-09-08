@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7 are implemented and green offline. 536 tests, `ruff`, `mypy --strict`, `lint-imports` all
+D1–D5.7 are implemented and green offline. 556 tests, `ruff`, `mypy --strict`, `lint-imports` all
 clean via `make check`.
 
 | Step | What | State |
@@ -173,17 +173,24 @@ Three things it changed that are worth knowing before touching this code:
 - **`mergeable` is its own question.** Green, non-draft and mergeable are three separate fields
   and conflating them shipped a bug live. It defaults to `False`, so `UNKNOWN` waits a pass.
 
-1. **Next: scope drift**, which now has live evidence behind it. `stopwords` declared
-   `touches = ["src/wordfreq/count.py", "tests/test_count.py"]` and its PR edited
-   `src/wordfreq/cli.py` and `tests/test_cli.py`; `top-n` edited `cli.py` too. The file-scope
-   exclusion reasons about *declared* scope, so it never fired, the two ran concurrently, and the
-   collision needed a human. The check — a PR's file list must be a subset of its task's
-   `touches` — is the last unbuilt row of D9's `subset/fence/drift`, and dispatchkit already reads
-   both sides of it.
+**D9's remaining two guardrails landed.** `verify: auto` now means what it says.
 
-2. **Then acceptance ⊆ CI**, the other unbuilt guardrail: reject `verify = "auto"` unless the
-   task's `acceptance` command is one the CI workflow already runs, so "green" means "acceptance
-   passed" rather than "something passed".
+- **Acceptance ⊆ CI.** The validator refuses `verify = "auto"` unless every `&&`-clause of
+  `acceptance` is covered by a command a *pull-request* workflow runs. Coverage is prefix-based,
+  so a task may narrow CI (`pytest -q` covers `pytest -q -k stopword`) but never widen it. It
+  failed on the live sandbox's first run: `document-flags` claimed `auto` on four `grep` commands
+  CI never ran. The lesson generalises — an acceptance CI cannot run is a sign the acceptance is
+  not a test.
+- **Scope drift.** `merge_ops` refuses a pull request whose files are not all inside its task's
+  declared `touches`. Empty `touches` refuses too: it means the question cannot be answered.
+
+1. **Next: D7**, and it is now the largest unknown. There is no retry, no reclaim and no stuck
+   detection, so an agent that opens no pull request leaves the task assigned and the board
+   reading `Dispatched` forever — a silent stall, which is the worst failure mode for something
+   that runs unattended. Every task in the sandbox has *succeeded*, so every failure path in this
+   system is unexercised, and every bug found so far was found by running it.
+
+2. **Then D8 alerting**, which is worth little until D7 gives it something true to say.
 
 3. **Watch `encoding-fallback` finish.** It is `verify: human` with an open draft PR (#8);
    merging it releases `json-output`, which is deferred behind it on `cli.py`. `stopwords` (#7)

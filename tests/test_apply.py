@@ -75,9 +75,7 @@ class TestPlanningFromEmpty:
     def test_project_fields_are_task_id_lane_and_verify_only(self) -> None:
         plan = plan_apply(two_task_graph(), RepoState(()))
         fields = {
-            op.field_name: op.value
-            for op in plan.operations
-            if isinstance(op, SetProjectField)
+            op.field_name: op.value for op in plan.operations if isinstance(op, SetProjectField)
         }
         assert fields == {"Task ID": "adapter", "Lane": "local", "Verify": "human"}
         assert "Status" not in fields
@@ -99,9 +97,7 @@ class TestPlanningFromEmpty:
         assert block.verify is Verify.AUTO
 
     def test_body_file_spec_is_included_when_supplied(self) -> None:
-        body = build_body(
-            task("ports"), plan=PLAN, spec="Long-form spec.\n\nSecond paragraph."
-        )
+        body = build_body(task("ports"), plan=PLAN, spec="Long-form spec.\n\nSecond paragraph.")
         assert "Long-form spec." in body
         assert body.rstrip().endswith("-->")
 
@@ -150,8 +146,7 @@ class TestDriftAgainstTheRecordedFixture:
         # `ports` in the fixture was recorded from a previous apply of this graph.
         plan = plan_apply(two_task_graph(), recorded_state())
         assert not any(
-            isinstance(op, UpdateIssue) and op.task_id == TaskId("ports")
-            for op in plan.operations
+            isinstance(op, UpdateIssue) and op.task_id == TaskId("ports") for op in plan.operations
         )
 
     def test_a_changed_task_is_updated_in_place(self) -> None:
@@ -334,8 +329,7 @@ class TestFieldsOnAnAlreadyBoardedIssue:
         api, changed = self._boarded()
         plan = plan_apply(changed, api.fetch_state(plan=PLAN))
         assert any(
-            isinstance(op, SetProjectField) and op.field_name == "Verify"
-            for op in plan.operations
+            isinstance(op, SetProjectField) and op.field_name == "Verify" for op in plan.operations
         )
 
     def test_the_field_change_can_actually_be_executed(self) -> None:

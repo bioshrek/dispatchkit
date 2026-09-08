@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
+from fnmatch import fnmatch
 
 from dispatchkit.block import MachineBlock, parse_block
 from dispatchkit.config import SchedulerConfig
@@ -247,9 +248,7 @@ def ready_ops(items: Sequence[TaskItem]) -> tuple[MarkReady, ...]:
     return tuple(operations)
 
 
-def merge_ops(
-    items: Sequence[TaskItem], config: SchedulerConfig
-) -> tuple[MergePr, ...]:
+def merge_ops(items: Sequence[TaskItem], config: SchedulerConfig) -> tuple[MergePr, ...]:
     """Merge the `verify: auto` pull requests that have earned it.
 
     This is the only thing dispatchkit does that changes `main` without a human,
@@ -271,6 +270,11 @@ def merge_ops(
       forever.
     - Nothing inside the blast-radius fence, so the pipeline cannot rewrite its
       own workflow, config or task graph unattended.
+    - No scope drift: every file is one the task declared it would touch. An
+      agent outside its blast radius is the case the design says not to merge
+      unattended, and it is not hypothetical — a drifting pull request caused a
+      real collision here, because the concurrency exclusion reasons about
+      *declared* scope and had nothing to go on.
     """
     operations = []
     for task in items:
@@ -284,8 +288,22 @@ def merge_ops(
             and pr.checks is Checks.PASSING
             and pr.files
             and not any(config.is_fenced(path) for path in pr.files)
+            and _within_scope(pr.files, task.touches)
         ]
     return tuple(operations)
+
+
+def _within_scope(files: Sequence[str], touches: Sequence[str]) -> bool:
+    """Did this pull request stay inside the scope its task declared?
+
+    An empty `touches` means unknown scope. For the concurrency exclusion that
+    reads as "conflicts with nothing", which is the right permissive answer to
+    a scheduling question. Here it is an unanswerable question about whether an
+    agent stayed where it said it would, and the answer to those is no.
+    """
+    if not touches:
+        return False
+    return all(any(fnmatch(path, pattern) for pattern in touches) for path in files)
 
 
 def ci_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
@@ -393,9 +411,7 @@ def _scope_conflict(
     task: TaskItem, active: Iterable[tuple[TaskId, tuple[str, ...]]]
 ) -> TaskId | None:
     for other_id, other_touches in active:
-        if any(
-            _overlaps(mine, theirs) for mine in task.touches for theirs in other_touches
-        ):
+        if any(_overlaps(mine, theirs) for mine in task.touches for theirs in other_touches):
             return other_id
     return None
 

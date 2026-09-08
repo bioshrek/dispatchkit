@@ -100,9 +100,7 @@ class TestConcurrency:
 
 
 class TestScriptSafety:
-    def test_no_run_step_interpolates_a_github_expression(
-        self, workflow: dict[Any, Any]
-    ) -> None:
+    def test_no_run_step_interpolates_a_github_expression(self, workflow: dict[Any, Any]) -> None:
         # `${{ }}` inside `run:` is substituted before the shell sees it, so a
         # value carrying a quote becomes a command. Values arrive via `env:`.
         for step in steps(workflow):

@@ -116,9 +116,7 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig) -> TickPl
             *reconcile_ops(items, projected),
         ),
         item_ids={
-            task.id: task.project_item_id
-            for task in items
-            if task.project_item_id is not None
+            task.id: task.project_item_id for task in items if task.project_item_id is not None
         },
         statuses=projected,
         admitted=tuple(dispatched),
@@ -136,9 +134,7 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
                 api.assign_agent(number=operation.number, node_id=operation.node_id)
                 dispatched += 1
             case LabelIssue():
-                api.edit_labels(
-                    number=operation.number, add=operation.add, remove=operation.remove
-                )
+                api.edit_labels(number=operation.number, add=operation.add, remove=operation.remove)
                 dispatched += 1
             case MarkReady():
                 api.mark_ready(number=operation.number)
@@ -147,9 +143,7 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
                 try:
                     api.merge_pr(number=operation.number)
                 except RuntimeError as exc:
-                    refused.append(
-                        Notice("merge-refused", f"#{operation.number}", str(exc))
-                    )
+                    refused.append(Notice("merge-refused", f"#{operation.number}", str(exc)))
                     continue
                 merged += 1
             case SetProjectField():
@@ -178,9 +172,7 @@ def _set_field(api: GitHubApi, plan: TickPlan, operation: SetProjectField) -> No
     item_id = plan.item_ids.get(operation.task_id)
     if item_id is None:  # pragma: no cover - reconcile_ops only emits for known items
         return
-    api.set_project_field(
-        item_id=item_id, field_name=operation.field_name, value=operation.value
-    )
+    api.set_project_field(item_id=item_id, field_name=operation.field_name, value=operation.value)
 
 
 def summarise(plan: TickPlan) -> Sequence[str]:

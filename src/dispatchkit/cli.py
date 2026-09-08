@@ -51,7 +51,12 @@ from dispatchkit.parse import parse_graph
 from dispatchkit.resolve import admit, build_items, reconcile_ops, resolve
 from dispatchkit.tick import execute_tick, plan_tick
 from dispatchkit.tick import summarise as summarise_tick
-from dispatchkit.validate import validate_graph
+from dispatchkit.validate import (
+    ci_commands,
+    triggers_on_pull_request,
+    validate_acceptance,
+    validate_graph,
+)
 
 EXIT_OK = 0
 EXIT_INVALID = 1
@@ -453,9 +458,41 @@ def _load(path: Path) -> TaskGraph | int:
         return _report(path, list(exc.issues))
 
     issues = validate_graph(graph)
+    # `verify = "auto"` is a claim about *this repository's* CI, so it can only
+    # be checked against the workflows next to the graph file.
+    issues += validate_acceptance(graph, _ci_commands(path))
     if issues:
         return _report(path, issues)
     return graph
+
+
+def _ci_commands(graph_path: Path) -> tuple[str, ...]:
+    """Every command this repository's pull-request workflows run.
+
+    The repository root is found by walking up from the graph file until a
+    `.github/workflows` appears, because the graph's own location is a
+    configurable path and not a reliable anchor.
+    """
+    for parent in [graph_path.parent, *graph_path.parents]:
+        workflows = parent / ".github" / "workflows"
+        if workflows.is_dir():
+            break
+    else:  # pragma: no cover - the loop above always terminates at the root
+        return ()
+    if not workflows.is_dir():
+        return ()
+
+    commands: list[str] = []
+    for file in sorted(workflows.iterdir()):
+        if file.suffix not in {".yml", ".yaml"}:
+            continue
+        try:
+            text = file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if triggers_on_pull_request(text):
+            commands += ci_commands(text)
+    return tuple(commands)
 
 
 def _read_specs(graph: TaskGraph, path: Path) -> dict[TaskId, str] | int:

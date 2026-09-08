@@ -107,8 +107,7 @@ def facts(root: Path) -> LocalFacts:
 def complete_board() -> BoardSnapshot:
     return BoardSnapshot(
         fields=tuple(
-            ExistingField(spec.name, f"PVTF_{spec.name}", spec.options)
-            for spec in REQUIRED_FIELDS
+            ExistingField(spec.name, f"PVTF_{spec.name}", spec.options) for spec in REQUIRED_FIELDS
         ),
         labels=REQUIRED_LABELS,
     )
@@ -269,9 +268,7 @@ class TestTheResultIsHealthy:
         )
         return [item.name for item in checks if not item.ok]
 
-    def test_only_the_human_supplied_inputs_are_left_outstanding(
-        self, tmp_path: Path
-    ) -> None:
+    def test_only_the_human_supplied_inputs_are_left_outstanding(self, tmp_path: Path) -> None:
         # Branch protection joins the list for the same reason: `init` cannot
         # know which status check this repository's `acceptance` runs.
         assert self._remaining(tmp_path) == ["workflow-inputs", "merge-gate"]
@@ -348,9 +345,7 @@ class TestNextSteps:
         assert "Actions workflow approval" in printed
         assert "verify: auto" in printed
 
-    def test_the_approval_setting_is_not_offered_as_a_command(
-        self, tmp_path: Path
-    ) -> None:
+    def test_the_approval_setting_is_not_offered_as_a_command(self, tmp_path: Path) -> None:
         # It is UI-only. Printing it under NEXT, among lines that can be
         # pasted into a shell, would invite an adopter to try.
         for line in self._lines(tmp_path):
@@ -364,9 +359,7 @@ class TestNextSteps:
         printed = "\n".join(self._lines(tmp_path))
         assert "unreviewed" in printed
 
-    def test_the_steps_are_shown_even_when_there_is_nothing_to_do(
-        self, tmp_path: Path
-    ) -> None:
+    def test_the_steps_are_shown_even_when_there_is_nothing_to_do(self, tmp_path: Path) -> None:
         # A second `init` is a no-op on the board, but the manual steps are
         # exactly what an adopter re-runs it to be reminded of.
         plan = plan_init(complete_board(), facts(tmp_path))

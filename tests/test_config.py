@@ -116,18 +116,14 @@ class TestFence:
     def test_ordinary_source_is_not_fenced(self) -> None:
         assert not SchedulerConfig().is_fenced("src/dispatchkit/model.py")
 
-    def test_the_fence_covers_the_config_file_it_was_loaded_from(
-        self, tmp_path: Path
-    ) -> None:
+    def test_the_fence_covers_the_config_file_it_was_loaded_from(self, tmp_path: Path) -> None:
         # The bug this replaces: the fence named `dispatch.toml`, a filename
         # the config no longer had, so it did not cover itself.
         path = tmp_path / "dispatchkit.toml"
         path.write_text("", encoding="utf-8")
         assert load_config(path).is_fenced("dispatchkit.toml")
 
-    def test_moving_the_plans_directory_moves_the_fence_with_it(
-        self, tmp_path: Path
-    ) -> None:
+    def test_moving_the_plans_directory_moves_the_fence_with_it(self, tmp_path: Path) -> None:
         config = load_config(write(tmp_path, '[paths]\nplans = "plans"\n'))
         assert config.is_fenced("plans/refactor.tasks.toml")
         assert not config.is_fenced("docs/plans/refactor.tasks.toml")
@@ -139,9 +135,7 @@ class TestFence:
         assert config.is_fenced("infra/main.tf")
         assert not config.is_fenced(".github/workflows/ci.yml")
 
-    def test_an_empty_fence_is_allowed_because_it_is_a_stated_choice(
-        self, tmp_path: Path
-    ) -> None:
+    def test_an_empty_fence_is_allowed_because_it_is_a_stated_choice(self, tmp_path: Path) -> None:
         assert not load_config(write(tmp_path, "[fence]\npaths = []\n")).is_fenced(
             ".github/workflows/ci.yml"
         )

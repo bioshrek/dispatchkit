@@ -147,9 +147,7 @@ class TestResolveFailures:
         config = tmp_path / "dispatchkit.toml"
         config.write_text("[caps]\ncoud = 3\n", encoding="utf-8")
         state = write_state(tmp_path, issue_node("a", 1))
-        code = main(
-            ["resolve", "--state", str(state), "--plan", PLAN, "--config", str(config)]
-        )
+        code = main(["resolve", "--state", str(state), "--plan", PLAN, "--config", str(config)])
         assert code == 1
         assert "invalid-enum" in capsys.readouterr().err
 

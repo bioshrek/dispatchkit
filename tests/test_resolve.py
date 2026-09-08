@@ -509,11 +509,10 @@ class TestMergeOps:
             "a",
             number=3,
             assignees=("copilot",),
-            open_prs=(
-                PullRequest(7, checks, draft=draft, files=files, mergeable=True),
-            ),
+            open_prs=(PullRequest(7, checks, draft=draft, files=files, mergeable=True),),
             verify=verify,
             closed=closed,
+            touches=("src/**",),
         )
         return merge_ops(items_of(working), config or SchedulerConfig())
 
@@ -563,6 +562,7 @@ class TestMergeNeedsAMergeablePr:
             "a",
             number=3,
             verify=Verify.AUTO,
+            touches=("src/**",),
             open_prs=(
                 PullRequest(
                     7,
@@ -597,9 +597,7 @@ class TestConflictBlocksAutoMerging:
             "a",
             verify=Verify.AUTO,
             open_prs=(
-                PullRequest(
-                    7, Checks.PASSING, draft=False, files=("s.py",), mergeable=mergeable
-                ),
+                PullRequest(7, Checks.PASSING, draft=False, files=("s.py",), mergeable=mergeable),
             ),
         )
         return resolve(items_of(working))[TaskId("a")]
@@ -610,3 +608,48 @@ class TestConflictBlocksAutoMerging:
     def test_a_conflicting_pr_falls_back_to_in_review(self) -> None:
         # Only a human can rebase it, which is what `In Review` means here.
         assert self._status(False) is Status.IN_REVIEW
+
+
+class TestScopeDrift:
+    """A pull request that wandered outside its declared `touches` is not merged.
+
+    The live failure behind this: `stopwords` declared
+    `touches = ["src/wordfreq/count.py", "tests/test_count.py"]` and its pull
+    request edited `src/wordfreq/cli.py` and `tests/test_cli.py`, which `top-n`
+    was editing at the same time. The file-scope exclusion reasons about
+    *declared* scope, so it never fired; the two ran concurrently and collided,
+    and a human had to resolve the conflict by hand.
+
+    An agent outside its blast radius is exactly the case the design says not
+    to merge unattended, and the declaration is the only thing the exclusion
+    had to work with.
+    """
+
+    @staticmethod
+    def _ops(*, touches: tuple[str, ...], files: tuple[str, ...]) -> tuple[MergePr, ...]:
+        working = item(
+            "a",
+            verify=Verify.AUTO,
+            touches=touches,
+            open_prs=(PullRequest(7, Checks.PASSING, draft=False, files=files, mergeable=True),),
+        )
+        return merge_ops(items_of(working), SchedulerConfig())
+
+    def test_a_pr_inside_its_declared_scope_merges(self) -> None:
+        assert self._ops(touches=("src/a.py", "tests/test_a.py"), files=("src/a.py",)) == (
+            MergePr(TaskId("a"), 7),
+        )
+
+    def test_a_pr_that_drifted_is_not_merged(self) -> None:
+        assert self._ops(touches=("src/a.py",), files=("src/a.py", "src/b.py")) == ()
+
+    def test_touches_may_be_a_glob(self) -> None:
+        assert self._ops(touches=("src/**",), files=("src/deep/a.py",)) == (
+            MergePr(TaskId("a"), 7),
+        )
+
+    def test_an_undeclared_scope_cannot_be_checked_and_so_does_not_merge(self) -> None:
+        # Empty `touches` excludes nothing for the concurrency fence, where the
+        # permissive reading is right. Here it is an unanswerable question, and
+        # the answer to those is no.
+        assert self._ops(touches=(), files=("src/a.py",)) == ()

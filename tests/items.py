@@ -137,8 +137,6 @@ def _prs(entries: tuple[int | PullRequest, ...]) -> tuple[PullRequest, ...]:
     an unanswered question has to win.
     """
     return tuple(
-        entry
-        if isinstance(entry, PullRequest)
-        else PullRequest(entry, Checks.NONE, mergeable=True)
+        entry if isinstance(entry, PullRequest) else PullRequest(entry, Checks.NONE, mergeable=True)
         for entry in entries
     )

@@ -288,9 +288,7 @@ def _read_bool(raw: str, issues: list[GraphIssue]) -> bool:
     return raw == "true"
 
 
-def _read_enum[E: (Lane, Verify)](
-    enum: type[E], raw: str, key: str, issues: list[GraphIssue]
-) -> E:
+def _read_enum[E: (Lane, Verify)](enum: type[E], raw: str, key: str, issues: list[GraphIssue]) -> E:
     try:
         return enum(raw)
     except ValueError:
