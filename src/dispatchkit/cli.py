@@ -44,7 +44,7 @@ from dispatchkit.doctor import (
 from dispatchkit.errors import GraphError, GraphIssue
 from dispatchkit.gh_cli import GhCli, parse_state
 from dispatchkit.github import RepoState
-from dispatchkit.init import WORKFLOW_PATH, execute_init, plan_init
+from dispatchkit.init import execute_init, plan_init
 from dispatchkit.init import summarise as summarise_init
 from dispatchkit.lints import lint_graph
 from dispatchkit.metrics import plan_shape
@@ -144,7 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     doctor_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
 
-    init_cmd = sub.add_parser("init", help="create the labels, config, workflow and plans dir")
+    init_cmd = sub.add_parser("init", help="create the labels, the config and the plans dir")
     init_cmd.add_argument("--root", type=Path, default=Path(), help="repository root")
     init_cmd.add_argument("--repo", help="owner/name; creates the labels too when given")
     init_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
@@ -367,17 +367,12 @@ def _facts(args: argparse.Namespace) -> LocalFacts | int:
     if isinstance(config, int):
         return config
 
-    workflow = root / WORKFLOW_PATH
     plans = root / config.plans
     return LocalFacts(
         config_path=config_path,
         config_exists=config_path.exists(),
-        workflow_path=workflow,
-        workflow_exists=workflow.exists(),
         plans=plans,
         plans_exists=plans.is_dir(),
-        workflow_text=workflow.read_text(encoding="utf-8") if workflow.exists() else "",
-        vendored=(root / "src" / "dispatchkit").is_dir(),
     )
 
 
@@ -390,13 +385,10 @@ def _doctor(args: argparse.Namespace) -> int:
     if args.repo:
         api = GhCli(repo=args.repo)
         try:
-            variables, secrets = api.workflow_inputs()
             diagnostics = Diagnostics(
                 scopes=api.token_scopes(),
                 agent_available=api.agent_available(),
                 labels=api.fetch_labels(),
-                variables=variables,
-                secrets=secrets,
                 protected_branch=api.branch_protected(),
             )
         except RuntimeError as exc:

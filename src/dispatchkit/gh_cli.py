@@ -368,19 +368,6 @@ def auth_status_command() -> list[str]:
     return ["gh", "auth", "status"]
 
 
-def variable_list_command(repo: str) -> list[str]:
-    return ["gh", "variable", "list", "--repo", repo, "--json", "name"]
-
-
-def secret_list_command(repo: str) -> list[str]:
-    """Secret *names* only — a secret's value is not readable, by design."""
-    return ["gh", "secret", "list", "--repo", repo, "--json", "name"]
-
-
-def parse_names(payload: Sequence[dict[str, Any]]) -> tuple[str, ...]:
-    return tuple(str(entry["name"]) for entry in payload)
-
-
 @dataclass
 class GhCli:
     """Production adapter. One repository, one `gh` credential, no board."""
@@ -446,7 +433,7 @@ class GhCli:
         return parse_labels(json.loads(_run(label_list_command(self.repo))))
 
     def token_scopes(self) -> tuple[str, ...] | None:
-        """`None` when the token does not report them, as a workflow token does not."""
+        """`None` when the token does not report them, which now means logged out."""
         completed = subprocess.run(  # noqa: S603 - argv list, never a shell
             auth_status_command(),
             capture_output=True,
@@ -472,12 +459,6 @@ class GhCli:
         except RuntimeError:
             return False
         return parse_protection(payload)
-
-    def workflow_inputs(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
-        """The Actions variable and secret names set on the repository."""
-        variables = parse_names(json.loads(_run(variable_list_command(self.repo))))
-        secrets = parse_names(json.loads(_run(secret_list_command(self.repo))))
-        return variables, secrets
 
     def _agent_actor(self) -> str | None:
         if self._actor is None:

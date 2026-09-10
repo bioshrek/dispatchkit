@@ -17,9 +17,6 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "import-linter>=2.1",
-    # Test-only: the workflow's permissions and triggers are design decisions,
-    # so `tests/test_workflow.py` asserts on the parsed YAML.
-    "pyyaml>=6",
 ]
 
 [build-system]
@@ -53,10 +50,6 @@ python_version = "3.12"
 strict = true
 packages = ["dispatchkit", "tests"]
 mypy_path = "src:."
-
-[[tool.mypy.overrides]]
-module = ["yaml"]
-ignore_missing_imports = true
 
 [tool.importlinter]
 root_package = "dispatchkit"

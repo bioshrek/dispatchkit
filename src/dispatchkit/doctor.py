@@ -9,7 +9,7 @@ write. The failures are always the same four:
 | `token-scopes` | Nothing can be read or written at all                        |
 | `coding-agent` | Cloud tasks are dispatched to nobody                         |
 | `labels`       | The state query matches nothing, so a pass is a silent no-op |
-| `workflow`     | Nothing ever runs unattended                                 |
+| `plans`        | There is no graph to apply                                   |
 
 The verdict is a pure function of a snapshot, which is what makes the whole
 check set testable offline — and makes the same function usable as the `live`
@@ -33,14 +33,7 @@ from dispatchkit.github import missing_labels
 #: to need `project` for.
 REQUIRED_SCOPES = ("repo",)
 
-#: Actions configuration the unattended pass reads. Without them the scheduler
-#: runs on its cron and exits non-zero with empty arguments.
-REQUIRED_VARIABLES = ("DISPATCHKIT_PLAN",)
-REQUIRED_SECRETS = ("DISPATCHKIT_TOKEN",)
-
 _SCOPES = re.compile(r"Token scopes:\s*(?P<scopes>.*)$", re.MULTILINE)
-_PYTHONPATH = re.compile(r"^\s*PYTHONPATH:\s*(?P<path>\S+)\s*$", re.MULTILINE)
-_CHECKOUT_PATH = re.compile(r"^\s*path:\s*(\S+)\s*$", re.MULTILINE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,11 +45,6 @@ class Diagnostics:
     #: Every label the repository defines. The state query filters on
     #: `dispatchkit`, so a repository missing it answers nothing at all.
     labels: tuple[str, ...] = ()
-    #: Actions variables and secret *names* configured on the repository. The
-    #: unattended pass reads its plan and its token from these, so an empty
-    #: one is a scheduler that runs on a cron and does nothing.
-    variables: tuple[str, ...] = ()
-    secrets: tuple[str, ...] = ()
     #: Is the default branch protected by required status checks? Not a
     #: precondition for merging — dispatchkit checks CI itself — but it decides
     #: whether anything is watching if that reading is wrong.
@@ -69,16 +57,8 @@ class LocalFacts:
 
     config_path: Path
     config_exists: bool
-    workflow_path: Path
-    workflow_exists: bool
     plans: Path
     plans_exists: bool
-    #: The workflow's text, so the source it puts on `PYTHONPATH` can be
-    #: checked against what the repository actually has.
-    workflow_text: str = ""
-    #: Does this repository carry `src/dispatchkit` itself? True here, false
-    #: in every repository `init` writes into.
-    vendored: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,14 +80,13 @@ def check_remote(diagnostics: Diagnostics) -> tuple[Check, ...]:
         _scopes(diagnostics.scopes),
         _agent(diagnostics.agent_available),
         _labels(diagnostics.labels),
-        _inputs(diagnostics),
         _merge_gate(diagnostics),
     )
 
 
 def check_local(facts: LocalFacts) -> tuple[Check, ...]:
     """The checks the working tree can answer on its own, offline."""
-    return (_config(facts), _plans(facts), _workflow(facts), _workflow_source(facts))
+    return (_config(facts), _plans(facts))
 
 
 def healthy(checks: Sequence[Check]) -> bool:
@@ -127,10 +106,9 @@ def summarise(checks: Sequence[Check]) -> list[str]:
 def _scopes(scopes: tuple[str, ...] | None) -> Check:
     if scopes is None:
         # This branch used to pass, because a workflow token reports no scope
-        # line and failing every CI run would have been a false alarm. It also
-        # quietly covered "not logged in at all", which is the case that
-        # actually happens: `doctor` is run by a human at a terminal, and the
-        # unattended pass runs `tick`. So it says what it saw.
+        # line and failing every CI run would have been a false alarm. Since
+        # D13 there is no unattended pass, so the only case left is the one
+        # that actually happens — not logged in at all. It says what it saw.
         return Check(
             "token-scopes",
             False,
@@ -195,95 +173,6 @@ def _plans(facts: LocalFacts) -> Check:
     )
 
 
-def _workflow(facts: LocalFacts) -> Check:
-    if facts.workflow_exists:
-        return Check("workflow", True, f"the scheduler runs from {facts.workflow_path}")
-    return Check(
-        "workflow",
-        False,
-        f"{facts.workflow_path} does not exist, so no pass ever runs unattended",
-        "dispatchkit init",
-    )
-
-
-def _workflow_source(facts: LocalFacts) -> Check:
-    """Will the workflow be able to import dispatchkit when it runs?
-
-    Existing is not enough. A workflow that puts a directory on `PYTHONPATH`
-    which nothing ever creates fails on `No module named dispatchkit`, on a
-    schedule, with nobody reading the log — so the two halves are checked
-    against each other: whatever `PYTHONPATH` names must either be fetched by
-    a checkout step in the same file, or already be in this repository.
-    """
-    if not facts.workflow_exists:
-        # `workflow` already reports this, and pointing twice at one fix is
-        # noise.
-        return Check("workflow-source", True, "no workflow to check")
-
-    match = _PYTHONPATH.search(facts.workflow_text)
-    if match is None:
-        return Check(
-            "workflow-source",
-            False,
-            f"{facts.workflow_path} sets no PYTHONPATH, so the pass cannot import dispatchkit",
-            "dispatchkit init",
-        )
-
-    source = match.group("path")
-    fetched = set(_CHECKOUT_PATH.findall(facts.workflow_text))
-    if any(source == path or source.startswith(f"{path}/") for path in fetched):
-        return Check("workflow-source", True, f"the pass fetches dispatchkit into {source}")
-    if facts.vendored and source.split("/")[0] == "src":
-        return Check("workflow-source", True, "the pass runs this repository's own source")
-    return Check(
-        "workflow-source",
-        False,
-        f"{facts.workflow_path} puts `{source}` on PYTHONPATH, but nothing in this "
-        "repository or in the workflow provides it, so every pass will fail with "
-        "`No module named dispatchkit`",
-        # Not "re-run init": it writes the workflow only when there is none,
-        # because overwriting somebody's workflow uninvited is worse than
-        # leaving a stale one. Saying so is the difference between a remedy
-        # and a wild goose chase.
-        f"delete {facts.workflow_path} and re-run `dispatchkit init`, which writes a "
-        "workflow that fetches dispatchkit's source itself; `init` will not overwrite "
-        "a workflow that already exists",
-    )
-
-
-def _inputs(diagnostics: Diagnostics) -> Check:
-    """The variables and the secret the unattended pass reads."""
-    missing = [name for name in REQUIRED_VARIABLES if name not in diagnostics.variables]
-    missing += [name for name in REQUIRED_SECRETS if name not in diagnostics.secrets]
-    if not missing:
-        return Check(
-            "workflow-inputs",
-            True,
-            f"the repository sets {_quoted(REQUIRED_VARIABLES)}, and "
-            f"{_quoted(REQUIRED_SECRETS)} by name — GitHub never discloses a "
-            "secret's value, so whether the token is accepted is only learnt "
-            "from a pass",
-        )
-    remedy = [f"gh variable set {name}" for name in REQUIRED_VARIABLES if name in missing]
-    # Never `gh secret set NAME BODY`: a token on a command line lands in the
-    # shell history. `gh` prompts for the value when it is not given one.
-    remedy += [f"gh secret set {name}" for name in REQUIRED_SECRETS if name in missing]
-    return Check(
-        "workflow-inputs",
-        False,
-        f"the repository is missing {_quoted(missing)}, so an unattended pass "
-        f"runs with {_consequence(missing)}",
-        "; ".join(remedy),
-    )
-
-
-#: What the absence of each input costs, so the message says only what is true.
-_CONSEQUENCES = {
-    "DISPATCHKIT_PLAN": "no plan",
-    "DISPATCHKIT_TOKEN": "no token",
-}
-
-
 def _merge_gate(diagnostics: Diagnostics) -> Check:
     """Is there a second lock behind a `verify: auto` merge?
 
@@ -316,13 +205,6 @@ def _merge_gate(diagnostics: Diagnostics) -> Check:
             "command runs, so a red pull request is refused independently"
         ),
     )
-
-
-def _consequence(missing: Sequence[str]) -> str:
-    parts = [_CONSEQUENCES[name] for name in missing if name in _CONSEQUENCES]
-    if len(parts) == 1:
-        return parts[0]
-    return f"{', '.join(parts[:-1])} and {parts[-1]}"
 
 
 def parse_token_scopes(text: str) -> tuple[str, ...] | None:

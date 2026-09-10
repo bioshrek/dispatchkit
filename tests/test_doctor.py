@@ -34,38 +34,11 @@ from dispatchkit.github import REQUIRED_LABELS
 pytestmark = pytest.mark.unit
 
 
-#: A workflow that brings its own copy of dispatchkit, as `init` writes it.
-FETCHING_WORKFLOW = """jobs:
-  tick:
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: bioshrek/dispatchkit
-          path: .dispatchkit
-      - name: Scheduler pass
-        env:
-          PYTHONPATH: .dispatchkit/src
-"""
-
-#: A workflow that expects dispatchkit to already be in the tree, as this
-#: repository's own does.
-VENDORED_WORKFLOW = """jobs:
-  tick:
-    steps:
-      - uses: actions/checkout@v4
-      - name: Scheduler pass
-        env:
-          PYTHONPATH: src
-"""
-
-
 def healthy(**overrides: object) -> Diagnostics:
     base: dict[str, object] = {
         "scopes": ("repo", "read:org"),
         "agent_available": True,
         "labels": REQUIRED_LABELS,
-        "variables": ("DISPATCHKIT_PLAN",),
-        "secrets": ("DISPATCHKIT_TOKEN",),
         "protected_branch": True,
     }
     return Diagnostics(**{**base, **overrides})  # type: ignore[arg-type]
@@ -75,12 +48,8 @@ def local(**overrides: object) -> LocalFacts:
     base: dict[str, object] = {
         "config_path": Path(".github/dispatchkit.toml"),
         "config_exists": True,
-        "workflow_path": Path(".github/workflows/dispatchkit.yml"),
-        "workflow_exists": True,
         "plans": Path("docs/plans"),
         "plans_exists": True,
-        "workflow_text": FETCHING_WORKFLOW,
-        "vendored": False,
     }
     return LocalFacts(**{**base, **overrides})  # type: ignore[arg-type]
 
@@ -161,9 +130,6 @@ class TestLabels:
 
 
 class TestLocalFacts:
-    def test_a_missing_workflow_fails(self) -> None:
-        assert by_name(healthy(), local(workflow_exists=False))["workflow"] is False
-
     def test_a_missing_config_is_reported_but_does_not_fail(self) -> None:
         # Every setting has a default, so no config is a valid choice; the
         # check exists to say which file would be read if there were one.
@@ -215,131 +181,25 @@ class TestPayloadParsing:
         )
 
 
-class TestWorkflowCanImportDispatchkit:
-    """The workflow must get dispatchkit from somewhere that exists.
+class TestTheSchedulerIsLocalNow:
+    """D13 deleted the workflow, and with it four checks.
 
-    The bug this check exists for: `init` wrote a workflow that put `src` on
-    PYTHONPATH, which is only correct in dispatchkit's own repository. Every
-    adopter's scheduler died on `No module named dispatchkit`, on a cron, with
-    nobody watching. `doctor` reported `ok workflow` throughout, because all it
-    asked was whether the file existed.
+    `doctor` answers "can this repository run a pass?", and since the pass runs
+    from a terminal the answer no longer involves a file in
+    `.github/workflows/`, a PYTHONPATH pointing at a source tree that may not
+    exist, or a token and a plan name installed as Actions configuration. A
+    check that survives its subsystem is worse than no check: it fails an
+    adopter for not having something nothing needs.
     """
 
-    def test_a_workflow_that_fetches_its_own_source_is_fine(self) -> None:
-        facts = local(workflow_text=FETCHING_WORKFLOW, vendored=False)
-        assert by_name(healthy(), facts)["workflow-source"]
+    def test_nothing_about_a_workflow_is_checked_any_more(self) -> None:
+        names = {c.name for c in check(healthy(), local())}
+        assert not any(name.startswith("workflow") for name in names)
 
-    def test_a_repository_holding_dispatchkit_may_use_its_own_tree(self) -> None:
-        facts = local(workflow_text=VENDORED_WORKFLOW, vendored=True)
-        assert by_name(healthy(), facts)["workflow-source"]
-
-    def test_pointing_at_a_tree_that_is_not_there_fails(self) -> None:
-        # The exact shape of the shipped bug.
-        facts = local(workflow_text=VENDORED_WORKFLOW, vendored=False)
-        assert not by_name(healthy(), facts)["workflow-source"]
-
-    def test_the_failure_names_the_path_that_is_missing(self) -> None:
-        facts = local(workflow_text=VENDORED_WORKFLOW, vendored=False)
-        failed = next(c for c in check_local(facts) if c.name == "workflow-source")
-        assert "src" in failed.detail
-        assert failed.remedy
-
-    def test_the_remedy_admits_that_init_will_not_overwrite(self) -> None:
-        # `init` writes the workflow only when there is none, so "re-run init"
-        # on its own sends the reader to a command that does nothing and
-        # reports success.
-        facts = local(workflow_text=VENDORED_WORKFLOW, vendored=False)
-        failed = next(c for c in check_local(facts) if c.name == "workflow-source")
-        assert "delete" in failed.remedy
-        assert "will not overwrite" in failed.remedy
-
-    def test_a_checkout_to_a_different_path_than_pythonpath_fails(self) -> None:
-        # Two halves written in separate steps; a rename of one is silent.
-        text = FETCHING_WORKFLOW.replace("path: .dispatchkit", "path: .elsewhere")
-        facts = local(workflow_text=text, vendored=False)
-        assert not by_name(healthy(), facts)["workflow-source"]
-
-    def test_no_workflow_at_all_is_left_to_the_workflow_check(self) -> None:
-        # One failure, one message: `workflow` already says the file is
-        # missing, and a second line saying its PYTHONPATH is unreadable would
-        # be noise pointing at the same fix.
-        facts = local(workflow_exists=False, workflow_text="", vendored=False)
-        checks = {c.name: c.ok for c in check_local(facts)}
-        assert checks["workflow"] is False
-        assert checks["workflow-source"] is True
-
-    def test_a_workflow_with_no_pythonpath_at_all_fails(self) -> None:
-        facts = local(workflow_text="jobs: {}")
-        assert not by_name(healthy(), facts)["workflow-source"]
-
-
-class TestWorkflowInputs:
-    """The unattended pass needs a token and a plan name, or it does nothing.
-
-    Observed live: with none of them set, the scheduler ran on its cron and
-    exited 1 with an empty `--plan`. That is a configuration mistake a
-    first-time adopter cannot see without opening the Actions log.
-    """
-
-    def test_all_present_passes(self) -> None:
-        assert by_name(healthy())["workflow-inputs"]
-
-    def test_a_missing_variable_is_reported(self) -> None:
-        assert not by_name(healthy(variables=()))["workflow-inputs"]
-
-    def test_a_missing_secret_is_reported(self) -> None:
-        assert not by_name(healthy(secrets=()))["workflow-inputs"]
-
-    def test_the_failure_names_what_to_set_and_how(self) -> None:
-        diagnostics = healthy(variables=(), secrets=())
-        failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
-        assert "DISPATCHKIT_PLAN" in failed.detail
-        assert "DISPATCHKIT_TOKEN" in failed.detail
-        assert "DISPATCHKIT_PROJECT" not in failed.detail
-        assert "gh variable set" in failed.remedy
-
-    def test_the_token_is_never_read_only_its_presence(self) -> None:
-        # A secret's value is not readable through the API, and `doctor` must
-        # not invite anyone to paste one on a command line to find out.
-        diagnostics = healthy(secrets=())
-        failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
-        assert "gh secret set DISPATCHKIT_TOKEN" in failed.remedy
-
-    def test_the_consequence_matches_what_is_actually_missing(self) -> None:
-        # Reciting all three costs when only one input is absent trains the
-        # reader to skim the line.
-        diagnostics = healthy(secrets=())
-        failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
-        assert failed.detail.endswith("runs with no token")
-
-    def test_several_missing_inputs_read_as_a_list(self) -> None:
-        diagnostics = healthy(variables=(), secrets=())
-        failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
-        assert failed.detail.endswith("no plan and no token")
-
-
-class TestTheSecretIsOnlyKnownByName:
-    """`ok` here must not read as "the token works", because it cannot mean that.
-
-    Found live. Every check passed and `doctor` exited 0, then the scheduler
-    failed with `Bad credentials (HTTP 401)`: the secret existed and its value
-    was invalid. GitHub never discloses a secret's value, so validity is
-    unknowable from here by construction — which makes it all the more
-    important that the line says what it actually verified.
-    """
-
-    @staticmethod
-    def _detail() -> str:
-        found = [c for c in check(healthy(), local()) if c.name == "workflow-inputs"]
-        assert found and found[0].ok
-        return found[0].detail
-
-    def test_the_passing_message_says_it_only_saw_the_name(self) -> None:
-        assert "name" in self._detail()
-
-    def test_it_does_not_claim_the_token_is_valid(self) -> None:
-        for overclaim in ("valid", "works", "usable"):
-            assert overclaim not in self._detail()
+    def test_a_tree_with_no_dot_github_at_all_is_still_healthy(self) -> None:
+        # The whole point: an adopter needs a config and a plans directory,
+        # and nothing else on disk.
+        assert all(c.ok for c in check_local(local()))
 
 
 class TestTheMergeGate:

@@ -1,7 +1,7 @@
 """D5.5: `dispatchkit init` — make a repository able to run a pass.
 
 `doctor` names what is missing; this creates it: the labels the state query
-filters on, the plans directory, the config file and the scheduler workflow.
+filters on, the plans directory and the config file.
 
 One command, not two. The `--local` split was made at the token boundary
 rather than the dry-run boundary, and that boundary *was* the `project` scope
@@ -19,9 +19,8 @@ repository somebody may already be using:
 - **Nothing that exists is overwritten.** A file that is already there is left
   exactly as it is, because somebody else's config is not ours to rewrite.
 
-The templates below are this repository's own config and workflow, pinned by a
-test. What `init` writes into an adopter's tree is therefore the same file
-`tests/test_workflow.py` asserts the permissions and script safety of.
+The config template below is this repository's own, pinned by a test, so what
+`init` writes into an adopter's tree is the file this repository runs on.
 """
 
 from __future__ import annotations
@@ -33,10 +32,6 @@ from typing import Protocol
 
 from dispatchkit.doctor import LocalFacts
 from dispatchkit.github import Notice, missing_labels
-
-#: Where the scheduler workflow lives. A path, not a convention: the file has
-#: to be under `.github/workflows/` for GitHub to run it at all.
-WORKFLOW_PATH = Path(".github/workflows/dispatchkit.yml")
 
 
 class LabelApi(Protocol):
@@ -101,8 +96,6 @@ def plan_init(labels: Sequence[str], facts: LocalFacts) -> InitPlan:
         operations.append(MakeDirectory(facts.plans))
     if not facts.config_exists:
         operations.append(WriteFile(facts.config_path, CONFIG_TEMPLATE))
-    if not facts.workflow_exists:
-        operations.append(WriteFile(facts.workflow_path, WORKFLOW_TEMPLATE))
 
     return InitPlan(tuple(operations), tuple(notices))
 
@@ -154,14 +147,12 @@ def summarise(plan: InitPlan) -> list[str]:
 
 
 #: What `init` cannot do for the adopter, said at the point they would
-#: otherwise walk away believing the setup is finished. `init` holds no
-#: credential to install and has no business inventing a plan name, so these
-#: three stay manual — and an unattended pass with any of them unset runs on
-#: its cron and fails with empty arguments.
+#: otherwise walk away believing the setup is finished. Since D13 there is no
+#: token to install and no plan variable to set — the scheduler runs as the
+#: adopter, from their own terminal — so only the branch protection is left,
+#: and it is left manual because guessing somebody's check name is worse than
+#: naming the gap.
 NEXT_STEPS = (
-    "gh secret set DISPATCHKIT_TOKEN  (a token with `repo`; the board is gone, so "
-    "`project` scope is no longer needed by anything)",
-    "gh variable set DISPATCHKIT_PLAN --body <plan-name>",
     "gh api -X PUT repos/<owner>/<repo>/branches/main/protection ...  (require the "
     "status check your `acceptance` command runs; without it dispatchkit's own "
     "reading of CI is the only gate on a `verify: auto` merge)",
@@ -221,80 +212,4 @@ plans = "docs/plans"
 #   ]
 #
 # Setting it replaces that list rather than adding to it.
-"""
-
-#: This repository's own scheduler workflow, and what `init` writes.
-WORKFLOW_TEMPLATE = r"""name: dispatchkit scheduler
-
-# One idempotent scheduler pass: resolve every task's status from the issues,
-# print them, and hand out whatever the caps allow. Event-driven for latency;
-# cron as the self-healing safety net, offset off :00/:30 because the alert
-# platform throttles hardest on the hour and the half hour.
-on:
-  issues:
-    types: [closed, reopened, labeled]
-  pull_request:
-    types: [closed]
-  schedule:
-    - cron: "7,37 * * * *"
-  workflow_dispatch:
-
-# Least privilege. Never `contents: write` — only pull requests mutate the
-# tree, so a compromised pass cannot commit. No `repository-projects` either:
-# since D14 a pass writes nothing outside the issues themselves.
-permissions:
-  issues: write
-  contents: read
-
-# One pass at a time. Not cancel-in-progress: interrupting between assigning an
-# issue and recording it is harmless but pointless, and the next pass would
-# only have to redo it.
-concurrency:
-  group: dispatchkit-dispatch
-  cancel-in-progress: false
-
-jobs:
-  tick:
-    # Skip until this repository has actually been set up. `init` writes the
-    # workflow but cannot supply a plan name, so a fresh install would
-    # otherwise fail on its cron twice an hour forever, which is how a
-    # scheduler teaches people to ignore it.
-    if: vars.DISPATCHKIT_PLAN != ''
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # dispatchkit's own source, fetched beside the repository. Fetched and
-      # not installed: it is pure standard library, so there is no resolver to
-      # fail and no third-party code in a job holding a token that can assign
-      # work. Pinned to a tag, because an unpinned default branch would let
-      # somebody else choose what runs next to that token. Override the source
-      # or the tag with the DISPATCHKIT_SOURCE and DISPATCHKIT_REF repository
-      # variables.
-      - uses: actions/checkout@v4
-        with:
-          repository: ${{ vars.DISPATCHKIT_SOURCE || 'bioshrek/dispatchkit' }}
-          ref: ${{ vars.DISPATCHKIT_REF || 'v0.3.0' }}
-          path: .dispatchkit
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      # Values arrive as environment variables, never as `${{ }}` inside the
-      # script: expressions are substituted before the shell parses the line,
-      # so a value carrying a quote would become a command.
-      - name: Scheduler pass
-        env:
-          # The source that was just fetched, on the path. No install step:
-          # `pip install` would be a build the pass depends on.
-          PYTHONPATH: .dispatchkit/src
-          GH_TOKEN: ${{ secrets.DISPATCHKIT_TOKEN }}
-          REPO: ${{ github.repository }}
-          PLAN: ${{ vars.DISPATCHKIT_PLAN }}
-        run: |
-          python -m dispatchkit tick \
-            --plan "$PLAN" \
-            --repo "$REPO" \
-            --push
 """

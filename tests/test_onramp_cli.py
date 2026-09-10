@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from dispatchkit.cli import main
-from dispatchkit.init import WORKFLOW_TEMPLATE
 
 pytestmark = pytest.mark.unit
 
@@ -21,16 +20,11 @@ pytestmark = pytest.mark.unit
 def tree(root: Path) -> None:
     """A repository as `init` would leave it, minus the labels.
 
-    The workflow is the real template rather than a stub: `doctor` now checks
-    that whatever the workflow puts on `PYTHONPATH` is actually provided, and
-    a stub would either fail that check or, worse, be quietly adjusted until
-    it passed.
+    Two paths, since D13: a config and a directory of graphs. Nothing under
+    `.github/workflows/`, because nothing runs there any more.
     """
-    (root / ".github" / "workflows").mkdir(parents=True)
+    (root / ".github").mkdir(parents=True)
     (root / ".github" / "dispatchkit.toml").write_text("[caps]\ncloud = 3\n", encoding="utf-8")
-    (root / ".github" / "workflows" / "dispatchkit.yml").write_text(
-        WORKFLOW_TEMPLATE, encoding="utf-8"
-    )
     (root / "docs" / "plans").mkdir(parents=True)
 
 
@@ -42,7 +36,7 @@ class TestDoctorOffline:
         assert main(["doctor", "--root", str(tmp_path)]) == 0
 
         out = capsys.readouterr().out
-        assert "workflow" in out
+        assert "ok   plans" in out
         assert "the repository was not inspected" in out
 
     def test_a_bare_tree_fails_and_names_what_is_missing(
@@ -51,8 +45,8 @@ class TestDoctorOffline:
         assert main(["doctor", "--root", str(tmp_path)]) == 1
 
         out = capsys.readouterr().out
-        assert "FAIL workflow" in out
-        assert "dispatchkit init" in out
+        assert "FAIL plans" in out
+        assert "mkdir" in out
 
     def test_it_never_reaches_the_network_without_a_repository(self, tmp_path: Path) -> None:
         # The `unit` tier blocks sockets outright, so this passing at all is
@@ -97,7 +91,6 @@ class TestInitOffline:
         assert main(["init", "--root", str(tmp_path)]) == 0
 
         assert (tmp_path / ".github" / "dispatchkit.toml").exists()
-        assert (tmp_path / ".github" / "workflows" / "dispatchkit.yml").exists()
         assert (tmp_path / "docs" / "plans").is_dir()
 
         out = capsys.readouterr().out
@@ -170,9 +163,6 @@ class TestRepositoryUnreachable:
         def token_scopes(self) -> tuple[str, ...] | None:
             return None
 
-        def workflow_inputs(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
-            raise RuntimeError("gh api failed: repository not found")
-
         def agent_available(self) -> bool:
             raise RuntimeError("gh api failed: repository not found")
 
@@ -191,7 +181,7 @@ class TestRepositoryUnreachable:
         out = capsys.readouterr().out
         assert "FAIL repository" in out
         assert "repository not found" in out
-        assert "ok   workflow" in out  # the local half still reported
+        assert "ok   plans" in out  # the local half still reported
 
     def test_init_reports_it_and_exits_two(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
@@ -209,11 +199,13 @@ class TestWatchCannotReachGitHub:
     """A pass that cannot read the repository must say so, not traceback.
 
     This is the scheduler's most likely first failure, and it was found by
-    running it: with `DISPATCHKIT_TOKEN` unset the workflow died with a bare
-    `RuntimeError` stack, twelve frames deep, ending in a `gh` message about
-    an environment variable. `init` and `doctor` already caught this; `tick`
-    was the one path that did not, so the failure adopters are most likely to
-    hit was the one presented worst.
+    running it: with no token the pass died with a bare `RuntimeError` stack,
+    twelve frames deep, ending in a `gh` message about a missing credential.
+    `init` and `doctor` already caught this; the pass was the one path that
+    did not, so the failure adopters are most likely to hit was presented
+    worst. It matters more now than it did under a cron: `watch` shows the
+    failure to a person who is watching, and the first thing they read must
+    be the thing to fix.
     """
 
     class Unreachable:

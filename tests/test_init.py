@@ -10,7 +10,8 @@ overwritten.
 Since D14 there is no board to set up, and with it went the field-creation
 half of this command, the built-in-`Status`-field problem it existed to work
 around, and the `--local` split that was really a split at the `project`-scope
-boundary. What is left creates labels, a config, a workflow and a directory.
+boundary. D13 then took the workflow, because there is no unattended pass
+left to schedule. What is left creates labels, a config and a directory.
 """
 
 from __future__ import annotations
@@ -60,17 +61,12 @@ class FakeRepository:
 
 def facts(root: Path) -> LocalFacts:
     config = root / ".github" / "dispatchkit.toml"
-    workflow = root / ".github" / "workflows" / "dispatchkit.yml"
     plans = root / "docs" / "plans"
     return LocalFacts(
         config_path=config,
         config_exists=config.exists(),
-        workflow_path=workflow,
-        workflow_exists=workflow.exists(),
         plans=plans,
         plans_exists=plans.exists(),
-        workflow_text=workflow.read_text(encoding="utf-8") if workflow.exists() else "",
-        vendored=(root / "src" / "dispatchkit").is_dir(),
     )
 
 
@@ -83,15 +79,23 @@ class TestPlanning:
     def test_a_complete_repository_in_a_complete_tree_needs_nothing(self) -> None:
         assert plan_init(REQUIRED_LABELS, facts(ROOT)).operations == ()
 
-    def test_a_bare_tree_gets_a_config_a_workflow_and_a_plans_directory(
-        self, tmp_path: Path
-    ) -> None:
+    def test_a_bare_tree_gets_a_config_and_a_plans_directory(self, tmp_path: Path) -> None:
         plan = plan_init(REQUIRED_LABELS, facts(tmp_path))
         written = {op.path.name for op in plan.operations if isinstance(op, WriteFile)}
         made = {op.path.name for op in plan.operations if isinstance(op, MakeDirectory)}
 
-        assert written == {"dispatchkit.toml", "dispatchkit.yml"}
+        assert written == {"dispatchkit.toml"}
         assert made == {"plans"}
+
+    def test_no_workflow_is_written_any_more(self, tmp_path: Path) -> None:
+        # D13: the scheduler runs from the adopter's terminal, so there is
+        # nothing to install into `.github/workflows/`. Writing one would be
+        # worse than useless — it would run passes nobody asked for, under a
+        # token nobody needs to issue.
+        plan = plan_init(REQUIRED_LABELS, facts(tmp_path))
+        assert not any(
+            isinstance(op, WriteFile) and op.path.suffix == ".yml" for op in plan.operations
+        )
 
     def test_an_existing_file_is_never_overwritten(self, tmp_path: Path) -> None:
         # Someone else's config is not ours to rewrite, and this command is
@@ -120,9 +124,9 @@ class TestExecution:
         result = execute_init(plan_init(api.fetch_labels(), facts(tmp_path)), api)
 
         assert result.labels == len(REQUIRED_LABELS)
-        assert result.files == 2
+        assert result.files == 1
         assert result.directories == 1
-        assert (tmp_path / ".github" / "workflows" / "dispatchkit.yml").exists()
+        assert (tmp_path / ".github" / "dispatchkit.toml").exists()
         assert (tmp_path / "docs" / "plans").is_dir()
 
     def test_labels_are_created_in_one_call_not_one_call_each(self, tmp_path: Path) -> None:
@@ -135,7 +139,7 @@ class TestExecution:
         # half has never needed anything but a filesystem.
         result = execute_init(plan_init((), facts(tmp_path)), None)
         assert result.labels == 0
-        assert (tmp_path / ".github" / "workflows" / "dispatchkit.yml").exists()
+        assert (tmp_path / ".github" / "dispatchkit.toml").exists()
 
 
 class TestIdempotency:
@@ -164,10 +168,10 @@ class TestTheResultIsHealthy:
     demanding something `init` never creates — is the failure mode that makes
     an on-ramp worse than no on-ramp.
 
-    There is exactly one permitted exception, and it is a real one: the token
-    and the repository variable naming the plan. `init` holds no credential to
-    install and must not invent a plan name, so it cannot supply them; what it
-    can do is finish by saying so, which `TestNextSteps` covers.
+    There is exactly one permitted exception, and it is a real one: branch
+    protection. `init` cannot know which status check this repository's
+    `acceptance` command runs, so it cannot add the rule; what it can do is
+    finish by saying so, which `TestNextSteps` covers.
     """
 
     def _remaining(self, tmp_path: Path) -> list[str]:
@@ -179,30 +183,16 @@ class TestTheResultIsHealthy:
         )
         return [item.name for item in checks if not item.ok]
 
-    def test_only_the_human_supplied_inputs_are_left_outstanding(self, tmp_path: Path) -> None:
-        # Branch protection joins the list for the same reason: `init` cannot
-        # know which status check this repository's `acceptance` runs.
-        assert self._remaining(tmp_path) == ["workflow-inputs", "merge-gate"]
-
-    def test_the_workflow_it_writes_can_import_dispatchkit(self, tmp_path: Path) -> None:
-        # The regression that matters: `init` used to write a workflow that
-        # only worked in dispatchkit's own repository.
-        assert "workflow-source" not in self._remaining(tmp_path)
+    def test_only_the_human_supplied_input_is_left_outstanding(self, tmp_path: Path) -> None:
+        assert self._remaining(tmp_path) == ["merge-gate"]
 
 
 class TestTemplatesMatchThisRepository:
     """What `init` writes is held to this repository's own standards.
 
-    The workflow is deliberately *not* pinned byte-for-byte to the one here.
-    It used to be, and the pin was wrong: this repository has `src/dispatchkit`
-    in its tree and an adopter does not, so a template identical to ours could
-    not run anywhere but here — which is exactly what happened. The guarantee
-    now lives in `tests/test_workflow.py`, which asserts every permission,
-    trigger and script-safety property against *both* files, plus the ones that
-    can only be true of one of them.
-
-    The config template is a different matter: it has no such asymmetry, so it
-    stays pinned.
+    Only the config is left to pin. It is pinned byte-for-byte because it has
+    no asymmetry between here and an adopter's tree — the workflow did, which
+    is why it was never pinned, and D13 has now deleted it outright.
     """
 
     def test_the_config_template_is_this_repositorys_config(self) -> None:
@@ -225,31 +215,31 @@ class TestTemplatesMatchThisRepository:
 class TestNextSteps:
     """`init` must not leave the adopter believing the setup is complete.
 
-    Two things stay manual — a token, and the variable naming the plan.
-    Without them the scheduler runs on its cron and exits with empty
-    arguments, which is a failure nobody sees. Since `init` cannot supply
-    them, the least it can do is end by naming them.
+    Two things stay manual. Branch protection, because `init` cannot know
+    which status check an `acceptance` command runs; and the Copilot approval
+    setting, which is not exposed over REST at all. Since `init` cannot supply
+    either, the least it can do is end by naming them.
     """
 
     def _lines(self, tmp_path: Path) -> list[str]:
         return summarise(plan_init(REQUIRED_LABELS, facts(tmp_path)))
 
-    def test_it_names_the_token_and_the_plan_variable(self, tmp_path: Path) -> None:
+    def test_it_names_the_branch_protection_it_cannot_add(self, tmp_path: Path) -> None:
         printed = "\n".join(self._lines(tmp_path))
-        assert "DISPATCHKIT_TOKEN" in printed
-        assert "DISPATCHKIT_PLAN" in printed
+        assert "protection" in printed
 
     def test_it_no_longer_asks_for_a_board(self, tmp_path: Path) -> None:
         printed = "\n".join(self._lines(tmp_path))
         assert "DISPATCHKIT_PROJECT" not in printed
 
-    def test_the_token_no_longer_has_to_be_a_classic_pat(self, tmp_path: Path) -> None:
-        # It had to be one only because a fine-grained token silently cannot
-        # touch a user-owned Project. With the board gone, `repo` is the whole
-        # requirement and any token shape that grants it will do.
-        token = next(step for step in NEXT_STEPS if "DISPATCHKIT_TOKEN" in step)
-        assert "repo" in token
-        assert "classic" not in token
+    def test_it_no_longer_asks_for_a_token_or_a_plan_variable(self, tmp_path: Path) -> None:
+        # D13: the scheduler runs as the adopter, from their own terminal, on
+        # the credential `gh` already holds. Asking them to mint a long-lived
+        # PAT and install it as a repository secret would be asking for a
+        # standing grant that nothing now reads.
+        printed = "\n".join(self._lines(tmp_path))
+        assert "DISPATCHKIT_TOKEN" not in printed
+        assert "DISPATCHKIT_PLAN" not in printed
 
     def test_it_names_the_copilot_approval_setting(self, tmp_path: Path) -> None:
         # The fourth manual step, and the only one that is not a command:

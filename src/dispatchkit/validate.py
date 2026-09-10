@@ -137,8 +137,8 @@ def ci_commands(text: str) -> tuple[str, ...]:
     """Every shell command a workflow runs, read off the text.
 
     Scanned rather than parsed because `src/dispatchkit` is pure standard
-    library and `pyyaml` is a dev dependency — the same reason `doctor` reads
-    `PYTHONPATH` with a regex. Handles both `run: cmd` and a `run: |` block,
+    library, and a YAML parser is not in it. Handles both `run: cmd` and a
+    `run: |` block,
     and splits `&&` chains so each link can be matched on its own.
     """
     commands: list[str] = []
