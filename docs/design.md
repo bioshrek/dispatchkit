@@ -419,6 +419,35 @@ needs no help from GitHub.
 the same repository and names the process already holding it, because two of them would both mark
 and both run with no error anywhere.
 
+**Found before D6 was built: marking for an absent executor is worse than doing nothing.** The
+dispatcher labelled a ready `lane: local` task `dispatch:local` and moved on, on the two-component
+reasoning above — the executor discovers work by reading issue state, so the label *is* the
+handover. With no executor deployed, that handover went nowhere, and the mark is a claim: the task
+reported `Dispatched` for ever. The stall timeout could not reclaim it, because that timeout asks
+whether an *assignment* produced a pull request and there was no assignee. So a graph stopped, and
+every part of the report agreed it was healthy.
+
+Two consequences beyond the one task, both silent. It held the only `caps.local` slot, so every
+other local task deferred on `lane-cap` in perpetuity. And because admission is also where file
+scope is claimed, it went on excluding overlapping **cloud** tasks on `file-scope-conflict` —
+a task that does not exist blocking one that could have run.
+
+The fix is a `SERVED_LANES` constant naming the lanes the running build can hand work to, checked
+in `_gate` as the *first* gate. First, because every gate below it describes a queue this task is
+not in: `lane-cap` would send the reader off to raise a cap that would change nothing. Refusing at
+admission rather than at the dispatch is the part that matters — a task admitted and then quietly
+not dispatched is exactly the file-scope harm above.
+
+Marks left by the earlier behaviour are **reported, not repaired**. `unserved-lane-claim` names
+the issue and says the label is the whole problem. Removing it here would be a guess at what a
+process this build knows nothing about was doing; releasing an orphaned mark is startup
+reconciliation, and it has to reconcile against the worktrees, so it arrives with the executor
+that creates them.
+
+The general rule this leaves: **a dispatch is only legible if something is listening.** A mark for
+an absent listener is indistinguishable from work in progress, and there is no timeout that can
+tell them apart, because a timeout measures a thing that never started.
+
 **Observability.** Each run appends to a local JSONL log and streams to the terminal; on
 completion the tail is posted to the issue, so the trace lives on GitHub rather than only on one
 workstation. A `dispatch:pause` repo label, checked every poll, stops the loop without anyone
@@ -587,6 +616,7 @@ Shipped, each with a decision record below:
 | D13.1a | The looping report prints what moved, not everything         | An unchanged pass prints one heartbeat line, and still does its work     |
 | D13.1b | `Cancelled`: closed as not planned satisfies nothing         | A dependent of a cancelled task is never dispatched, and is reported     |
 | D13.1c | `dispatch:hold`: the human's "not now"                       | A held task is not dispatched or merged, and is charged no attempt       |
+| D6.0 | A lane with no executor is refused at admission               | A `lane: local` task defers on `no-executor` and reserves nothing        |
 
 Remaining, in build order:
 

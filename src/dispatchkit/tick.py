@@ -34,7 +34,7 @@ out and says what it sees.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -103,10 +103,28 @@ class TickResult:
     reclaimed: int = 0
 
 
-def plan_tick(state: RepoState, *, config: SchedulerConfig, now: datetime) -> TickPlan:
+#: The lanes this build can actually hand work to.
+#:
+#: `lane: local` is designed and unbuilt (D6), and marking a task for a lane
+#: with no executor was worse than doing nothing: `dispatch:local` reads as a
+#: claim, so the task reported `Dispatched` for ever, held the only local slot,
+#: and kept its file scope reserved against tasks that could have run. Nothing
+#: reclaimed it either — the stall timeout needs an assignee to time out.
+#:
+#: This is the one line D6 changes.
+SERVED_LANES: frozenset[Lane] = frozenset({Lane.CLOUD})
+
+
+def plan_tick(
+    state: RepoState,
+    *,
+    config: SchedulerConfig,
+    now: datetime,
+    served: Collection[Lane] = SERVED_LANES,
+) -> TickPlan:
     items, notices = build_items(state)
     statuses = resolve(items)
-    admission = admit(items, statuses, config)
+    admission = admit(items, statuses, config, served=served)
 
     by_ref = {task.ref: task for task in items}
     dispatch_ops: list[DispatchOperation] = []
@@ -153,7 +171,13 @@ def plan_tick(state: RepoState, *, config: SchedulerConfig, now: datetime) -> Ti
         statuses=projected,
         admitted=tuple(dispatched),
         deferred=admission.deferred,
-        notices=(*notices, *blocked_notices, *ci_notices(items), *stranded_notices(items)),
+        notices=(
+            *notices,
+            *blocked_notices,
+            *ci_notices(items),
+            *stranded_notices(items),
+            *_unserved_claims(items, served),
+        ),
         blocked_on=blocking(items),
     )
 
@@ -183,6 +207,32 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
                     continue
                 merged += 1
     return TickResult(dispatched, readied, merged, tuple(refused), reclaimed)
+
+
+def _unserved_claims(items: Sequence[TaskItem], served: Collection[Lane]) -> tuple[Notice, ...]:
+    """Report marks for a lane this build cannot serve.
+
+    An earlier version handed these out, and repositories still carry them.
+    The mark is a claim, so the task reads `Dispatched` and the report looks
+    healthy while the lane is dead — which is the silence this whole tool
+    exists to break.
+
+    Reported, not repaired. Releasing an orphaned mark is startup
+    reconciliation and it has to reconcile against the worktrees, so it arrives
+    with the executor that creates them (D6); removing a label here on a guess
+    is how a running task gets dispatched twice.
+    """
+    return tuple(
+        Notice(
+            "unserved-lane-claim",
+            f"#{task.number}",
+            f"{task.ref} is marked {LABEL_LOCAL_CLAIM} but nothing in this build runs "
+            f"lane:{task.lane.value}, so it reads as dispatched and will never "
+            f"finish. Remove the label to put it back in the queue.",
+        )
+        for task in items
+        if not task.closed and task.lane not in served and LABEL_LOCAL_CLAIM in task.labels
+    )
 
 
 def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:

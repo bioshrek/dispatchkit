@@ -6,7 +6,7 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7, D7, D9, D9.1, D14, D13 and D13.1a/b/c are implemented and green offline. 567 tests, `ruff`,
+D1–D5.7, D7, D9, D9.1, D14, D13, D13.1a/b/c and D6.0 are implemented and green offline. 580 tests, `ruff`,
 `mypy --strict`, `lint-imports` all clean via `make check`.
 
 | Step | What | State |
@@ -25,6 +25,7 @@ D1–D5.7, D7, D9, D9.1, D14, D13 and D13.1a/b/c are implemented and green offli
 | D13.1a | The looping report prints only what moved | done; an unchanged pass prints one heartbeat line |
 | D13.1b | `Cancelled`: closed as not planned satisfies nothing | done; fixes a live over-release bug, offline-proven only |
 | D13.1c | `dispatch:hold`: not now, and not charged an attempt | done; stops dispatch and auto-merge, offline-proven only |
+| D6.0 | A lane with no executor is refused, not marked | done; fixes a silent permanent stall on `lane: local` |
 | D13.1d, D6 | Clean-tree gate, graph watcher, local lane executor | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as

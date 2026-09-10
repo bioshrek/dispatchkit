@@ -50,11 +50,17 @@ class TestDispatchByLane:
         plan = plan_tick(state_of(issue("a", 1)), config=CONFIG, now=NOW)
         assert dispatches(plan) == [AssignAgent(ref("a"), 1, "I_1")]
 
-    def test_a_ready_local_task_is_only_labelled(self) -> None:
+    def test_a_ready_local_task_is_only_labelled_once_the_lane_is_served(self) -> None:
         # The scheduler cannot reach the workstation, so the label *is* the
-        # dispatch; a daemon picks it up on its own schedule.
+        # dispatch and the executor picks it up on its own schedule. Stated
+        # with `served` explicit because this build serves no such lane -- see
+        # tests/test_unserved_lane.py for what happens without it, which is
+        # the whole reason `served` exists.
         plan = plan_tick(
-            state_of(issue("a", 1, lane=Lane.LOCAL)), config=CONFIG, now=NOW
+            state_of(issue("a", 1, lane=Lane.LOCAL)),
+            config=CONFIG,
+            now=NOW,
+            served=(Lane.LOCAL,),
         )
         assert dispatches(plan) == [LabelIssue(ref("a"), 1, add=(LABEL_LOCAL_CLAIM,))]
 
@@ -175,7 +181,7 @@ class TestExecution:
     def test_execution_reports_what_it_did(self) -> None:
         api = FakeGitHub(state=state_of(issue("a", 1), issue("b", 2, lane=Lane.LOCAL)))
         result = execute_tick(
-            plan_tick(api.fetch_state(), config=CONFIG, now=NOW), api
+            plan_tick(api.fetch_state(), config=CONFIG, now=NOW, served=tuple(Lane)), api
         )
         assert result.dispatched == 2
 

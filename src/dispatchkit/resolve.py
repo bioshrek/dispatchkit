@@ -25,7 +25,7 @@ statuses the plan does not define and would lose the distinction between
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -557,12 +557,20 @@ def admit(
     items: Sequence[TaskItem],
     statuses: Mapping[TaskRef, Status],
     config: SchedulerConfig,
+    *,
+    served: Collection[Lane] = tuple(Lane),
 ) -> AdmissionPlan:
     """Choose which ready tasks to start now, respecting caps, spend and scope.
 
     Plan order is ascending issue number, which is the order `apply` created
     them, which is the order they appear in the graph file — so the author's
     ordering is the tie-break, and the choice is reproducible.
+
+    `served` is which lanes the caller can actually hand work to. A lane the
+    running build cannot serve has to be refused *here* rather than at the
+    dispatch itself: admission is also where file scope is claimed, so a task
+    admitted and then quietly not dispatched went on excluding real work from
+    the other lane for as long as it sat there.
     """
     in_flight: dict[Lane, int] = {}
     active: list[tuple[TaskRef, tuple[str, ...]]] = []
@@ -577,7 +585,7 @@ def admit(
     for task in sorted(items, key=lambda task: task.number):
         if statuses[task.ref] is not Status.READY:
             continue
-        deferral = _gate(task, config, in_flight, active)
+        deferral = _gate(task, config, in_flight, active, served)
         if deferral is not None:
             deferred.append(deferral)
             continue
@@ -593,7 +601,18 @@ def _gate(
     config: SchedulerConfig,
     in_flight: Mapping[Lane, int],
     active: Sequence[tuple[TaskRef, tuple[str, ...]]],
+    served: Collection[Lane],
 ) -> Deferral | None:
+    if task.lane not in served:
+        # Read first: every gate below it describes a queue this task is not
+        # in. A lane with nothing behind it is not busy, it is absent, and
+        # `lane-cap` would send the reader to raise a cap that would change
+        # nothing.
+        return Deferral(
+            task.ref,
+            "no-executor",
+            f"nothing in this build runs lane:{task.lane.value}",
+        )
     if LABEL_STUCK in task.labels:
         return Deferral(task.ref, "stuck", "labelled dispatch:stuck")
     if task.attempts >= config.retry_budget:
