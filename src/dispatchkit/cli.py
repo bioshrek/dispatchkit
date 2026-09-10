@@ -58,6 +58,8 @@ from dispatchkit.model import TaskGraph, TaskId
 from dispatchkit.parse import parse_graph
 from dispatchkit.recover import DispatcherBusy, hold_dispatcher
 from dispatchkit.resolve import admit, build_items, resolve
+from dispatchkit.retro import DEFAULT_FLOOR_MULTIPLE, retrospective
+from dispatchkit.retro import summarise as summarise_retro
 from dispatchkit.tick import TickPlan, TickResult, execute_tick, plan_tick
 from dispatchkit.tick import summarise as summarise_tick
 from dispatchkit.validate import (
@@ -167,6 +169,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="scheduler config (default: .github/dispatchkit.toml, then dispatchkit.toml)",
     )
 
+    retro_cmd = sub.add_parser(
+        "retro", help="what a finished plan says about how it was decomposed (read-only)"
+    )
+    retro_cmd.add_argument("graph", type=Path, help="the plan's task graph file")
+    retro_cmd.add_argument(
+        "--state", type=Path, help="a recorded snapshot, instead of reading live"
+    )
+    retro_cmd.add_argument("--repo", help="owner/name; read the plan's issues from GitHub")
+    retro_cmd.add_argument(
+        "--floor",
+        type=float,
+        default=DEFAULT_FLOOR_MULTIPLE,
+        help=(
+            "how many times its own overhead a task must have worked for the split to "
+            f"have paid (default: {DEFAULT_FLOOR_MULTIPLE:g})"
+        ),
+    )
+
     watch_cmd = sub.add_parser(
         "watch", help="the scheduler: run a pass, wait, repeat (every plan in the repository)"
     )
@@ -230,6 +250,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _apply(args)
     if args.command == "resolve":
         return _resolve(args)
+    if args.command == "retro":
+        return _retro(args)
     return _validate(args)
 
 
@@ -255,6 +277,44 @@ def _validate(args: argparse.Namespace) -> int:
     print("    dispatch order: " + " ".join(graph.topological_order()))
     for warning in warnings:
         print(f"WARN {warning}")
+    return EXIT_OK
+
+
+def _retro(args: argparse.Namespace) -> int:
+    """What a finished plan says about how it was decomposed (D15).
+
+    Takes the graph file rather than a plan name because the promise is half
+    the report: `metrics.py` says how wide the graph allowed the plan to run,
+    and the timeline says how wide it ever actually ran. Printing the second
+    without the first leaves the reader to remember what they were told.
+    """
+    path: Path = args.graph
+    graph = _load_shape(path)
+    if isinstance(graph, int):
+        return graph
+
+    if args.repo:
+        state = GhCli(repo=args.repo).fetch_state()
+    elif args.state is not None:
+        loaded = _load_state(args.state)
+        if isinstance(loaded, int):
+            return loaded
+        state = loaded
+    else:
+        print(
+            "dispatchkit: retro needs --state or --repo to read the plan's issues",
+            file=sys.stderr,
+        )
+        return EXIT_UNREADABLE
+
+    items, _ = build_items(state, plan=graph.plan)
+    if not items:
+        print(f"no issues found for plan `{graph.plan}`")
+        return EXIT_OK
+
+    report = retrospective(items, plan=graph.plan, graph=graph, floor_multiple=args.floor)
+    for line in summarise_retro(report):
+        print(line)
     return EXIT_OK
 
 
@@ -819,8 +879,43 @@ def _load_state(path: Path) -> RepoState | int:
     return parse_state(payload)
 
 
+def _load_shape(path: Path) -> TaskGraph | int:
+    """Parse and check the structure, but not the acceptance commands (D15).
+
+    `retro` looks backwards, and `validate_acceptance` asks whether each
+    `verify: auto` task's command is covered by the CI *this checkout has
+    now*. A plan that finished last month against a pipeline since rewritten
+    would be refused a retrospective for a mismatch that says nothing about
+    how it ran -- and a plan whose CI has changed is one of the more
+    interesting ones to look back at.
+
+    The structural checks stay, because a graph with a cycle or a dangling
+    edge has no width to report.
+    """
+    graph = _parse_only(path)
+    if isinstance(graph, int):
+        return graph
+    issues = validate_graph(graph)
+    return _report(path, issues) if issues else graph
+
+
 def _load(path: Path) -> TaskGraph | int:
     """Parse and validate, or return the exit code the caller should use."""
+    graph = _parse_only(path)
+    if isinstance(graph, int):
+        return graph
+
+    issues = validate_graph(graph)
+    # `verify = "auto"` is a claim about *this repository's* CI, so it can only
+    # be checked against the workflows next to the graph file.
+    issues += validate_acceptance(graph, _ci_commands(path))
+    if issues:
+        return _report(path, issues)
+    return graph
+
+
+def _parse_only(path: Path) -> TaskGraph | int:
+    """Read and parse the file. Shared so the two loaders cannot diverge."""
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -831,17 +926,9 @@ def _load(path: Path) -> TaskGraph | int:
         return EXIT_UNREADABLE
 
     try:
-        graph = parse_graph(text, plan=plan_name(path))
+        return parse_graph(text, plan=plan_name(path))
     except GraphError as exc:
         return _report(path, list(exc.issues))
-
-    issues = validate_graph(graph)
-    # `verify = "auto"` is a claim about *this repository's* CI, so it can only
-    # be checked against the workflows next to the graph file.
-    issues += validate_acceptance(graph, _ci_commands(path))
-    if issues:
-        return _report(path, issues)
-    return graph
 
 
 def _ci_commands(graph_path: Path) -> tuple[str, ...]:

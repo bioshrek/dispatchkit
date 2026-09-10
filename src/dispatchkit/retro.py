@@ -233,3 +233,95 @@ def _spans(outcomes: Sequence[TaskOutcome]) -> list[tuple[datetime, datetime]]:
         for outcome in outcomes
         if outcome.dispatched_at is not None and outcome.closed_at is not None
     ]
+
+
+def summarise(report: Retrospective) -> tuple[str, ...]:
+    """The report, as lines. Pure, like `tick.summarise`, so it is assertable.
+
+    Promise and outcome sit on the same line wherever both exist. Anything
+    that could not be measured is named rather than dropped, and no figure is
+    printed at all when its inputs are missing -- a zero here would be read as
+    a measurement.
+    """
+    lines = [
+        f"retrospective for plan `{report.plan}`: "
+        f"{report.measured} measured, {report.unmeasured} unmeasured"
+        + (f", {report.cancelled} cancelled" if report.cancelled else ""),
+        "",
+    ]
+    lines += _task_lines(report)
+    lines.append("")
+    lines += _summary_lines(report)
+    return tuple(lines)
+
+
+def _task_lines(report: Retrospective) -> list[str]:
+    if not report.outcomes:
+        return []
+    width = max(len(str(outcome.ref.id)) for outcome in report.outcomes)
+    lines = []
+    for outcome in report.outcomes:
+        earned = outcome.earned_its_dispatch(report.floor_multiple)
+        lines.append(
+            f"  {str(outcome.ref.id):<{width}}  "
+            f"overhead {_duration(outcome.overhead):>7}  "
+            f"work {_duration(outcome.work):>7}"
+            + (f"  x{_ratio(outcome)}" if earned is not None else "  unmeasured")
+            + ("" if earned is not False else "  <- below the floor")
+            + (f"  ({outcome.attempts} attempts)" if outcome.attempts > 1 else "")
+        )
+    return lines
+
+
+def _summary_lines(report: Retrospective) -> list[str]:
+    lines = []
+    if report.median_overhead is not None:
+        lines.append(f"  median overhead   {_duration(report.median_overhead)}")
+    if report.median_work is not None:
+        lines.append(f"  median work       {_duration(report.median_work)}")
+    if report.makespan is not None and report.serial is not None:
+        speedup = report.speedup
+        lines.append(
+            f"  makespan          {_duration(report.makespan)}"
+            f"  (serial {_duration(report.serial)}"
+            + (f", so width bought {speedup:.1f}x)" if speedup is not None else ")")
+        )
+    promised = report.promised_width
+    lines.append(
+        "  width             "
+        + (f"promised {promised}, " if promised is not None else "")
+        + f"achieved {report.achieved_width}"
+    )
+    if report.measured:
+        lines.append(
+            f"  below the floor   {report.below_floor} of {report.measured} measured "
+            f"worked less than {report.floor_multiple:g}x their own overhead"
+        )
+    if report.retried:
+        lines.append(f"  retried           {report.retried} of {len(report.outcomes)}")
+    return lines
+
+
+def _ratio(outcome: TaskOutcome) -> str:
+    overhead, work = outcome.overhead, outcome.work
+    if overhead is None or work is None or not overhead.total_seconds():
+        return "?"
+    return f"{work.total_seconds() / overhead.total_seconds():.1f}"
+
+
+def _duration(span: timedelta | None) -> str:
+    """Whole units, largest two. Seconds are noise at this scale.
+
+    `-` rather than `0m` for an absent value: the difference between "not
+    measured" and "instant" is the one this module exists to preserve.
+    """
+    if span is None:
+        return "-"
+    total = int(span.total_seconds())
+    hours, rest = divmod(total, 3600)
+    minutes = rest // 60
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    if hours:
+        return f"{hours}h"
+    return f"{minutes}m"
