@@ -89,6 +89,43 @@ def plan_name(path: Path) -> str:
     return path.name.removesuffix(".toml").removesuffix(".tasks")
 
 
+def declared_bases(plans: Path) -> tuple[str, ...]:
+    """Every branch a plan in this directory integrates on (D16).
+
+    Read from the plan files rather than from the repository, because that is
+    where a base is declared: a branch no plan names is not one anything will
+    merge into, and a branch a plan names is one even before it exists.
+
+    A plan that will not parse is skipped rather than raised on. `doctor` is
+    the command people run when things are broken, `validate` is the command
+    that reports a broken plan, and taking the diagnostic down would withhold
+    every other answer it had.
+    """
+    if not plans.is_dir():
+        return ()
+    bases: list[str] = []
+    for file in sorted(plans.iterdir()):
+        if not file.name.endswith(".tasks.toml"):
+            continue
+        try:
+            graph = parse_graph(file.read_text(encoding="utf-8"), plan=plan_name(file))
+        except (OSError, GraphError):
+            continue
+        if str(graph.base) not in bases:
+            bases.append(str(graph.base))
+    return tuple(bases)
+
+
+def _merge_targets(plans: Path) -> tuple[str, ...]:
+    """The branches a `verify: auto` merge could land on.
+
+    The plans' bases, or the default branch when there are no plans yet -- so
+    `doctor` on a fresh repository still says what `init` is about to need,
+    rather than passing vacuously because nothing has been written down.
+    """
+    return declared_bases(plans) or ("main",)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The whole command surface, separated from running it.
 
@@ -682,7 +719,9 @@ def _doctor(args: argparse.Namespace) -> int:
                 scopes=api.token_scopes(),
                 agent_available=api.agent_available(),
                 labels=api.fetch_labels(),
-                protected_branch=api.branch_protected(),
+                unprotected_bases=tuple(
+                    base for base in _merge_targets(facts.plans) if not api.branch_protected(base)
+                ),
             )
         except RuntimeError as exc:
             # Every failure `doctor` exists to name arrives as a non-zero `gh`

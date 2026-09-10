@@ -178,7 +178,14 @@ class TestTheResultIsHealthy:
         api = FakeRepository()
         execute_init(plan_init(api.fetch_labels(), facts(tmp_path)), api)
         checks = check(
-            Diagnostics(scopes=("repo",), agent_available=True, labels=api.fetch_labels()),
+            # A fresh repository, which is what `init` runs against: nothing
+            # a `verify: auto` merge could target is protected yet (D16).
+            Diagnostics(
+                scopes=("repo",),
+                agent_available=True,
+                labels=api.fetch_labels(),
+                unprotected_bases=("main",),
+            ),
             facts(tmp_path),
         )
         return [item.name for item in checks if not item.ok]

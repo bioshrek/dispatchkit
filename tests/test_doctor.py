@@ -39,7 +39,7 @@ def healthy(**overrides: object) -> Diagnostics:
         "scopes": ("repo", "read:org"),
         "agent_available": True,
         "labels": REQUIRED_LABELS,
-        "protected_branch": True,
+        "unprotected_bases": (),
     }
     return Diagnostics(**{**base, **overrides})  # type: ignore[arg-type]
 
@@ -210,6 +210,9 @@ class TestTheMergeGate:
     On an unprotected branch a merge is single-gated: if dispatchkit's reading
     of CI is ever wrong, nothing else is looking. That is worth saying out loud
     rather than leaving an adopter to infer it.
+
+    Since D16 the branch asked about is whichever one the plan integrates on,
+    not `main` -- which is where an unattended merge actually lands.
     """
 
     @staticmethod
@@ -219,7 +222,7 @@ class TestTheMergeGate:
                 scopes=("repo",),
                 agent_available=True,
                 labels=REQUIRED_LABELS,
-                protected_branch=protected,
+                unprotected_bases=() if protected else ("main",),
             )
         )
 
@@ -243,7 +246,7 @@ class TestTheMergeGate:
                     scopes=("repo",),
                     agent_available=True,
                     labels=REQUIRED_LABELS,
-                    protected_branch=False,
+                    unprotected_bases=("main",),
                 )
             )
         ]

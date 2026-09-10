@@ -46,10 +46,11 @@ class Diagnostics:
     #: Every label the repository defines. The state query filters on
     #: `dispatchkit`, so a repository missing it answers nothing at all.
     labels: tuple[str, ...] = ()
-    #: Is the default branch protected by required status checks? Not a
-    #: precondition for merging — dispatchkit checks CI itself — but it decides
-    #: whether anything is watching if that reading is wrong.
-    protected_branch: bool = False
+    #: The branches a `verify: auto` merge actually targets that have no
+    #: required status checks (D16). Every plan integrates on its own base now,
+    #: so `main` is no longer the branch to ask about — and asking about it
+    #: anyway was wrong in the reassuring direction.
+    unprotected_bases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +314,13 @@ def _plans(facts: LocalFacts) -> Check:
 def _merge_gate(diagnostics: Diagnostics) -> Check:
     """Is there a second lock behind a `verify: auto` merge?
 
+    Asked of the branches a merge actually lands on, which since D16 are the
+    plans' bases rather than `main`. Anchored to the default branch it reported
+    on a branch nothing merges into and stayed quiet about the ones that do --
+    green for a repository with a protected `main` and a bare plan branch,
+    which is the wrong direction for a check whose premise is that dispatchkit
+    might be the only gate there is.
+
     Reported rather than enforced. `merge_ops` refuses to merge anything that
     is not green, non-draft and outside the fence, and that gate does not
     depend on the repository's settings — which is the whole point, because a
@@ -325,21 +333,23 @@ def _merge_gate(diagnostics: Diagnostics) -> Check:
     and `main`. Protection makes GitHub refuse a red merge independently, which
     is the difference between one lock and two.
     """
-    if diagnostics.protected_branch:
+    if not diagnostics.unprotected_bases:
         return Check(
             "merge-gate",
             True,
-            "the default branch requires status checks, so a `verify: auto` "
-            "merge is refused by GitHub as well as by dispatchkit",
+            "every branch a `verify: auto` merge targets requires status checks, "
+            "so the merge is refused by GitHub as well as by dispatchkit",
         )
+    bare = ", ".join(f"`{base}`" for base in diagnostics.unprotected_bases)
     return Check(
         "merge-gate",
         False,
-        "the default branch has no required status checks, so dispatchkit's "
-        "own reading of CI is the only gate on a `verify: auto` merge",
+        f"{bare} has no required status checks, so dispatchkit's own reading "
+        "of CI is the only gate on a `verify: auto` merge into it",
         remedy=(
-            "add branch protection requiring the check your `acceptance` "
-            "command runs, so a red pull request is refused independently"
+            f"add branch protection to {bare} requiring the check your "
+            "`acceptance` command runs, so a red pull request is refused "
+            "independently"
         ),
     )
 
