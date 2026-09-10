@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any
 
 from dispatchkit.doctor import parse_labels, parse_token_scopes
-from dispatchkit.github import LABEL_HOLD, IssueState, RepoState
+from dispatchkit.github import LABEL_HOLD, LABEL_LOCAL_CLAIM, IssueState, RepoState
 from dispatchkit.model import Checks, PullRequest
 
 # The coding agent is a bot actor, so it cannot be assigned with
@@ -154,12 +154,20 @@ def _stamp(created: str | None) -> datetime | None:
 
 
 def _parse_dispatches(node: dict[str, Any]) -> tuple[datetime, ...]:
-    """When the agent was assigned, once per dispatch.
+    """When this task was handed to an executor, once per dispatch.
 
-    Only the agent's own assignment counts. GitHub records a second
-    AssignedEvent for the human who triggered the dispatch -- confirmed live on
-    the sandbox -- so counting the events wholesale would score every attempt
-    twice against the retry budget.
+    Two shapes, one sequence, because there is one retry budget and it does not
+    care which lane spent it.
+
+    In the cloud lane a dispatch *is* an assignment, and only the agent's own
+    assignment counts: GitHub records a second AssignedEvent for the human who
+    triggered it -- confirmed live on the sandbox -- so counting the events
+    wholesale would score every attempt twice.
+
+    In the local lane nobody is assigned; the task is marked. The mark is
+    therefore the event, and it has to be counted or `attempts` stays at zero,
+    `dispatch:stuck` is never reached, and a task that cannot pass is retried
+    for ever.
     """
     stamps: list[datetime] = []
     for event in node.get("dispatches", {}).get("nodes") or []:
@@ -169,6 +177,12 @@ def _parse_dispatches(node: dict[str, Any]) -> tuple[datetime, ...]:
         created = event.get("createdAt")
         if created:
             stamps.append(datetime.fromisoformat(created.replace("Z", "+00:00")))
+    for event in node.get("holds", {}).get("nodes") or []:
+        if (event.get("label") or {}).get("name") != LABEL_LOCAL_CLAIM:
+            continue
+        stamp = _stamp(event.get("createdAt"))
+        if stamp is not None:
+            stamps.append(stamp)
     return tuple(sorted(stamps))
 
 
@@ -289,6 +303,39 @@ def parse_protection(payload: dict[str, Any]) -> bool:
     """
     checks = payload.get("required_status_checks") or {}
     return bool(checks.get("contexts"))
+
+
+def open_pr_command(repo: str, head: str, title: str) -> list[str]:
+    """Open the pull request for a local run.
+
+    The body arrives on stdin rather than in the argv, because it is built from
+    an issue body an agent may have influenced and there is no length a
+    command line is guaranteed to carry. `--head` is a branch this process
+    pushed a moment ago, so it is ours to name.
+    """
+    return [
+        "gh",
+        "pr",
+        "create",
+        "--repo",
+        repo,
+        "--head",
+        head,
+        "--title",
+        title,
+        "--body-file",
+        "-",
+    ]
+
+
+def comment_command(repo: str, number: int) -> list[str]:
+    return ["gh", "issue", "comment", str(number), "--repo", repo, "--body-file", "-"]
+
+
+def _pr_number(output: str) -> int:
+    """`gh pr create` prints the URL it made. The number is its last segment."""
+    tail = output.strip().rsplit("/", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
 
 
 def merge_command(number: int, repo: str) -> list[str]:
@@ -453,6 +500,15 @@ class GhCli:
         if not add and not remove:
             return
         _run(edit_labels_command(self.repo, number, add, remove))
+
+    # --- the local lane (D6) -----------------------------------------------
+
+    def open_pr(self, *, head: str, title: str, body: str) -> int:
+        output = _run(open_pr_command(self.repo, head, title), stdin=body)
+        return _pr_number(output)
+
+    def comment(self, *, number: int, body: str) -> None:
+        _run(comment_command(self.repo, number), stdin=body)
 
     # --- the diagnostics port (D5.5) ---------------------------------------
 

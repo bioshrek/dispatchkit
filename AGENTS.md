@@ -25,7 +25,8 @@ The three properties everything else serves:
 ## Ground rules
 
 **Ports and adapters** — `github.py` defines the `GitHubApi` port and the operation types;
-`gh_cli.py` is the only module allowed to shell out. Planners (`apply.py`, `tick.py`,
+`gh_cli.py` and `workstation_cli.py` are the only modules allowed to shell out — the first
+for GitHub, the second for git and the local agent. Planners (`apply.py`, `tick.py`,
 `resolve.py`) are pure: state in, operations out. If a use case needs a new capability, add a
 method to the port and implement it in the adapter — never call `subprocess` from a planner.
 `uv run lint-imports` enforces the layering.

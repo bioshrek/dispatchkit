@@ -29,6 +29,11 @@ DISPATCHKIT_LABEL = "dispatchkit"
 #: label spelt twice is a wire format spelt twice.
 LABEL_HOLD = "dispatch:hold"
 
+#: The local lane's claim. It lives here rather than with the resolver's other
+#: labels because the adapter reads it off the timeline: a local dispatch is a
+#: mark, not an assignment, so the mark is the event `attempts` derives from.
+LABEL_LOCAL_CLAIM = "dispatch:local"
+
 #: Labels the pipeline filters on, and the only thing `init` has to create on
 #: the repository itself. `dispatchkit` is the important one: the state query
 #: selects by it, so a repository without it returns nothing and a pass is a
@@ -234,6 +239,12 @@ class GitHubApi(Protocol):
     def mark_ready(self, *, number: int) -> None: ...
 
     def merge_pr(self, *, number: int) -> None: ...
+
+    # The local lane (D6). The cloud agent opens its own pull request and
+    # comments for itself; here the executor is the agent's hands.
+    def open_pr(self, *, head: str, title: str, body: str) -> int: ...
+
+    def comment(self, *, number: int, body: str) -> None: ...
 
     def edit_labels(
         self, *, number: int, add: Sequence[str] = (), remove: Sequence[str] = ()

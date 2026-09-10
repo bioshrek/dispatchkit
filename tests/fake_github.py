@@ -29,6 +29,21 @@ class FakeGitHub:
     #: NeverGatesWorking` uses it, to hold a pass's input still.
     original: RepoState = field(default_factory=lambda: RepoState(()))
 
+    #: The local lane's two writes (D6), kept for assertion rather than replay.
+    opened: list[dict[str, str]] = field(default_factory=list)
+    comments: list[dict[str, str]] = field(default_factory=list)
+    next_pr: int = 900
+
+    def open_pr(self, *, head: str, title: str, body: str) -> int:
+        self.calls.append(f"open_pr({head})")
+        self.opened.append({"head": head, "title": title, "body": body})
+        self.next_pr += 1
+        return self.next_pr
+
+    def comment(self, *, number: int, body: str) -> None:
+        self.calls.append(f"comment(#{number})")
+        self.comments.append({"number": str(number), "body": body})
+
     def fetch_state(self) -> RepoState:
         self.calls.append("fetch_state()")
         return self.state

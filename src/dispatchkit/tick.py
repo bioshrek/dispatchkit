@@ -40,6 +40,7 @@ from datetime import datetime
 
 from dispatchkit.config import SchedulerConfig
 from dispatchkit.github import (
+    LABEL_LOCAL_CLAIM,
     AssignAgent,
     DispatchOperation,
     GitHubApi,
@@ -52,7 +53,6 @@ from dispatchkit.github import (
 )
 from dispatchkit.model import Lane, TaskId, TaskRef
 from dispatchkit.resolve import (
-    LABEL_LOCAL_CLAIM,
     Deferral,
     Status,
     TaskItem,

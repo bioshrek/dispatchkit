@@ -432,6 +432,55 @@ command from the one written, and neither is ours to choose. And `runner.argv` g
 is refused by type rather than split on whitespace, because that spelling is the one path back to
 a shell.
 
+**Built (D6.2/D6.3): the executor owns everything except the change itself.** It fetches,
+branches, makes the worktree, builds the prompt, invokes the agent, runs `acceptance`, pushes and
+opens the pull request; the agent is handed a prepared, disposable tree and asked to do one thing.
+Three orderings carry the design rather than merely implementing it.
+
+*`acceptance` runs before the pull request is opened.* A pull request is a claim that the work is
+done, and for `verify: auto` the next pass merges it. Opening one and letting CI find out would be
+true only when CI happens to run the same command, which is precisely the assumption
+`acceptance-not-in-ci` exists to refuse.
+
+*The push happens in the parent, never the child.* This is not a rule anybody has to remember: the
+allowlist omits `SSH_AUTH_SOCK` and every credential marker, so the child physically cannot reach a
+remote. The separation falls out of the environment rather than being enforced on top of it.
+
+*`Closes #N` is written by the executor and never asked of the agent.* An agent that forgot it
+would merge a pull request while leaving the issue open, stalling every dependent with no error
+anywhere — a silent failure in the one place the whole system reads state from.
+
+**The prompt is the issue's prose, with the machine block cut out.** `depends`, `touches`,
+`verify` and `spend` are scheduling inputs the agent cannot act on, and one of them actively
+misleads: `touches` is an advisory exclusion hint, not a permission boundary, so handing it over
+invites an agent to treat a scheduling guess as a constraint on its work. `acceptance` is the
+exception — it goes to the agent because it is the definition of done, and it is read back out of
+the body prose rather than the block, since that is where `apply` writes it and where a human
+reviewer reads it. That parse is deliberately the narrowest one that works: find the heading, take
+the first fenced block, accept nothing else. A body with no acceptance in it does not run at all,
+because nothing could then decide whether the task was finished.
+
+**A failed run keeps its worktree and pushes whatever it committed — as evidence, not state.** A
+human may read that branch; nothing in the system ever does. Resuming a dead agent's run is not
+reliably possible, so the retry starts clean, which is also what keeps the retry budget honest.
+The branch carries the attempt number for the same reason: a second run would otherwise force-push
+over the only thing the first one produced.
+
+**Found while building it: a local dispatch was charged no attempt at all.** `attempts` derives
+from `ASSIGNED_EVENT`s, because a cloud dispatch *is* an assignment. Nobody is assigned to a local
+task — it is marked — so the count stayed at zero, `dispatch:stuck` was never reached, and a task
+that could never pass would have been retried for ever. The mark is the event, so
+`_parse_dispatches` now folds `dispatch:local` labellings into the same ordered sequence: one
+budget, spent by either lane, still ordered so the hold discount can pair each dispatch with the
+one that superseded it.
+
+**A second adapter, and the reason there is one.** `gh_cli.py` was the only module allowed to
+shell out. `workstation_cli.py` is the second, and it exists because it runs a *different kind* of
+child: `gh` is ours, whereas the agent is the thing being supervised — trimmed environment, no
+credential, killed by the clock rather than trusted to stop. A timeout is returned as a result
+rather than raised, because the caller has to report it and take the mark off either way; losing
+the run to a traceback would leave the task claimed for ever.
+
 **The environment allowlist has a floor an adopter may extend but not breach.** The child gets
 `PATH`, `HOME`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `SHELL`, `USER`, `LOGNAME` and whatever
 `runner.env` adds — except that a name matching a credential marker (`TOKEN`, `SECRET`, `KEY`,
@@ -651,6 +700,8 @@ Shipped, each with a decision record below:
 | D13.1c | `dispatch:hold`: the human's "not now"                       | A held task is not dispatched or merged, and is charged no attempt       |
 | D6.0 | A lane with no executor is refused at admission               | A `lane: local` task defers on `no-executor` and reserves nothing        |
 | D6.1 | The runner: argv template, model allowlist, env floor, `caps.local` invariant | A value holding `; rm -rf /` is one argument; a named credential is refused |
+| D6.2 | The `Workstation` port, its pure helpers, and the second adapter | Every command is an argv list; a worktree path reads back as its task |
+| D6.3 | The executor: worktree, prompt, runner, acceptance, push, PR   | Acceptance gates the pull request; the mark comes off however it ends     |
 
 Remaining, in build order:
 

@@ -37,6 +37,7 @@ from dispatchkit.errors import GraphError
 from dispatchkit.github import (
     DISPATCHKIT_LABEL,
     LABEL_HOLD,
+    LABEL_LOCAL_CLAIM,
     LabelIssue,
     MarkReady,
     MergePr,
@@ -55,7 +56,6 @@ AGENT_LOGINS = frozenset({"copilot-swe-agent", "Copilot"})
 
 LABEL_STUCK = "dispatch:stuck"
 LABEL_SPEND_APPROVED = "spend:approved"
-LABEL_LOCAL_CLAIM = "dispatch:local"
 
 _WILDCARD = "*?["
 
@@ -97,6 +97,11 @@ class TaskItem:
     dispatches: tuple[datetime, ...]
     holds: tuple[datetime, ...] = ()
     node_id: str | None = None
+    #: The prose half of the issue. Only the local lane reads these: the
+    #: agent's prompt and the task's acceptance both live in the body, because
+    #: the definition of done belongs on the issue rather than in a runner.
+    title: str = ""
+    body: str = ""
     #: Closed as not planned. Closed, but satisfying nothing (D13.1).
     cancelled: bool = False
 
@@ -253,6 +258,8 @@ def build_items(
                 dispatches=issue.dispatches,
                 holds=issue.holds,
                 node_id=issue.node_id,
+                title=issue.title,
+                body=issue.body,
             )
         )
     return tuple(items), tuple(notices)

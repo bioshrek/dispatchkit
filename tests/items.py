@@ -89,6 +89,7 @@ def issue(
     open_prs: tuple[int | PullRequest, ...] = (),
     dispatches: tuple[datetime, ...] = (),
     holds: tuple[datetime, ...] = (),
+    acceptance: str = "check && verify",
     node_id: str | None = None,
 ) -> IssueState:
     """The same synthetic task, but as GitHub would hand it back."""
@@ -106,7 +107,10 @@ def issue(
     return IssueState(
         number=number,
         title=name,
-        body=f"prose\n\n{render_raw_block(block)}\n",
+        body=(
+            f"{name} prose\n\n## Acceptance\n\n```sh\n{acceptance}\n```\n\n"
+            f"{render_raw_block(block)}\n"
+        ),
         labels=labels,
         closed=closed or cancelled,
         cancelled=cancelled,

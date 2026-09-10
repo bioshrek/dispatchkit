@@ -19,6 +19,7 @@ import pytest
 from dispatchkit.cli import main
 from dispatchkit.config import SchedulerConfig
 from dispatchkit.github import (
+    LABEL_LOCAL_CLAIM,
     AssignAgent,
     IssueState,
     LabelIssue,
@@ -27,7 +28,7 @@ from dispatchkit.github import (
     RepoState,
 )
 from dispatchkit.model import Checks, Lane, PullRequest, Verify
-from dispatchkit.resolve import LABEL_LOCAL_CLAIM, Status
+from dispatchkit.resolve import Status
 from dispatchkit.tick import TickPlan, execute_tick, plan_tick, summarise
 from tests.fake_github import FakeGitHub
 from tests.items import PLAN, issue, ref, state_of
