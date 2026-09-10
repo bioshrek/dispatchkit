@@ -264,7 +264,10 @@ class TestItDoesNotLetTheNumbersMislead:
         """Because the overhead figure is only comparable within a lane."""
         run(tmp_path, finished("one", 1, start=9, end=11))
 
-        assert "cloud" in capsys.readouterr().out
+        out = capsys.readouterr().out
+
+        assert "cloud" in out
+        assert "Lane.CLOUD" not in out
 
     def test_it_says_what_makes_the_overhead_lane_shaped(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

@@ -354,7 +354,7 @@ def _task_lines(report: Retrospective) -> list[str]:
         earned = outcome.earned_its_dispatch(report.floor_multiple)
         lines.append(
             f"  {str(outcome.ref.id):<{width}}  "
-            f"{str(outcome.lane):<5}  "
+            f"{outcome.lane.value:<5}  "
             f"overhead {_duration(outcome.overhead):>7}  "
             f"work {_duration(outcome.work):>7}"
             + (f"  x{_ratio(outcome)}" if earned is not None else "  unmeasured")
