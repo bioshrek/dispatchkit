@@ -51,10 +51,18 @@ class TaskOutcome:
 
     ref: TaskRef
     attempts: int
-    #: The dispatch the work actually came from: the *last* one. A retry pays
-    #: the overhead again rather than making the task bigger, so counting from
-    #: the first would report two overheads as one enormous task. The retries
-    #: are not lost — they are `attempts`, which is where a failure belongs.
+    #: The dispatch the work actually came from: the last one at or before
+    #: the first commit. A retry pays the overhead again rather than making
+    #: the task bigger, so counting from the *first* dispatch would report two
+    #: overheads as one enormous task; the retries are not lost, they are
+    #: `attempts`, which is where a failure belongs.
+    #:
+    #: Taking the plain last dispatch was the first version, and it assumed
+    #: every dispatch produced something. Found live on a task that was
+    #: merged, re-dispatched by the bug D16's trial turned up, and then
+    #: closed: its last dispatch came after its only commit, and the report
+    #: said the overhead was minus two hours. The commit is the evidence for
+    #: which run did the work, so the commit chooses.
     dispatched_at: datetime | None
     first_commit_at: datetime | None
     ci: timedelta | None
@@ -69,14 +77,14 @@ class TaskOutcome:
         """
         if self.dispatched_at is None or self.first_commit_at is None or self.ci is None:
             return None
-        return (self.first_commit_at - self.dispatched_at) + self.ci
+        return _positive((self.first_commit_at - self.dispatched_at) + self.ci)
 
     @property
     def work(self) -> timedelta | None:
         """Dispatch to close: the elapsed span of the attempt that succeeded."""
         if self.dispatched_at is None or self.closed_at is None:
             return None
-        return self.closed_at - self.dispatched_at
+        return _positive(self.closed_at - self.dispatched_at)
 
     @property
     def measured(self) -> bool:
@@ -215,16 +223,46 @@ def retrospective(
     )
 
 
+def _positive(span: timedelta) -> timedelta | None:
+    """A duration, or `None` if the arithmetic came out backwards.
+
+    No arrangement of real events produces a commit before the dispatch that
+    caused it, so a negative span means the premise was wrong and the honest
+    answer is that nothing could be measured. Printing it as a number invites
+    somebody to average it.
+    """
+    return span if span >= timedelta() else None
+
+
 def _outcome(item: TaskItem) -> TaskOutcome:
     landed = next(iter(item.merged), None)
+    first_commit = landed.first_commit_at if landed else None
     return TaskOutcome(
         ref=item.ref,
         attempts=item.attempts,
-        dispatched_at=max(item.dispatches, default=None),
-        first_commit_at=landed.first_commit_at if landed else None,
+        dispatched_at=_producing_dispatch(item.dispatches, first_commit),
+        first_commit_at=first_commit,
         ci=landed.ci if landed else None,
         closed_at=item.closed_at,
     )
+
+
+def _producing_dispatch(
+    dispatches: Sequence[datetime], first_commit: datetime | None
+) -> datetime | None:
+    """The dispatch whose run produced the work that landed.
+
+    The last one at or before the first commit. With no commit to go on there
+    is nothing to choose against, so the last dispatch stands -- which is the
+    only answer available and is right whenever the task simply has not
+    finished yet.
+    """
+    if not dispatches:
+        return None
+    if first_commit is None:
+        return max(dispatches)
+    before = [stamp for stamp in dispatches if stamp <= first_commit]
+    return max(before) if before else max(dispatches)
 
 
 def _spans(outcomes: Sequence[TaskOutcome]) -> list[tuple[datetime, datetime]]:

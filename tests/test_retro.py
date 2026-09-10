@@ -131,6 +131,53 @@ class TestTheTwoDurations:
         assert report.outcomes[0].work == timedelta(minutes=40)
         assert report.outcomes[0].attempts == 2
 
+    def test_the_dispatch_is_the_one_the_work_came_from(self) -> None:
+        """Found live, on `mincount/min-count`.
+
+        Taking the *last* dispatch assumes every dispatch produced something.
+        That task was merged, then re-dispatched by the bug D16's live trial
+        found, then closed -- so its last dispatch came after its only commit,
+        and the retrospective reported an overhead of minus two hours.
+
+        The right question is which run produced the work that landed, and the
+        commit answers it: the last dispatch at or before the first commit.
+        """
+        report = retro_of(
+            landed(
+                "one",
+                1,
+                dispatched=(at(12, 0), at(14, 0)),
+                first_commit=at(12, 7),
+                ci=timedelta(minutes=3),
+                closed_at=at(14, 5),
+            )
+        )
+
+        assert report.outcomes[0].overhead == timedelta(minutes=10)
+        assert report.outcomes[0].work == timedelta(hours=2, minutes=5)
+
+    def test_a_duration_that_comes_out_negative_is_unmeasured_not_negative(self) -> None:
+        """Belt and braces for the same class of surprise.
+
+        No arrangement of real events produces a commit before the dispatch
+        that caused it, so if the arithmetic says otherwise the premise is
+        wrong and the honest report is that nothing could be measured. A
+        negative overhead printed as a number invites somebody to average it.
+        """
+        report = retro_of(
+            landed(
+                "one",
+                1,
+                dispatched=(at(14, 0),),
+                first_commit=at(12, 7),
+                ci=timedelta(minutes=3),
+                closed_at=at(14, 5),
+            )
+        )
+
+        assert report.outcomes[0].overhead is None
+        assert report.outcomes[0].measured is False
+
     def test_ci_that_was_never_recorded_is_not_counted_as_zero(self) -> None:
         report = retro_of(
             landed("one", 1, dispatched=(at(12, 0),), first_commit=at(12, 7), closed_at=at(12, 40))
