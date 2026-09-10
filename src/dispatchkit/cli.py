@@ -568,7 +568,12 @@ def _emit(report: Sequence[str], number: int | None) -> int:
 
 def _acted(result: TickResult) -> bool:
     return bool(
-        result.dispatched or result.readied or result.merged or result.reclaimed or result.refused
+        result.dispatched
+        or result.readied
+        or result.merged
+        or result.reclaimed
+        or result.closed
+        or result.refused
     )
 
 
@@ -580,6 +585,8 @@ def _completion(result: TickResult) -> str:
         line += f", {result.merged} PR(s) merged"
     if result.reclaimed:
         line += f", {result.reclaimed} stalled dispatch(es) reclaimed"
+    if result.closed:
+        line += f", {result.closed} issue(s) closed"
     return line
 
 

@@ -27,7 +27,7 @@ from typing import Any
 
 from dispatchkit.doctor import parse_labels, parse_token_scopes
 from dispatchkit.github import LABEL_HOLD, LABEL_LOCAL_CLAIM, IssueState, RepoState
-from dispatchkit.model import Base, Checks, PullRequest
+from dispatchkit.model import Base, Checks, MergedPr, PullRequest
 
 # The coding agent is a bot actor, so it cannot be assigned with
 # `gh issue edit --add-assignee`: it has to be looked up by capability and
@@ -96,6 +96,7 @@ query($owner: String!, $repo: String!, $first: Int!) {
                 ... on PullRequest {
                   number
                   state
+                  baseRefName
                   isDraft
                   mergeable
                   files(first: 100) { nodes { path } }
@@ -137,6 +138,7 @@ def _parse_issue(node: dict[str, Any]) -> IssueState:
         cancelled=node["state"] == "CLOSED" and node.get("stateReason") == "NOT_PLANNED",
         assignees=tuple(user["login"] for user in (node.get("assignees", {}).get("nodes") or [])),
         open_prs=_parse_open_prs(node),
+        merged=_parse_merged_prs(node),
         node_id=node.get("id"),
         dispatches=_parse_dispatches(node),
         holds=_parse_holds(node),
@@ -206,6 +208,27 @@ def _parse_open_prs(node: dict[str, Any]) -> tuple[PullRequest, ...]:
                 )
             )
     return tuple(prs)
+
+
+def _parse_merged_prs(node: dict[str, Any]) -> tuple[MergedPr, ...]:
+    """Linked pull requests that have landed, and the branch each landed on.
+
+    The base is read rather than assumed because it is the evidence: a merge
+    only says this task is done if it went where the task's plan integrates
+    (D16). A malformed or missing `baseRefName` yields nothing, which fails
+    towards leaving the issue open -- a task that stays open is visible, and a
+    task closed on a merge into someone else's branch is not.
+    """
+    merged: list[MergedPr] = []
+    for event in node.get("timelineItems", {}).get("nodes") or []:
+        source = event.get("source") or {}
+        if source.get("state") != "MERGED" or "number" not in source:
+            continue
+        name = source.get("baseRefName") or ""
+        if Base.check(name) is not None:
+            continue
+        merged.append(MergedPr(int(source["number"]), Base(name)))
+    return tuple(merged)
 
 
 def _parse_files(source: dict[str, Any]) -> tuple[str, ...]:
@@ -369,6 +392,17 @@ def merge_command(number: int, repo: str) -> list[str]:
     return ["gh", "pr", "merge", str(number), "--squash", "--repo", repo]
 
 
+def close_command(number: int, repo: str) -> list[str]:
+    """Close a task issue whose work has landed on a plan branch (D16).
+
+    No `--reason`, which means "completed" -- the default, and the one the
+    resolver requires: a task closed as *not planned* satisfies no dependency
+    (D13.1), so closing a finished task that way would leave everything behind
+    it blocked for ever.
+    """
+    return ["gh", "issue", "close", str(number), "--repo", repo]
+
+
 def assign_command(assignable_id: str, actor_id: str, *, base: Base) -> list[str]:
     """Assign the coding agent, and say where it starts.
 
@@ -513,6 +547,9 @@ class GhCli:
 
     def merge_pr(self, *, number: int) -> None:
         _run(merge_command(number, self.repo))
+
+    def close_issue(self, *, number: int) -> None:
+        _run(close_command(number, self.repo))
 
     def edit_labels(
         self, *, number: int, add: Sequence[str] = (), remove: Sequence[str] = ()

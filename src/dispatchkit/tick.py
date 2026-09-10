@@ -27,9 +27,10 @@ status, prints them, and hands out what the caps allow; dying part-way through
 costs at most the operations it had not reached yet, because there is no second
 artifact that could be left disagreeing with the issues.
 
-A pass never creates, edits, or closes an issue. `apply` owns the graph's
-shape, and only a merged PR closes work; the scheduler only ever hands work
-out and says what it sees.
+A pass never creates or edits an issue: `apply` owns the graph's shape. It does
+close one, but only to record a merge that already happened — off the default
+branch GitHub ignores a closing keyword, so a plan branch needs dispatchkit to
+say what GitHub would have said (D16).
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from dispatchkit.config import SchedulerConfig
 from dispatchkit.github import (
     LABEL_LOCAL_CLAIM,
     AssignAgent,
+    CloseIssue,
     DispatchOperation,
     GitHubApi,
     LabelIssue,
@@ -60,6 +62,7 @@ from dispatchkit.resolve import (
     blocking,
     build_items,
     ci_notices,
+    close_ops,
     drift_notices,
     merge_ops,
     ready_ops,
@@ -112,6 +115,9 @@ class TickResult:
     refused: tuple[Notice, ...] = ()
     #: Dispatches reclaimed after producing no pull request (D7).
     reclaimed: int = 0
+    #: Issues closed because their work landed on a plan branch, where GitHub
+    #: ignores a closing keyword (D16).
+    closed: int = 0
 
 
 #: The lanes this build can actually hand work to.
@@ -179,6 +185,7 @@ def plan_tick(
             *dispatch_ops,
             *ready_ops(items),
             *merge_ops(items, config, dirty=dirty),
+            *close_ops(items),
         ),
         statuses=projected,
         items=tuple(items),
@@ -204,7 +211,7 @@ def plan_tick(
 
 
 def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
-    dispatched = readied = merged = reclaimed = 0
+    dispatched = readied = merged = reclaimed = closed = 0
     refused: list[Notice] = []
     for operation in plan.operations:
         match operation:
@@ -231,7 +238,10 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
                     refused.append(Notice("merge-refused", f"#{operation.number}", str(exc)))
                     continue
                 merged += 1
-    return TickResult(dispatched, readied, merged, tuple(refused), reclaimed)
+            case CloseIssue():
+                api.close_issue(number=operation.number)
+                closed += 1
+    return TickResult(dispatched, readied, merged, tuple(refused), reclaimed, closed)
 
 
 def _unserved_claims(items: Sequence[TaskItem], served: Collection[Lane]) -> tuple[Notice, ...]:

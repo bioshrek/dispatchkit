@@ -39,6 +39,7 @@ from dispatchkit.github import (
     LABEL_HOLD,
     LABEL_LOCAL_CLAIM,
     LABEL_STUCK,
+    CloseIssue,
     LabelIssue,
     MarkReady,
     MergePr,
@@ -46,7 +47,16 @@ from dispatchkit.github import (
     RepoState,
     UnassignAgent,
 )
-from dispatchkit.model import Base, Checks, Lane, PullRequest, TaskId, TaskRef, Verify
+from dispatchkit.model import (
+    Base,
+    Checks,
+    Lane,
+    MergedPr,
+    PullRequest,
+    TaskId,
+    TaskRef,
+    Verify,
+)
 
 #: The cloud agent's own login. GitHub records a second AssignedEvent for the
 #: human who triggered the dispatch, so both the count of attempts and the
@@ -104,6 +114,8 @@ class TaskItem:
     body: str = ""
     #: Closed as not planned. Closed, but satisfying nothing (D13.1).
     cancelled: bool = False
+    #: Linked pull requests that have already landed, and where (D16).
+    merged: tuple[MergedPr, ...] = ()
 
     @property
     def id(self) -> TaskId:
@@ -265,6 +277,7 @@ def build_items(
                 node_id=issue.node_id,
                 title=issue.title,
                 body=issue.body,
+                merged=issue.merged,
             )
         )
     return tuple(items), tuple(notices)
@@ -398,6 +411,34 @@ def ready_ops(items: Sequence[TaskItem]) -> tuple[MarkReady, ...]:
             if pr.draft and pr.checks is Checks.PASSING
         ]
     return tuple(operations)
+
+
+def close_ops(items: Sequence[TaskItem]) -> tuple[CloseIssue, ...]:
+    """Close the tasks whose work has landed on their plan branch (D16).
+
+    GitHub honours `Closes #12` only when the pull request targets the default
+    branch; against anything else the keyword is ignored and no link is even
+    created. A plan branch is not the default branch, so this is the whole
+    reason a plan on one does not deadlock on its first task.
+
+    Two conditions, and the second is the one that matters:
+
+    - The issue is still open, which is what makes this idempotent and what
+      makes it silent on a `main`-based plan: GitHub closed that one already,
+      so there is nothing here to say. No special case; the same rule.
+    - A merged pull request whose base is *this task's* base. Merged is not
+      enough. Any account may open a pull request cross-referencing an issue,
+      and if merging one anywhere closed the task, an outsider could unblock
+      the graph by merging into a branch of their own.
+
+    Pure, like every other rule here: the merges arrive in the snapshot and the
+    decision comes back out as data.
+    """
+    return tuple(
+        CloseIssue(task.ref, task.number)
+        for task in items
+        if not task.closed and any(merged.base == task.base for merged in task.merged)
+    )
 
 
 def merge_ops(

@@ -187,6 +187,20 @@ DEFAULT_BASE = Base("main")
 
 
 @dataclass(frozen=True, slots=True)
+class MergedPr:
+    """A pull request linked to a task that has landed, and where it landed.
+
+    The base is carried because a merge is only evidence about *this* plan if
+    it went where this plan integrates (D16). Anyone may open a pull request
+    cross-referencing an issue; without the base, merging one into a branch of
+    their own would close the task and unblock everything behind it.
+    """
+
+    number: int
+    base: Base
+
+
+@dataclass(frozen=True, slots=True)
 class Dependency:
     """One edge, which must name the artifact it waits on.
 

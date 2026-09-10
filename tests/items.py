@@ -15,6 +15,7 @@ from dispatchkit.model import (
     Base,
     Checks,
     Lane,
+    MergedPr,
     PullRequest,
     TaskId,
     TaskRef,
@@ -100,6 +101,7 @@ def issue(
     holds: tuple[datetime, ...] = (),
     acceptance: str = "check && verify",
     base: Base = DEFAULT_BASE,
+    merged: tuple[MergedPr, ...] = (),
     node_id: str | None = None,
 ) -> IssueState:
     """The same synthetic task, but as GitHub would hand it back."""
@@ -129,6 +131,7 @@ def issue(
         open_prs=_prs(open_prs),
         dispatches=dispatches,
         holds=holds,
+        merged=merged,
         node_id=node_id if node_id is not None else f"I_{number}",
     )
 

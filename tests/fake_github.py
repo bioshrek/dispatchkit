@@ -43,6 +43,15 @@ class FakeGitHub:
         self.next_pr += 1
         return self.next_pr
 
+    def close_issue(self, *, number: int) -> None:
+        self.calls.append(f"close_issue({number})")
+        self.state = RepoState(
+            tuple(
+                replace(issue, closed=True) if issue.number == number else issue
+                for issue in self.state.issues
+            )
+        )
+
     def comment(self, *, number: int, body: str) -> None:
         self.calls.append(f"comment(#{number})")
         self.comments.append({"number": str(number), "body": body})

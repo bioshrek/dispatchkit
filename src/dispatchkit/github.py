@@ -19,7 +19,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from dispatchkit.model import DEFAULT_BASE, Base, Lane, PullRequest, TaskId, TaskRef, Verify
+from dispatchkit.model import (
+    DEFAULT_BASE,
+    Base,
+    Lane,
+    MergedPr,
+    PullRequest,
+    TaskId,
+    TaskRef,
+    Verify,
+)
 
 MANAGED_LABEL_PREFIXES = ("plan:", "lane:", "verify:")
 DISPATCHKIT_LABEL = "dispatchkit"
@@ -102,6 +111,11 @@ class IssueState:
     # to be able to tell the two apart, and the repository is the only place
     # that remembers which.
     holds: tuple[datetime, ...] = ()
+    # Pull requests linked to this issue that have already landed, and the
+    # branch each landed on (D16). Off the default branch GitHub ignores a
+    # closing keyword entirely, so this is the only evidence that the work is
+    # in -- and the branch is half of it.
+    merged: tuple[MergedPr, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,12 +217,31 @@ class MergePr:
     number: int
 
 
+@dataclass(frozen=True, slots=True)
+class CloseIssue:
+    """Close a task whose pull request has landed on its plan branch (D16).
+
+    GitHub honours a closing keyword only on the default branch — for anything
+    else its documentation says the keywords "are ignored, no links are
+    created". A plan branch is not the default branch, so without this every
+    plan on one deadlocks on its first task: the work merges, the issue stays
+    open, and nothing that depends on it ever becomes ready.
+
+    A pass still never *decides* anything about the graph's shape. This records
+    a fact the repository already contains rather than making one, which is why
+    it can sit beside operations that only ever hand work out.
+    """
+
+    ref: TaskRef
+    number: int
+
+
 #: What a scheduler pass may do. Deliberately narrower than `Operation`: a pass
-#: never creates, edits or closes an issue — `apply` owns the graph's shape and
-#: only a merged PR closes work. Every member acts on the repository itself,
-#: because since D14 there is nowhere else to write: status is derived and
-#: printed, never stored.
-DispatchOperation = AssignAgent | UnassignAgent | LabelIssue | MarkReady | MergePr
+#: never creates or edits an issue — `apply` owns the graph's shape. It may
+#: close one, but only to record a merge that has already happened (D16). Every
+#: member acts on the repository itself, because since D14 there is nowhere
+#: else to write: status is derived and printed, never stored.
+DispatchOperation = AssignAgent | UnassignAgent | LabelIssue | MarkReady | MergePr | CloseIssue
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +298,9 @@ class GitHubApi(Protocol):
     def mark_ready(self, *, number: int) -> None: ...
 
     def merge_pr(self, *, number: int) -> None: ...
+
+    def close_issue(self, *, number: int) -> None:
+        """Because GitHub will not, off the default branch (D16)."""
 
     # The local lane (D6). The cloud agent opens its own pull request and
     # comments for itself; here the executor is the agent's hands.
