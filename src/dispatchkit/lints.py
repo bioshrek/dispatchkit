@@ -27,12 +27,13 @@ timeline, where it is a fact.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from fnmatch import fnmatch
 
 from dispatchkit.errors import GraphIssue
 from dispatchkit.metrics import plan_shape
-from dispatchkit.model import TaskGraph
+from dispatchkit.model import Task, TaskGraph, TaskId
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,8 +45,19 @@ class LintConfig:
 DEFAULT_LINTS = LintConfig()
 
 
-def lint_graph(graph: TaskGraph, config: LintConfig = DEFAULT_LINTS) -> list[GraphIssue]:
-    """Report structural warnings. Never raises, even on an invalid graph."""
+def lint_graph(
+    graph: TaskGraph,
+    config: LintConfig = DEFAULT_LINTS,
+    *,
+    specs: Mapping[TaskId, str] | None = None,
+) -> list[GraphIssue]:
+    """Report structural warnings. Never raises, even on an invalid graph.
+
+    `specs` maps a task to the prose of its `body_file`, which lives outside
+    the graph and so has to be handed in — this module opens nothing. `None`
+    means the caller did not read them and the body lints stay quiet; an empty
+    mapping means it did, and found none.
+    """
     issues: list[GraphIssue] = []
     is_chain = False
 
@@ -83,6 +95,8 @@ def lint_graph(graph: TaskGraph, config: LintConfig = DEFAULT_LINTS) -> list[Gra
     if not is_chain:  # on a chain, `chain-graph` already says it, once
         issues.extend(_merge_candidates(graph))
     issues.extend(_scope_omits_tests(graph))
+    if specs is not None:
+        issues.extend(_body_lints(graph, specs))
     return issues
 
 
@@ -191,3 +205,66 @@ def _merge_candidates(graph: TaskGraph) -> list[GraphIssue]:
     return issues
 
 
+
+
+#: A backticked token is treated as a repository path only if it contains a
+#: slash. Bodies are full of backticked things that are not files -- `--top`,
+#: `uv run pytest -q`, `v0.2` -- and requiring a separator admits none of
+#: them while still catching `tests/test_readme.py`, which is the case that
+#: prompted the lint. A bare `README.md` in prose is missed, deliberately: the
+#: alternative is a list of file extensions, which is a list of guesses.
+_PATH_IN_PROSE = re.compile(r"`([^`\s]+/[^`\s]+)`")
+
+#: Fenced blocks are illustration -- worked examples, commands, diffs -- and
+#: the paths inside them are things to read, not things the task will change.
+_FENCE = re.compile(r"^```.*?^```", re.M | re.S)
+
+
+def _body_lints(graph: TaskGraph, specs: Mapping[TaskId, str]) -> list[GraphIssue]:
+    issues: list[GraphIssue] = []
+    for task in graph.tasks:
+        prose = specs.get(task.id, "").strip()
+        if not prose:
+            issues.append(
+                GraphIssue(
+                    "thin-body",
+                    task.id,
+                    "no `body_file`, so the issue body is its title and the acceptance; the "
+                    "prompt is that prose, so the agent is told what to call the work but not "
+                    "what it is",
+                )
+            )
+            continue
+        issues.extend(_named_paths_outside_scope(task, prose))
+    return issues
+
+
+def _named_paths_outside_scope(task: Task, prose: str) -> list[GraphIssue]:
+    """A path the brief names that the declared scope does not admit.
+
+    The third place a plan states its scope, after `touches` and the
+    acceptance, and the only one the agent actually reads. `document-flags`
+    asked in prose for a file its `touches` did not admit, and the two
+    disagreed all the way to a withheld merge.
+
+    Silent on an empty `touches`: there is nothing to disagree with.
+    """
+    if not task.touches:
+        return []
+    named = dict.fromkeys(_PATH_IN_PROSE.findall(_FENCE.sub("", prose)))
+    missing = [
+        path
+        for path in named
+        if "://" not in path and not any(fnmatch(path, pattern) for pattern in task.touches)
+    ]
+    if not missing:
+        return []
+    return [
+        GraphIssue(
+            "scope-omits-named-path",
+            task.id,
+            f"the body names {', '.join(f'`{path}`' for path in missing)}, which `touches` "
+            "does not cover; the prose is what the agent is given, so if the task changes "
+            "those files the declaration is already wrong",
+        )
+    ]

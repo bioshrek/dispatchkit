@@ -188,7 +188,11 @@ def _validate(args: argparse.Namespace) -> int:
     if isinstance(graph, int):
         return graph
 
-    warnings = lint_graph(graph)
+    specs = _read_specs(graph, path)
+    if isinstance(specs, int):
+        return specs
+
+    warnings = lint_graph(graph, specs=specs)
     if warnings and args.strict:
         print(f"FAIL {path}: {len(warnings)} lint(s), and --strict was requested", file=sys.stderr)
         for warning in warnings:
@@ -367,7 +371,8 @@ def _saved(save: Save, config: SchedulerConfig) -> list[str]:
         if isinstance(graph, int):
             lines.append(f"NOTE {name} does not validate; nothing is planned from it until it does")
             continue
-        warnings = lint_graph(graph)
+        specs = _read_specs(graph, config.graph_path(name))
+        warnings = lint_graph(graph, specs=specs if not isinstance(specs, int) else None)
         lines.append(f"     {name}: {len(graph.tasks)} task(s), {len(warnings)} lint(s)")
         lines += [f"WARN {warning}" for warning in warnings]
     for name in save.removed:
