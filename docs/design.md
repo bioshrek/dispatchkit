@@ -1792,6 +1792,11 @@ most fragile thing on the desk.
 the whole of it assertable offline, the drift is bounded by a single poll, and an interval is a
 rate rather than a deadline — nothing here is owed accuracy a clock would buy.
 
+**Hot, cold and refused are deliberately not built yet.** They classify the effect of a save on
+work already in flight, and nothing here applies a save — `watch` re-plans and prints, and `apply`
+is still the only thing that writes. The classification becomes necessary the moment apply-on-save
+does, and building it before then would be describing a hazard that cannot occur.
+
 **The loop tests had to move their stop seam.** They ended a run by raising on the Nth `sleep`,
 which counted passes only while a wait *was* one sleep. It is now many, so the read that begins a
 pass is the only thing left that happens exactly once per pass, and that is where stopping went.
