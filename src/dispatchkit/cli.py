@@ -39,6 +39,7 @@ from dispatchkit.doctor import (
     Check,
     Diagnostics,
     LocalFacts,
+    check_cli,
     check_local,
     check_remote,
     check_runner,
@@ -77,6 +78,10 @@ DEFAULT_INTERVAL = 60
 EXIT_OK = 0
 EXIT_INVALID = 1
 EXIT_UNREADABLE = 2
+
+#: The one hard external dependency. Named once so `doctor` and the adapter
+#: cannot disagree about what is missing.
+GH = "gh"
 
 
 def plan_name(path: Path) -> str:
@@ -330,9 +335,7 @@ def _watch(args: argparse.Namespace) -> int:
             watcher = GraphWatcher(config.plans, sleep=time.sleep)
             while True:
                 number += 1
-                code, plan = _pass(
-                    args, config, api, local=local, since=previous, number=number
-                )
+                code, plan = _pass(args, config, api, local=local, since=previous, number=number)
                 if code != EXIT_OK:
                     return code
                 previous = plan
@@ -573,7 +576,22 @@ def _facts(args: argparse.Namespace) -> LocalFacts | int:
         config_exists=config_path.exists(),
         plans=plans,
         plans_exists=plans.is_dir(),
+        config=config,
+        config_in_repo=_in_repo(config_path, root),
     )
+
+
+def _in_repo(config_path: Path, root: Path) -> Path:
+    """The config path as the repository sees it, which is what a fence covers.
+
+    `--root ../sandbox` makes `config_path` a path from here to there; a fence
+    pattern is matched against a path from the repository root, and comparing
+    the two would report a missing pattern that is present.
+    """
+    try:
+        return config_path.relative_to(root)
+    except ValueError:
+        return config_path
 
 
 def _doctor(args: argparse.Namespace) -> int:
@@ -589,6 +607,14 @@ def _doctor(args: argparse.Namespace) -> int:
         config = _load_config(facts.config_path)
         program = config.runner.argv[0] if not isinstance(config, int) else ""
         checks = (check_runner(program, found=shutil.which(program) if program else None),) + checks
+    if args.repo and shutil.which(GH) is None:
+        # Nothing remote can be answered without it, and answering anyway
+        # would be an invention. The local checks still run: somebody with no
+        # `gh` still deserves to be told their fence is open.
+        checks = (check_cli(GH, found=None),) + checks
+        for line in summarise(checks):
+            print(line)
+        return EXIT_UNREADABLE
     if args.repo:
         api = GhCli(repo=args.repo)
         try:

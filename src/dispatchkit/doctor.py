@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dispatchkit.config import DEFAULT_LOCATIONS, GRAPH_SUFFIX, SchedulerConfig
 from dispatchkit.github import missing_labels
 
 #: Scopes a human must grant. Just the one since D14: issues, labels, pull
@@ -59,6 +60,14 @@ class LocalFacts:
     config_exists: bool
     plans: Path
     plans_exists: bool
+    #: The loaded config, when there is one to check. `None` means the caller
+    #: did not load it, and the checks that read it stay quiet rather than
+    #: reporting a default they were never handed.
+    config: SchedulerConfig | None = None
+    #: `config_path` as the *repository* sees it, which is what a fence pattern
+    #: is compared against. Differs from `config_path` whenever `--root` points
+    #: somewhere other than the working directory.
+    config_in_repo: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +95,10 @@ def check_remote(diagnostics: Diagnostics) -> tuple[Check, ...]:
 
 def check_local(facts: LocalFacts) -> tuple[Check, ...]:
     """The checks the working tree can answer on its own, offline."""
-    return (_config(facts), _plans(facts))
+    checks = [_config(facts), _plans(facts)]
+    if facts.config is not None:
+        checks.append(check_fence(facts.config, facts.config_in_repo or facts.config_path))
+    return tuple(checks)
 
 
 def healthy(checks: Sequence[Check]) -> bool:
@@ -127,6 +139,27 @@ def _scopes(scopes: tuple[str, ...] | None) -> Check:
     return Check("token-scopes", True, f"token holds {_quoted(REQUIRED_SCOPES)}")
 
 
+def check_cli(program: str, *, found: str | None) -> Check:
+    """Is `gh` on this machine at all? (D11)
+
+    The single hard external dependency, and so the one failure that makes
+    every other remote check unanswerable. Reported first and on its own,
+    because the translated adapter error reads as "the repository could not be
+    read", which sends somebody to look at a repository that is fine.
+
+    Same shape as `check_runner`: this decides, and the CLI goes and looks.
+    """
+    if found is None:
+        return Check(
+            "gh",
+            False,
+            f"`{program}` is not installed or not on PATH, so nothing can be read "
+            "from or written to GitHub",
+            f"install it from https://cli.github.com, then `{program} auth login`",
+        )
+    return Check("gh", True, f"`{program}` is at {found}")
+
+
 def check_runner(program: str, *, found: str | None) -> Check:
     """Is the local runner actually on this machine? (D6.5)
 
@@ -153,6 +186,82 @@ def check_runner(program: str, *, found: str | None) -> Check:
             f"install {program}, or drop --local and route these tasks to the cloud lane",
         )
     return Check("local-runner", True, f"`{program}` is at {found}")
+
+
+def check_fence(config: SchedulerConfig, config_path: Path) -> Check:
+    """Does the blast-radius fence cover the things that define the pipeline?
+
+    `default_fence` is careful about this — it fences the workflows, the plans
+    glob and *both* documented config locations, on the grounds that a config
+    which moves house must not be able to arrive unreviewed. An explicit
+    `fence.paths` replaces that list outright, and so throws all of it away.
+    A safe default with an unguarded override.
+
+    It matters more since D9.2, which demoted `touches` and left the fence as
+    the only permission boundary in the system. The escalation is short: a
+    `verify: auto` pull request editing the config is unfenced, so `merge_ops`
+    merges it on green CI; the next pass loads it; and `runner.argv` is a
+    command `watch --local` runs on the maintainer's machine. Fencing the
+    workflows matters for the same reason one step back — they decide what
+    green means — and the plans glob because the graph is the reviewed
+    artifact, so rewriting it unattended is what makes the review a formality.
+
+    Reported rather than enforced, like `merge-gate`: this says the pipeline
+    can rewrite its own governance, and a human decides what to do about it.
+    """
+    if not config.fence:
+        return Check(
+            "fence",
+            False,
+            "the blast-radius fence is empty, so nothing is withheld from an "
+            "unattended merge — including the config, the workflows and the plans",
+            _FENCE_REMEDY,
+        )
+
+    unprotected = [
+        f"`{path}`" for path in _must_be_fenced(config, config_path) if not config.is_fenced(path)
+    ]
+    if unprotected:
+        return Check(
+            "fence",
+            False,
+            f"the fence does not cover {', '.join(unprotected)}, so a `verify: auto` "
+            "pull request may rewrite what governs the pipeline and merge it unattended",
+            _FENCE_REMEDY,
+        )
+    return Check("fence", True, "the fence covers the config, the workflows and the plans")
+
+
+_FENCE_REMEDY = (
+    "add the missing patterns to `fence.paths`, or drop the key entirely to get "
+    "the derived default, which already covers all three"
+)
+
+
+def _must_be_fenced(config: SchedulerConfig, config_path: Path) -> list[str]:
+    """Representative repository paths the fence has to withhold.
+
+    Paths rather than patterns, because the question is whether a file *would*
+    be withheld, not whether the fence is spelled a particular way —
+    `.github/**` is a perfectly good way to cover the first two.
+
+    A config location that takes precedence over the one in use is included:
+    discovery prefers `.github/dispatchkit.toml`, so with the root file in use
+    an agent that merely *creates* the `.github` one silently takes over.
+    """
+    required = [".github/workflows/ci.yml", f"{_posix(config.plans)}/example{GRAPH_SUFFIX}"]
+    # An absolute path is not a repository path, so no pattern could cover it.
+    if not config_path.is_absolute():
+        required.append(_posix(config_path))
+    for location in DEFAULT_LOCATIONS:
+        if _posix(location) == _posix(config_path):
+            break
+        required.append(_posix(location))
+    return required
+
+
+def _posix(path: Path) -> str:
+    return path.as_posix()
 
 
 def _agent(available: bool) -> Check:

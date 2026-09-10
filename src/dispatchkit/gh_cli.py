@@ -518,12 +518,7 @@ class GhCli:
 
     def token_scopes(self) -> tuple[str, ...] | None:
         """`None` when the token does not report them, which now means logged out."""
-        completed = subprocess.run(  # noqa: S603 - argv list, never a shell
-            auth_status_command(),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        completed = _spawn(auth_status_command())
         # `gh auth status` prints to stderr and exits non-zero when logged out,
         # which is a diagnosis rather than a crash.
         return parse_token_scopes(completed.stdout + completed.stderr)
@@ -551,14 +546,33 @@ class GhCli:
         return self._actor
 
 
+def _spawn(command: list[str], *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    """Run an argv list, translating "the program is not there" into the error
+    every caller already handles.
+
+    `gh` is the single hard external dependency, and without it `subprocess`
+    raises `FileNotFoundError` — which nothing caught, because the adapter's
+    contract with its callers is `RuntimeError`. So the absence of `gh` came
+    out of `doctor` as a traceback, from the command whose whole job is
+    explaining a broken setup.
+    """
+    try:
+        return subprocess.run(  # noqa: S603 - argv list, never a shell
+            command,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"`{command[0]}` is not installed or not on PATH, so nothing can be "
+            "read from or written to GitHub"
+        ) from exc
+
+
 def _run(command: Sequence[str], *, stdin: str | None = None) -> str:
-    completed = subprocess.run(  # noqa: S603 - argv list, never a shell
-        list(command),
-        input=stdin,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    completed = _spawn(list(command), stdin=stdin)
     if completed.returncode != 0:
         raise RuntimeError(f"{command[0]} {command[1]} failed: {completed.stderr.strip()}")
     return completed.stdout
