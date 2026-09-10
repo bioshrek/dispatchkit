@@ -18,8 +18,9 @@ The three properties everything else serves:
    because it was the only artifact here that could go stale. Never introduce a side table, a
    cache, a state file, or a `status:*` label.
 3. **Zero runtime dependencies.** `src/dispatchkit` is pure standard library, enforced by
-   `tests/test_workflow.py`. The scheduler runs in a job holding a token that can assign work; no
-   third-party code belongs in it. `pyyaml` is dev-only, for asserting on the workflow YAML.
+   `tests/test_stdlib_only.py`. The scheduler is `dispatchkit watch`, running on a person's
+   workstation under their own credential, and it can assign work; no third-party code belongs
+   in it.
 
 ## Ground rules
 
@@ -62,8 +63,9 @@ make check   # pytest, ruff, mypy --strict, lint-imports
 - Issue bodies are attacker-influencable. The machine block is parsed by the closed grammar in
   `block.py` — never a YAML loader, never `eval`, never a regex that accepts unknown keys.
 - Every `gh` call is an argv list. No `shell=True`, no string interpolation into a command.
-- No `${{ }}` inside a workflow `run:` script; values arrive via `env:`.
-- The workflow token is never `contents: write`. Only pull requests mutate the tree.
+- The scheduler holds no token of its own. It runs on `gh`'s credential, so nothing may write one
+  anywhere, and nothing may ask an adopter to install one.
+- Only pull requests mutate the tree. No command in `dispatchkit` pushes to a branch.
 
 ## Naming
 

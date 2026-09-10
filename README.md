@@ -54,11 +54,11 @@ One idempotent pass, safe to run as often as you like:
 4. **Admit** ready tasks in plan order, subject to per-lane concurrency caps and file-scope exclusion.
 5. **Dispatch** — assign the coding agent (cloud lane), or prepare a worktree and run it here (local lane).
 
-`watch` is that pass on a loop: it re-runs when you save a graph, otherwise on a backing-off
-poll, and shows you what it is about to do. It covers every plan in the repository at once, so the
-concurrency caps bound total work in flight rather than work per plan; `--once` runs a single pass
-and exits. There is no cron and no GitHub Actions workflow — the scheduler is a command on your
-machine, and nothing moves while it is not running.
+`watch` is that pass on a loop, re-running every 60 seconds (`--interval`) until you stop it. It
+covers every plan in the repository at once, so the concurrency caps bound total work in flight
+rather than work per plan; `--once` runs a single pass and exits. There is no cron and no GitHub
+Actions workflow — the scheduler is a command on your machine, running as you, and nothing moves
+while it is not running.
 
 ## Three properties it is built around
 
@@ -71,16 +71,17 @@ there is no state machine to get wedged, no board to go stale, and nothing to re
 runs. Rate-limited halfway through? The next pass finishes the job.
 
 **No dependencies, ever.** `dispatchkit` is pure standard library, and a test walks its imports to
-keep it that way. The process that holds a token which can assign work runs no third-party code.
+keep it that way. The process that can assign work runs on your credential, so it runs no
+third-party code.
 
 ## Status
 
 Early, and honest about it. Applying a graph, dispatching to the cloud agent, the retry budget and
-`verify: auto` auto-merge are built and have run live against a real repository. The Project
-board is retired, so `repo` scope is all any command needs (D14). Being built now, in this order:
-`watch` itself (D13) and the local lane executor (D6) — until they land, the scheduler is
-`dispatchkit tick` run from a GitHub Actions workflow, and `lane = "local"` parks a task rather
-than running it.
+`verify: auto` auto-merge are built and have run live against a real repository. The Project board
+is retired, so `repo` scope is all any command needs (D14), and the scheduler is now `watch` on
+your own machine rather than a workflow holding a token (D13). Being built next: the graph watcher
+that re-plans on save (D13.1) and the local lane executor (D6) — until D6 lands, `lane = "local"`
+parks a task rather than running it.
 [docs/design.md](docs/design.md) carries the reasoning and a decision record per deliverable;
 [docs/RESUME.md](docs/RESUME.md) has the next actions.
 

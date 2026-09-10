@@ -6,8 +6,8 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7 are implemented and green offline. 556 tests, `ruff`, `mypy --strict`, `lint-imports` all
-clean via `make check`.
+D1–D5.7, D7, D9, D9.1, D14 and D13 are implemented and green offline. 500 tests, `ruff`,
+`mypy --strict`, `lint-imports` all clean via `make check`.
 
 | Step | What | State |
 |------|------|-------|
@@ -21,7 +21,8 @@ clean via `make check`.
 | D5.7 | Draft-aware status, `MarkReady` for `verify: auto` | **done and proven live**; `Auto-merging` implies a merge is possible |
 | D7, D9, D9.1 | Retry budget, `verify: auto` merge, the two guardrails | **done and proven live** |
 | D14 | Retire the Project board | **done and proven live**; `doctor` green with no `project` scope |
-| D13, D6 | `watch`, local lane executor | designed, unbuilt |
+| D13 | `watch`: the scheduler moves local | done offline; the workflow, its token and its plan variable are deleted |
+| D13.1, D6 | Graph watcher, local lane executor | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
 `tools/dispatch/`) on 2026-09-08. `art_strategy` is intended to become adopter #1.
@@ -202,7 +203,14 @@ Immediately outstanding, neither a milestone:
    merging it releases `json-output`, which is deferred behind it on `cli.py`. `document-flags`
    is the remaining `verify: auto` task, and the first end-to-end test of D9's two guardrails.
 
-2. **Decide on the `[WIP]` gap.** `encoding-fallback` reported `In Review` while its PR was still
+2. **Watch a real pass through `watch`, then design the report.** D13 shipped the loop, the
+   pooled caps and the deletion of the workflow, but deliberately not the terminal report or the
+   graph watcher — both are taste decisions, and D13.1 is where they land. The report is the first
+   thing anyone looks at all day; guessing at it before sitting in front of a real pass is how it
+   ends up wrong. `uv run dispatchkit watch --repo bioshrek/dispatchkit-sandbox --push` is the
+   command.
+
+3. **Decide on the `[WIP]` gap.** `encoding-fallback` reported `In Review` while its PR was still
    titled `[WIP]` and the agent was still pushing to it. Nobody can review that. `draft` cannot
    separate it, since Copilot leaves finished PRs in draft too; the signal is the
    `copilot_work_finished` timeline event, which `STATE_QUERY` does not request.
@@ -230,14 +238,13 @@ Immediately outstanding, neither a milestone:
   dispatched and in-review coverage. Note that neither fixture carries `checkSuites`, which D5.6
   added: the check-state tests inject suites into a copy rather than re-recording, so that shape
   is replayed from a live payload but not from a stored one.
-- **The workflow template pins `bioshrek/dispatchkit@v0.3.0`, which exists.** Adopters override
-  with the `DISPATCHKIT_SOURCE` and `DISPATCHKIT_REF` repository variables, and
-  `test_the_default_ref_is_a_version_tag` refuses a moving ref like `main`. Note the consequence:
-  an adopter's scheduler keeps running the pinned tag until someone repins it, so shipping a fix
-  is two steps, not one — the sandbox ran v0.1.1 for several passes after D9 landed.
-- **`init` will not overwrite an existing workflow**, so an adopter on an old template stays on
-  it. `doctor`'s `workflow-source` check catches this and its remedy says to delete the file
-  first, but there is no upgrade path worth the name.
+- **The two-step-release problem is gone with the workflow.** An adopter's scheduler used to keep
+  running whatever tag its workflow pinned until someone repinned it, so shipping a fix was two
+  steps — the sandbox ran v0.1.1 for several passes after D9 landed. `watch` runs from whatever is
+  installed on the machine, so an upgrade is an upgrade. The sandbox's own
+  `.github/workflows/dispatchkit.yml` is now dead weight and should be deleted by hand, along with
+  its `DISPATCHKIT_TOKEN` secret and `DISPATCHKIT_PLAN` / `DISPATCHKIT_REF` variables; nothing
+  reads them, and a PAT nothing reads is a standing grant for no benefit.
 - **The Copilot approval gate is not visible to `doctor`, but it can be turned off.** The
   repository setting is **Settings → Copilot → Cloud agent → "Actions workflow approval" →
   _Require approval for workflow runs_**, off by default. It is not exposed over REST — probed
@@ -255,13 +262,11 @@ Immediately outstanding, neither a milestone:
 
   Worth being clear about what this trades: GitHub's own warning is that unreviewed Copilot code
   may gain write access or reach Actions secrets. It is the right call in a sandbox. Before
-  recommending it generally, note that the scheduler runs on `schedule`, not `pull_request`, so
-  `DISPATCHKIT_TOKEN` is not exposed to a Copilot PR — keep it that way. The unguarded case is a
-  Copilot PR that edits `.github/workflows/`, which then runs unreviewed.
+  recommending it generally, note that since D13 there is no scheduler secret to expose at all.
+  The unguarded case is a Copilot PR that edits `.github/workflows/`, which then runs unreviewed —
+  which is why those paths are inside the blast-radius fence.
 - **`doctor` cannot see branch protection or the merge queue.** Both are D9 prerequisites and both
   belong in the check set; they were left out because nothing consumes them yet.
-- **`init` cannot create the Project itself.** `gh project create` needs an owner-type decision
-  (user vs. org) that changes the token requirements, so it is deliberately a human's first step.
 - **`plan:*` labels are created by `apply`, not by `init`.** `init` creates only the labels that
   do not depend on a graph. Correct, but worth knowing when a board looks half-configured.
 - **The config moved to `.github/dispatchkit.toml`.** A root `dispatchkit.toml` is still read, and
@@ -279,8 +284,10 @@ Immediately outstanding, neither a milestone:
 - **Concurrency caps stay per-repo**, not per-owner. Consequence: the state query stays
   repo-driven (`repository.issues`) rather than board-driven (`ProjectV2.items`), and an adopter
   with several repos gets several independent caps.
-- **Distribution is a reusable workflow first, a PyPI package second.** The package matters for
-  the D6 workstation daemon; most adopters should only ever need a workflow file.
+- **Distribution is a PyPI package, and only that.** It was "a reusable workflow first" on the
+  principle that the unit of distribution should match the unit of execution. The principle stood
+  and the conclusion flipped at D13: the unit of execution is a command on a workstation, so
+  `uvx dispatchkit` is the whole install story.
 - **This repo is its own scratch repo.** Live trials leave debris here, where debris is on-brand,
   rather than in a real project — and the blast-radius fence already forces `verify: human` for
   anything touching workflows or config, so a buggy dispatcher cannot merge its own broken fix.

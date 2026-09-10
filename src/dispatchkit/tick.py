@@ -1,5 +1,10 @@
 """D5: one scheduler pass — load, resolve, report, admit, dispatch.
 
+Named `tick` for the unit rather than the command. The `tick` verb is gone —
+`watch` is the command, and a pass is one iteration of its loop — but a tick is
+still exactly what this module plans, so the name outlives the CLI it was taken
+from.
+
 Every plan in the repository, not one (D13). Readiness is still resolved plan
 by plan — a `depends` edge never crosses a graph file — but the admitted set is
 pooled and the caps are counted once, because what they bound was never a plan:

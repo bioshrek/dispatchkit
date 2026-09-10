@@ -112,9 +112,9 @@ class TestTheSubsetRule:
 class TestOnlyPullRequestWorkflowsCount:
     """A workflow that never runs on a pull request produces no check on it.
 
-    Without this the hole reappears in miniature: dispatchkit's own scheduler
-    workflow runs `dispatchkit tick` on a cron, and counting its `run:` steps
-    as CI coverage would let a task claim green from a workflow that never
+    Without this the hole reappears in miniature: a nightly job that runs the
+    whole test suite is not coverage of a pull request, and counting its
+    `run:` steps would let a task claim green from a workflow that never
     reports on the pull request at all.
     """
 

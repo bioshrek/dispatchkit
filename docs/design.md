@@ -583,12 +583,13 @@ Shipped, each with a decision record below:
 | D9   | `verify: auto` merge                                          | Live: `stopwords` merged and closed with no human                        |
 | D9.1 | Acceptance-subset-of-CI and scope-drift guardrails            | Both failed against the live graph first, which is the point             |
 | D14  | Retire the Project board                                      | Live: `doctor --repo` green on a token with no `project` scope           |
+| D13  | `watch`: the scheduler moves local; repo-wide admission       | Restart mid-loop and the next pass is identical; the workflow is deleted |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D13  | `watch`: graph watcher, poll loop, repo-wide admission, `--once`     | Save → re-plan → converge; restart mid-loop and the next pass is identical |
+| D13.1 | Graph watcher: save → re-plan; hot/cold/refused; `dispatch:hold`     | A save re-plans in place; a dirty graph file degrades `verify: auto`        |
 | D6   | Local lane executor: worktree, runner invocation, push, PR, recovery | One real capability-gated task end-to-end                                  |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
@@ -596,11 +597,15 @@ Remaining, in build order:
 
 D14 came first because D13 should not be built against something that is being deleted: the
 terminal view is what replaces the board, and writing one to feed the other would be work done
-twice. D13 now replaces the workflow, so D5's `.github/workflows/dispatch.yml`, the `init`
-template that writes it and the `doctor` check that looks for it retire with it; `tick` goes with
-them, returning as `watch --once` so a terminating pass is a flag rather than a second command.
-D13 also pools admission across every plan in the repository, which is where the caps stop being
-per-plan. D6 is what makes `caps.local = 1` mean anything: the label nothing consumes finally gets
+twice. D13 then replaced the workflow, taking D5's `.github/workflows/dispatch.yml`, the `init`
+template that writes it, its token and its plan variable, and the three `doctor` checks that
+looked for them; `tick` went with them, returning as `watch --once` so a terminating pass is a
+flag rather than a second command. D13 also pooled admission across every plan in the repository,
+which is where the caps stopped being per-plan.
+
+D13.1 is the half held back deliberately. The loop and the pooling needed no taste decision, so
+they shipped; the watcher's report is the first thing in this tool a person looks at all day, and
+designing it before watching a real pass would be guessing. D6 is what makes `caps.local = 1` mean anything: the label nothing consumes finally gets
 a consumer, and it is where a per-task `model` or `effort` lands. D10 belongs after them rather
 than before, because the graph a planner has to produce is now one a watcher reloads — and it is
 where `estimate_minutes` leaves the schema. D15 is last because it has nothing to measure until a
@@ -616,7 +621,8 @@ argued to a conclusion before being dropped, and it is the same conclusion in ea
 solved for a participant that no longer exists.
 
 The numbers are stable identifiers, not a sequence. They anchor the decision records below, so
-they are never reordered and never reused — which is why the remaining table runs D13 first.
+they are never reordered and never reused — which is why D14 sits below D9.1 in the shipped table
+and D13 below it, in the order they were built rather than the order they were numbered.
 
 ### What the remaining steps need from a human
 
@@ -626,7 +632,7 @@ is least able to help itself.
 
 | Step | Human act                                                                            | Kind                   |
 | ---- | ------------------------------------------------------------------------------------ | ---------------------- |
-| D13  | Decide what the terminal report looks like; delete the workflow and its secret       | Taste + privileged     |
+| D13.1 | Decide what the terminal report looks like, and what a save is allowed to redraw    | Taste                  |
 | D6   | Name the runner CLI, its argv template and model allowlist; ratify the env allowlist | Environment + security |
 | D10  | Write the body contract; choose which existing plans are the known-good fixtures     | Judgement              |
 | D11  | Configure branch protection and the merge queue; decide what gated `init` asks       | Privileged + UX        |
@@ -1696,6 +1702,60 @@ argument for D14 is about a scope, and being wrong about how to drop one would u
 Deleting the sandbox board is the only privileged act left. Nothing in the code reads a project
 any more, so the board's continued existence cannot affect a pass; deleting it is tidying, not a
 step.
+
+### D13 decision record — the scheduler is a command now (shipped)
+
+The design above argued the move; what follows is what building it settled. The engine did not
+change: the same pure planners over the same snapshot, still recomputing everything from the
+issues. Three things did.
+
+**`TaskRef` — a task's name is not its id.** A `TaskId` is a slug scoped to the graph file it was
+written in, so two plans may each contain a `ports`. While a pass took `--plan` that cost nothing,
+and pooling made it ambiguous in two ways at once. As a status-map key a bare id silently drops
+one of the pair — a task that vanishes from the report rather than an error. As a dependency it is
+worse and quieter: one plan's closed `ports` would unblock another plan's `ports`, dispatching
+work whose prerequisite was never done. So the repo-wide key is `TaskRef(plan, id)`, and the rule
+is *readiness per plan, admission pooled*. `depends` deliberately stays a bare `TaskId`, because
+an edge never crosses a plan; it resolves through `ref.sibling(dep)`, which is the whole of the
+per-plan scoping — no grouping pass, no partitioning of the state.
+
+**Caps pool, and priority falls out of it.** `caps.cloud` is review capacity and `caps.local` is
+one workstation; neither has any notion of a plan. Under per-plan caps, three active plans meant
+three times the open pull requests a person had agreed to read, which is the one number the cap
+exists to hold. Pooling then needs a tie-break, and it needs no new schema key: FIFO by issue
+number, which is repo-global and monotonic, so the task that has been waiting longest goes first.
+
+**`fetch_state(plan=...)` was already a lie.** The GraphQL query fetched every `dispatchkit`
+labelled issue and never filtered on the plan; the parameter was accepted and ignored. Dropping it
+made the port honest and removed the last place a caller could believe a read was scoped.
+
+**The interrupt is caught around the loop, not around the wait.** The first version wrapped only
+`time.sleep`, which handles Ctrl-C in the seconds the process is idle and tracebacks in the
+seconds it is talking to GitHub — the more likely of the two, and the one where a stack trace
+reads as "the pass broke" rather than "you stopped it". Nothing needs unwinding either way,
+because a half-finished pass leaves only the operations it already sent and the next pass
+re-derives everything from the issues.
+
+**The second convergence case is now a test, not a promise.** The rule stated above — that a
+long-running process may hold a snapshot for rendering but must recompute every decision from a
+fresh read — is enforced by killing the loop mid-run, starting a new one, and requiring the pass
+that follows to plan nothing. It passes for a boring reason, which is the point: there is still
+nothing to carry across a restart.
+
+**What the deletion actually bought.** The old on-ramp asked an adopter for a long-lived classic
+PAT with `repo`, installed as a repository secret, read by an unattended job that could assign
+work at three in the morning. `watch` runs as the person who started it, on the credential `gh`
+already holds, for as long as their terminal is open. `init` no longer writes a workflow, and
+`doctor` no longer has a `workflow`, `workflow-source` or `workflow-inputs` check — a check that
+outlives its subsystem is worse than no check, because it fails an adopter for not having
+something nothing reads.
+
+**One test had to be rescued before its file was deleted.** `tests/test_workflow.py` also carried
+the assertion that `src/dispatchkit` imports nothing outside the standard library, which is not
+about the workflow at all. It moves to `tests/test_stdlib_only.py`. The original argument was "do
+not resolve a fresh dependency tree inside a job holding a token that can assign work"; the
+scheduler moving onto a workstation, under a person's own credential, makes that argument stronger
+rather than weaker. `pyyaml` had no consumer left and leaves the dev dependencies with it.
 
 ### One local task, and one dispatcher
 
