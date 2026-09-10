@@ -109,6 +109,11 @@ to be a trap; the tasks it strands are now named in the report rather than left 
 
 Label not there yet? `gh label create dispatch:hold --description "dispatchkit: not now"`.
 
+While `watch` is waiting for its next pass it also watches `docs/plans/`. Save a graph and the
+wait is cut short: the file is re-validated and re-linted, what it means is printed, and the next
+pass runs immediately instead of at the end of the interval. Nothing is written to GitHub by a
+save — `apply` stays the explicit act — and a file caught mid-edit is reported, not fatal.
+
 `verify: auto` also needs its graph file committed. While a plan's file is dirty in your working
 tree, that plan's tasks fall back to `verify: human` for the pass — the automatic merge authority
 is withheld, but nothing is blocked and you can still merge by hand. Plans are independent, so an

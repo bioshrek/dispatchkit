@@ -65,6 +65,7 @@ from dispatchkit.validate import (
     validate_acceptance,
     validate_graph,
 )
+from dispatchkit.watcher import GraphWatcher, Save
 from dispatchkit.workstation import work_root
 from dispatchkit.workstation_cli import CliWorkstation
 
@@ -322,6 +323,7 @@ def _watch(args: argparse.Namespace) -> int:
 
             previous: TickPlan | None = None
             number = 0
+            watcher = GraphWatcher(config.plans, sleep=time.sleep)
             while True:
                 number += 1
                 code, plan = _pass(
@@ -330,7 +332,10 @@ def _watch(args: argparse.Namespace) -> int:
                 if code != EXIT_OK:
                     return code
                 previous = plan
-                time.sleep(args.interval)
+                saved = watcher.wait(args.interval)
+                if saved:
+                    for line in _saved(saved, config):
+                        print(line)
     except DispatcherBusy as busy:
         print(f"dispatchkit: {busy}", file=sys.stderr)
         return EXIT_UNREADABLE
@@ -341,6 +346,36 @@ def _watch(args: argparse.Namespace) -> int:
         # than this.
         print("\nwatch: stopped")
         return EXIT_OK
+
+
+def _saved(save: Save, config: SchedulerConfig) -> list[str]:
+    """Re-validate and re-lint what was just saved, and say what it means.
+
+    The whole of the borrowed reload loop is here: the graph is local and the
+    planners are pure, so a save can be checked in milliseconds and there is
+    no reason to make a developer who has just fixed a dependency wait out the
+    rest of an interval to find out. Nothing is written — the pass that
+    follows re-reads GitHub and re-plans, and `apply` remains the explicit act.
+
+    A file caught mid-thought is the normal state of one being edited, so a
+    graph that does not parse is reported and the loop keeps running. Exiting
+    on a typo would make the scheduler the most fragile thing on the desk.
+    """
+    lines = [f"saved {save.describe()}"]
+    for name in (*save.added, *save.edited):
+        graph = _load(config.graph_path(name))
+        if isinstance(graph, int):
+            lines.append(f"NOTE {name} does not validate; nothing is planned from it until it does")
+            continue
+        warnings = lint_graph(graph)
+        lines.append(f"     {name}: {len(graph.tasks)} task(s), {len(warnings)} lint(s)")
+        lines += [f"WARN {warning}" for warning in warnings]
+    for name in save.removed:
+        # `apply` already refuses to close an issue whose task has gone,
+        # reporting `orphan-issue`. Silence here would let a developer believe
+        # the deletion had taken effect on GitHub.
+        lines.append(f"NOTE {name} removed; issues already open are not closed by a deletion")
+    return lines
 
 
 @contextmanager

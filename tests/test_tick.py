@@ -675,6 +675,28 @@ class TestOneDispatcherEveryPlan:
         assert plan.statuses[ref("api", "beta")] is Status.BLOCKED
 
 
+def _stop_after[Api: FakeGitHub](monkeypatch: pytest.MonkeyPatch, api: Api, passes: int) -> Api:
+    """Stop the loop by refusing the read that begins the next pass.
+
+    Until D13.1e the loop stopped on its Nth `sleep`, which counted passes
+    because a wait was one sleep. The wait is now polled — it looks for a saved
+    graph a few times a second — so the read is the only thing left that
+    happens exactly once per pass.
+    """
+    reads = 0
+    read = api.fetch_state
+
+    def fetch_state() -> RepoState:
+        nonlocal reads
+        reads += 1
+        if reads > passes:
+            raise KeyboardInterrupt
+        return read()
+
+    monkeypatch.setattr(api, "fetch_state", fetch_state)
+    return api
+
+
 class TestTheLoop:
     """D13: `watch` is *run a pass, wait, repeat*, in a terminal.
 
@@ -683,37 +705,38 @@ class TestTheLoop:
     failure. `time.sleep` is the seam — no test here waits for real time.
     """
 
-    def _fake_clock(self, monkeypatch: pytest.MonkeyPatch, stop_after: int) -> list[int]:
-        waits: list[int] = []
+    def _fake_clock(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        """A sleep that never sleeps, and never decides when to stop.
 
-        def sleep(seconds: int) -> None:
-            waits.append(seconds)
-            if len(waits) >= stop_after:
-                raise KeyboardInterrupt
-        monkeypatch.setattr("dispatchkit.cli.time.sleep", sleep)
+        Since D13.1e the wait is *polled* — it looks for a saved graph a few
+        times a second — so counting sleeps no longer counts passes. Stopping
+        is `_api(stop_after=)`, which counts the reads that are the pass.
+        """
+        waits: list[float] = []
+        monkeypatch.setattr("dispatchkit.cli.time.sleep", waits.append)
         return waits
 
-    def _api(self, monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+    def _api(self, monkeypatch: pytest.MonkeyPatch, *, stop_after: int = 1) -> FakeGitHub:
         api = FakeGitHub(state=state_of(issue("a", 1)))
         monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
-        return api
+        return _stop_after(monkeypatch, api, stop_after)
 
     def test_it_runs_a_pass_again_after_waiting(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        api = self._api(monkeypatch)
-        self._fake_clock(monkeypatch, stop_after=3)
+        api = self._api(monkeypatch, stop_after=3)
+        self._fake_clock(monkeypatch)
 
         main(["watch", "--push", "--repo", "o/n", "--config", str(tmp_path / "absent.toml")])
 
-        # A pass, a wait, a pass, a wait, a pass — stopped in the third wait.
+        # A pass, a wait, a pass, a wait, a pass — stopped reaching for a fourth.
         assert api.calls.count("fetch_state()") == 3
 
     def test_it_waits_the_interval_it_was_given(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        self._api(monkeypatch)
-        waits = self._fake_clock(monkeypatch, stop_after=2)
+        self._api(monkeypatch, stop_after=2)
+        waits = self._fake_clock(monkeypatch)
 
         main(
             [
@@ -727,7 +750,11 @@ class TestTheLoop:
                 str(tmp_path / "absent.toml"),
             ]
         )
-        assert waits == [5, 5]
+        # Two passes, so two waits of five seconds — spent in polls rather
+        # than in one long sleep, because the loop is now also watching the
+        # plans directory. What it owes is the interval in total, not the
+        # shape of it.
+        assert sum(waits) == pytest.approx(10)
 
     def test_stopping_it_is_not_a_failure(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -735,7 +762,7 @@ class TestTheLoop:
         # Stopping the scheduler is how you stop the scheduler. A traceback
         # would report the ordinary way of using it as a crash.
         self._api(monkeypatch)
-        self._fake_clock(monkeypatch, stop_after=1)
+        self._fake_clock(monkeypatch)
 
         code = main(["watch", "--push", "--repo", "o/n", "--config", str(tmp_path / "absent.toml")])
         assert code == 0
@@ -771,13 +798,18 @@ class TestTheLoop:
         monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
         config = str(tmp_path / "absent.toml")
 
-        self._fake_clock(monkeypatch, stop_after=1)
+        read = api.fetch_state
+        self._fake_clock(monkeypatch)
+        _stop_after(monkeypatch, api, 1)
         main(["watch", "--push", "--repo", "o/n", "--config", config])
+        monkeypatch.setattr(api, "fetch_state", read)
         killed = plan_tick(api.fetch_state(), config=CONFIG, now=NOW)
 
         # A fresh process, holding nothing from the last one.
-        self._fake_clock(monkeypatch, stop_after=1)
+        self._fake_clock(monkeypatch)
+        _stop_after(monkeypatch, api, 1)
         main(["watch", "--push", "--repo", "o/n", "--config", config])
+        monkeypatch.setattr(api, "fetch_state", read)
         restarted = plan_tick(api.fetch_state(), config=CONFIG, now=NOW)
 
         assert killed.operations == restarted.operations == ()
@@ -794,14 +826,9 @@ class TestWhatTheLoopPrints:
     def _run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api: FakeGitHub, waits: int
     ) -> str:
-        seen: list[int] = []
-
-        def sleep(seconds: int) -> None:
-            seen.append(seconds)
-            if len(seen) >= waits:
-                raise KeyboardInterrupt
-        monkeypatch.setattr("dispatchkit.cli.time.sleep", sleep)
+        monkeypatch.setattr("dispatchkit.cli.time.sleep", lambda seconds: None)
         monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
+        _stop_after(monkeypatch, api, waits)
         main(["watch", "--push", "--repo", "o/n", "--config", str(tmp_path / "absent.toml")])
         return ""
 
@@ -919,26 +946,23 @@ class TestPrintingNeverGatesWorking:
             self.calls.append("fetch_state()")
             return self.original
 
-    def _frozen(self, monkeypatch: pytest.MonkeyPatch, state: RepoState) -> Frozen:
+    def _frozen(
+        self, monkeypatch: pytest.MonkeyPatch, state: RepoState, *, stop_after: int = 3
+    ) -> Frozen:
         api = self.Frozen(state=state)
         api.original = state
         monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
+        _stop_after(monkeypatch, api, stop_after)
         return api
 
     def _loop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, passes: int) -> None:
-        seen: list[int] = []
-
-        def sleep(seconds: int) -> None:
-            seen.append(seconds)
-            if len(seen) >= passes:
-                raise KeyboardInterrupt
-        monkeypatch.setattr("dispatchkit.cli.time.sleep", sleep)
+        monkeypatch.setattr("dispatchkit.cli.time.sleep", lambda seconds: None)
         main(["watch", "--push", "--repo", "o/n", "--config", str(tmp_path / "absent.toml")])
 
     def test_an_unchanged_pass_still_performs_its_operations(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        api = self._frozen(monkeypatch, state_of(issue("a", 1)))
+        api = self._frozen(monkeypatch, state_of(issue("a", 1)), stop_after=3)
         self._loop(tmp_path, monkeypatch, passes=3)
 
         # Three reads, three dispatches. The repository never moves, so the

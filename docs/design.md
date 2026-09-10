@@ -763,12 +763,12 @@ Shipped, each with a decision record below:
 | D6.4 | Recovery from the disk outward, and the one-dispatcher lockfile | A failed push keeps its tree and still releases; recovering twice is a no-op |
 | D6.5 | `watch --local`: the lane served, without holding up a pass    | A running task starts nothing else and stops no merge; `doctor --local` |
 | D13.1d | The clean-tree gate: `verify: auto` needs a committed graph file | A dirty plan degrades to `human`; a clean one merges as before          |
+| D13.1e | The graph watcher: a save cuts the wait short and re-plans      | A saved graph re-plans in place; nothing is written, and a typo is not fatal |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D13.1e | The graph watcher: a save re-validates, re-lints and re-plans   | A save re-plans in place; mutation stays debounced and explicit           |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |
@@ -1768,6 +1768,33 @@ dispatch from a dirty graph would mean editing a file stops the work already des
 which is the opposite of what a graph file is for. And the notice is emitted only for a pull
 request that *would* have merged — editing a graph is normal, and saying so every pass would train
 the reader to skip the line that matters.
+
+**Built (D13.1e): the wait is polled, and a save cuts it short.** The loop was already sleeping,
+so the watcher is the sleep — `wait(interval)` polls the plans directory four times a second and
+returns the moment a save settles, and the pass that follows re-reads GitHub and re-plans. Zero
+runtime dependencies means no `watchdog`, and none is wanted: a plans directory holds a handful of
+files, and one `os.stat` each is cheaper than the machinery for avoiding it.
+
+**Nothing is written.** A save re-validates, re-lints and re-plans; `apply` stays the explicit,
+separate act. This is the half of the `vite` comparison that does not transfer — `dist/` is
+disposable and an issue body is not.
+
+Four things the tests forced. *The baseline is what was last reported*, not what the disk held
+when the wait began, or a graph saved while a pass is talking to GitHub would be swallowed. *A
+save must settle* before it is read, because an editor writes in stages and a graph read mid-write
+parses as a syntax error the developer did not make. *The interval stays the ceiling* — a file
+written on every poll must not hold the loop open, because a pull request that went green is also
+a reason to run. And *a graph that does not parse is reported, not fatal*: a file caught
+mid-thought is the normal state of one being edited, and a scheduler that exits on a typo is the
+most fragile thing on the desk.
+
+**Elapsed time is counted down from what was slept, not read from a clock.** One seam then makes
+the whole of it assertable offline, the drift is bounded by a single poll, and an interval is a
+rate rather than a deadline — nothing here is owed accuracy a clock would buy.
+
+**The loop tests had to move their stop seam.** They ended a run by raising on the Nth `sleep`,
+which counted passes only while a wait *was* one sleep. It is now many, so the read that begins a
+pass is the only thing left that happens exactly once per pass, and that is where stopping went.
 
 **The rule a long-running process most needs.** "There is no stored state" was easy to hold when
 every pass was a fresh job. A loop will want to remember what it saw, and the moment it does, the

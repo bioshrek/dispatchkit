@@ -65,6 +65,7 @@ layers = [
     "dispatchkit.gh_cli",
     "dispatchkit.workstation_cli",
     "dispatchkit.init",
+    "dispatchkit.watcher",
     "dispatchkit.doctor",
     "dispatchkit.dispatcher",
     "dispatchkit.tick",
