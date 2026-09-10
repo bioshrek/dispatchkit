@@ -54,9 +54,11 @@ One idempotent pass, safe to run as often as you like:
 4. **Admit** ready tasks in plan order, subject to per-lane concurrency caps and file-scope exclusion.
 5. **Dispatch** — assign the coding agent (cloud lane), or prepare a worktree and run it here (local lane).
 
-`watch` is that pass on a loop, re-running every 60 seconds (`--interval`) until you stop it. It
-covers every plan in the repository at once, so the concurrency caps bound total work in flight
-rather than work per plan; `--once` runs a single pass and exits. There is no cron and no GitHub
+`watch` is that pass on a loop, re-running every 60 seconds (`--interval`) until you stop it. The
+first pass prints the whole picture and later ones print only what moved, so a settled repository
+is a heartbeat rather than the same block over and over. It covers every plan at once, so the
+concurrency caps bound total work in flight rather than work per plan; `--once` runs a single pass,
+prints the full report and exits. There is no cron and no GitHub
 Actions workflow — the scheduler is a command on your machine, running as you, and nothing moves
 while it is not running.
 

@@ -230,6 +230,24 @@ def resolve(items: Sequence[TaskItem]) -> dict[TaskRef, Status]:
     return {task.ref: _status_of(task, closed) for task in items}
 
 
+def blocking(items: Sequence[TaskItem]) -> dict[TaskRef, tuple[TaskId, ...]]:
+    """For each task, the dependencies that are not closed yet.
+
+    The report's answer to the only question a status list cannot answer on its
+    own: `Blocked` says a task is not moving, not what would move it. It is a
+    one-hop question, so this returns one hop — the closure is what a graph
+    would draw, and drawing it is not worth a layout algorithm in a terminal.
+
+    Empty for anything ready or already running, so a caller can annotate
+    unconditionally and get nothing where there is nothing to say.
+    """
+    closed = {task.ref for task in items if task.closed}
+    return {
+        task.ref: tuple(dep for dep in task.block.depends if task.ref.sibling(dep) not in closed)
+        for task in items
+    }
+
+
 def _status_of(task: TaskItem, closed: frozenset[TaskRef] | set[TaskRef]) -> Status:
     if task.closed:
         return Status.DONE

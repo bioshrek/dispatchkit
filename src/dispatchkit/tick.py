@@ -35,7 +35,7 @@ out and says what it sees.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from dispatchkit.config import SchedulerConfig
@@ -50,13 +50,14 @@ from dispatchkit.github import (
     RepoState,
     UnassignAgent,
 )
-from dispatchkit.model import Lane, TaskRef
+from dispatchkit.model import Lane, TaskId, TaskRef
 from dispatchkit.resolve import (
     LABEL_LOCAL_CLAIM,
     Deferral,
     Status,
     TaskItem,
     admit,
+    blocking,
     build_items,
     ci_notices,
     merge_ops,
@@ -76,6 +77,10 @@ class TickPlan:
     admitted: tuple[TaskRef, ...]
     deferred: tuple[Deferral, ...]
     notices: tuple[Notice, ...]
+    #: For each task, the dependencies it is still waiting on. Rendering only,
+    #: like `statuses`: it answers "what would move this?" on the line that
+    #: raised the question.
+    blocked_on: Mapping[TaskRef, tuple[TaskId, ...]] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.operations)
@@ -148,6 +153,7 @@ def plan_tick(state: RepoState, *, config: SchedulerConfig, now: datetime) -> Ti
         admitted=tuple(dispatched),
         deferred=admission.deferred,
         notices=(*notices, *blocked_notices, *ci_notices(items)),
+        blocked_on=blocking(items),
     )
 
 
@@ -194,16 +200,98 @@ def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:
     return AssignAgent(task.ref, task.number, task.node_id)
 
 
-def summarise(plan: TickPlan) -> Sequence[str]:
-    """The pass's report: every task's status, then what it did about them.
+def summarise(plan: TickPlan, *, since: TickPlan | None = None) -> Sequence[str]:
+    """The pass's report: what each task is, then what the pass did about it.
 
-    Every task, not only the ones being dispatched, because an idle pass has to
-    explain itself — this is the whole of what a reader gets, so a pass that
-    prints nothing has to be a pass that saw nothing.
+    With no `since` this is the whole picture, which is what a one-shot pass
+    and the first pass of a loop both want — a pass that prints nothing must be
+    a pass that saw nothing.
+
+    With a `since` it is the difference from that pass, and an unchanged pass
+    renders as nothing at all so the caller can print a heartbeat instead. That
+    is not an optimisation: at a 60-second interval, work that takes twenty
+    minutes produces twenty identical blocks, and the transition the reader is
+    actually waiting for ends up buried in them.
+
+    `since` is a previous plan held for rendering. It never reaches a decision
+    — `plan_tick` does not take it — which is the line D13 drew around a
+    long-running process keeping a memory at all.
     """
-    lines = [f"  {ref}: {status.value}" for ref, status in plan.statuses.items()]
+    if since is None:
+        return _full(plan)
+    if _content(plan) == _content(since):
+        return ()
+    return _delta(plan, since)
+
+
+def _full(plan: TickPlan) -> list[str]:
+    width = _column(plan.statuses)
+    lines = [
+        f"  {str(ref):<{width}}  {_annotate(plan, ref, status.value)}"
+        for ref, status in plan.statuses.items()
+    ]
+    return lines + _actions(plan)
+
+
+def _delta(plan: TickPlan, since: TickPlan) -> list[str]:
+    """Only the tasks whose status is not what it was, plus what the pass did."""
+    moved = {
+        ref: (since.statuses.get(ref), status)
+        for ref, status in plan.statuses.items()
+        if since.statuses.get(ref) is not status
+    }
+    # A task whose issue disappeared between passes. Rare, and dropping it from
+    # the report silently is exactly how it would go unnoticed.
+    gone = [ref for ref in since.statuses if ref not in plan.statuses]
+
+    width = _column({**dict.fromkeys(moved), **dict.fromkeys(gone)})
+    lines = [
+        f"  {str(ref):<{width}}  {_transition(plan, ref, was, now)}"
+        for ref, (was, now) in moved.items()
+    ]
+    lines += [f"  {str(ref):<{width}}  gone (was {since.statuses[ref].value})" for ref in gone]
+    return lines + _actions(plan)
+
+
+def _transition(plan: TickPlan, ref: TaskRef, was: Status | None, now: Status) -> str:
+    if was is None:
+        return _annotate(plan, ref, f"new: {now.value}")
+    return _annotate(plan, ref, f"{was.value} → {now.value}")
+
+
+def _annotate(plan: TickPlan, ref: TaskRef, text: str) -> str:
+    """Append what a blocked task is waiting on, if anything."""
+    waiting = plan.blocked_on.get(ref, ())
+    if not waiting:
+        return text
+    return f"{text}   ← {' '.join(waiting)}"
+
+
+def _actions(plan: TickPlan) -> list[str]:
     handed = " ".join(str(ref) for ref in plan.admitted)
-    lines.append("dispatch: " + (handed if plan.admitted else "(nothing)"))
+    lines = ["dispatch: " + (handed if plan.admitted else "(nothing)")]
     lines += [f"  defer {deferral}" for deferral in plan.deferred]
     lines += [f"NOTE {notice}" for notice in plan.notices]
     return lines
+
+
+def _column(refs: Mapping[TaskRef, object]) -> int:
+    """Width of the name column. A ragged list is unreadable at a glance."""
+    return max((len(str(ref)) for ref in refs), default=0)
+
+
+def _content(plan: TickPlan) -> tuple[object, ...]:
+    """Everything the report says, and nothing else.
+
+    Deferrals and notices are in here rather than only the statuses: a task
+    deferred behind an open pull request stays deferred for as long as the pull
+    request is open, so reprinting it every pass would mean the heartbeat never
+    fires and the delta view buys nothing.
+    """
+    return (
+        tuple(plan.statuses.items()),
+        plan.admitted,
+        plan.deferred,
+        plan.notices,
+        tuple(sorted(plan.blocked_on.items())),
+    )

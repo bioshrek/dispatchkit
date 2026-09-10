@@ -10,6 +10,7 @@ Everything runs against an in-memory double. No network, no `gh`.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -773,3 +774,177 @@ class TestTheLoop:
         restarted = plan_tick(api.fetch_state(), config=CONFIG, now=NOW)
 
         assert killed.operations == restarted.operations == ()
+
+
+class TestWhatTheLoopPrints:
+    """D13.1: a looping pass separates its runs and repeats nothing.
+
+    The one-shot forms are deliberately untouched — `--once` and `--state` have
+    no previous pass on screen, and their output has to stay something you can
+    pipe into a file or paste into an issue.
+    """
+
+    def _run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api: FakeGitHub, waits: int
+    ) -> str:
+        seen: list[int] = []
+
+        def sleep(seconds: int) -> None:
+            seen.append(seconds)
+            if len(seen) >= waits:
+                raise KeyboardInterrupt
+        monkeypatch.setattr("dispatchkit.cli.time.sleep", sleep)
+        monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
+        main(["watch", "--push", "--repo", "o/n", "--config", str(tmp_path / "absent.toml")])
+        return ""
+
+    def test_each_pass_is_separated_by_a_rule_naming_its_number_and_time(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        api = FakeGitHub(state=state_of(issue("a", 1)))
+        self._run(tmp_path, monkeypatch, api, waits=1)
+
+        out = capsys.readouterr().out
+        assert "pass 1" in out
+        assert "───" in out
+
+    def test_an_unchanged_pass_prints_one_heartbeat_line_not_a_report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The whole point. Three passes over a settled repository is one report
+        # and two heartbeats, not three reports.
+        api = FakeGitHub(state=state_of(issue("a", 1, closed=True)))
+        self._run(tmp_path, monkeypatch, api, waits=3)
+
+        out = capsys.readouterr().out
+        assert out.count("demo/a") == 1
+        assert out.count("no change") == 2
+
+    def test_a_heartbeat_says_when_it_last_looked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A line with no time on it cannot distinguish "nothing has changed"
+        # from "this stopped an hour ago".
+        api = FakeGitHub(state=state_of(issue("a", 1, closed=True)))
+        self._run(tmp_path, monkeypatch, api, waits=2)
+
+        beat = next(line for line in capsys.readouterr().out.splitlines() if "no change" in line)
+        assert re.match(r"^\d\d:\d\d:\d\d ", beat)
+
+    def test_a_changed_pass_prints_the_transition(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        api = FakeGitHub(state=state_of(issue("a", 1)))
+        self._run(tmp_path, monkeypatch, api, waits=2)
+
+        # Pass 1 dispatches `a`; pass 2 sees it assigned.
+        out = capsys.readouterr().out
+        assert "Ready → Dispatched" in out or "Dispatched" in out
+        assert "pass 2" in out
+
+    def test_a_single_pass_still_prints_the_whole_report(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        api = FakeGitHub(state=state_of(issue("a", 1), issue("b", 2, closed=True)))
+        monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
+
+        main(
+            [
+                "watch",
+                "--once",
+                "--push",
+                "--repo",
+                "o/n",
+                "--config",
+                str(tmp_path / "absent.toml"),
+            ]
+        )
+        out = capsys.readouterr().out
+        assert "demo/a" in out
+        assert "demo/b" in out
+
+    def test_a_single_pass_gets_no_rule_and_no_heartbeat(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # `dispatchkit watch --once | tee` has to stay plain.
+        api = FakeGitHub(state=state_of(issue("a", 1)))
+        monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
+
+        main(
+            [
+                "watch",
+                "--once",
+                "--push",
+                "--repo",
+                "o/n",
+                "--config",
+                str(tmp_path / "absent.toml"),
+            ]
+        )
+        out = capsys.readouterr().out
+        assert "pass 1" not in out
+        assert "no change" not in out
+
+    def test_every_pass_still_reads_and_executes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The hazard the delta view introduces: printing nothing is a rendering
+        # decision and must never become a reason to skip the work.
+        api = FakeGitHub(state=state_of(issue("a", 1, closed=True)))
+        self._run(tmp_path, monkeypatch, api, waits=3)
+        assert api.calls.count("fetch_state()") == 3
+
+
+class TestPrintingNeverGatesWorking:
+    """The hazard the delta view introduces, caught live on the first run.
+
+    Deciding what to print is a rendering decision. Deciding whether to act is
+    not, and the first implementation of this conflated them — an unchanged
+    pass printed its heartbeat and returned *before* executing, so a merge
+    GitHub had refused would never be retried while nothing else moved. The
+    engine must not be able to tell whether anyone is looking.
+    """
+
+    class Frozen(FakeGitHub):
+        """A repository that never changes, whatever is done to it."""
+
+        def fetch_state(self) -> RepoState:
+            self.calls.append("fetch_state()")
+            return self.original
+
+    def _frozen(self, monkeypatch: pytest.MonkeyPatch, state: RepoState) -> Frozen:
+        api = self.Frozen(state=state)
+        api.original = state
+        monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
+        return api
+
+    def _loop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, passes: int) -> None:
+        seen: list[int] = []
+
+        def sleep(seconds: int) -> None:
+            seen.append(seconds)
+            if len(seen) >= passes:
+                raise KeyboardInterrupt
+        monkeypatch.setattr("dispatchkit.cli.time.sleep", sleep)
+        main(["watch", "--push", "--repo", "o/n", "--config", str(tmp_path / "absent.toml")])
+
+    def test_an_unchanged_pass_still_performs_its_operations(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = self._frozen(monkeypatch, state_of(issue("a", 1)))
+        self._loop(tmp_path, monkeypatch, passes=3)
+
+        # Three reads, three dispatches. The repository never moves, so the
+        # report has nothing new to say on passes two and three — and the pass
+        # must do its work anyway.
+        assert api.calls.count("fetch_state()") == 3
+        assert api.calls.count("assign_agent(1)") == 3
+
+    def test_a_pass_that_acted_is_never_reported_as_no_change(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # If it did something, saying "no change" is simply false.
+        self._frozen(monkeypatch, state_of(issue("a", 1)))
+        self._loop(tmp_path, monkeypatch, passes=3)
+
+        assert "no change" not in capsys.readouterr().out

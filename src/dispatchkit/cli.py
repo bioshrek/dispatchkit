@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from collections.abc import Sequence
@@ -51,7 +52,7 @@ from dispatchkit.metrics import plan_shape
 from dispatchkit.model import TaskGraph, TaskId
 from dispatchkit.parse import parse_graph
 from dispatchkit.resolve import admit, build_items, resolve
-from dispatchkit.tick import execute_tick, plan_tick
+from dispatchkit.tick import TickPlan, TickResult, execute_tick, plan_tick
 from dispatchkit.tick import summarise as summarise_tick
 from dispatchkit.validate import (
     ci_commands,
@@ -294,44 +295,96 @@ def _watch(args: argparse.Namespace) -> int:
     # needs unwinding, because a half-finished pass leaves only the operations
     # it already sent, and the next pass re-derives everything.
     try:
+        if once:
+            return _pass(args, config, api)[0]
+
+        previous: TickPlan | None = None
+        number = 0
         while True:
-            code = _pass(args, config, api)
-            if code != EXIT_OK or once:
+            number += 1
+            code, plan = _pass(args, config, api, since=previous, number=number)
+            if code != EXIT_OK:
                 return code
+            previous = plan
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\nwatch: stopped")
         return EXIT_OK
 
 
-def _pass(args: argparse.Namespace, config: SchedulerConfig, api: GhCli | None) -> int:
+def _pass(
+    args: argparse.Namespace,
+    config: SchedulerConfig,
+    api: GhCli | None,
+    *,
+    since: TickPlan | None = None,
+    number: int | None = None,
+) -> tuple[int, TickPlan | None]:
     """One scheduler pass, from a fresh read.
 
-    Every decision is recomputed here. The process may hold a snapshot for
-    rendering, but nothing survives between passes — which is what keeps the
-    convergence standard true across a restart as well as across a re-run.
+    Every decision is recomputed here. The process may hold a *previous plan*
+    for rendering — `since`, which is how the loop prints only what moved — but
+    nothing survives into a decision, which is what keeps the convergence
+    standard true across a restart as well as across a re-run.
+
+    `number` is `None` for a one-shot pass, which gets no rule and no heartbeat:
+    with nothing on screen above it there is nothing to separate it from, and
+    `watch --once | tee` has to stay plain.
     """
     if api is not None:
         try:
             state = api.fetch_state()
         except RuntimeError as exc:
             print(f"dispatchkit: cannot read {args.repo}: {exc}", file=sys.stderr)
-            return EXIT_UNREADABLE
+            return EXIT_UNREADABLE, None
     else:
         loaded = _load_state(args.state)
         if isinstance(loaded, int):
-            return loaded
+            return loaded, None
         state = loaded
 
     plan = plan_tick(state, config=config, now=datetime.now(UTC))
-    for line in summarise_tick(plan):
-        print(line)
+    report = list(summarise_tick(plan, since=since))
 
+    # Execution comes before the printing decision, and never depends on it.
+    # The first version of this returned early on an unchanged pass, so a merge
+    # GitHub had refused would never be retried while nothing else moved: the
+    # engine could tell whether anyone was looking.
     if api is None:
-        print(f"dry run: {len(plan.operations)} operation(s); re-run with --push to apply")
-        return EXIT_OK
+        report.append(f"dry run: {len(plan.operations)} operation(s); re-run with --push to apply")
+        return _emit(report, number), plan
 
     result = execute_tick(plan, api)
+    if report or _acted(result):
+        report.append(_completion(result))
+        report += [f"NOTE {notice}" for notice in result.refused]
+    return _emit(report, number), plan
+
+
+def _emit(report: Sequence[str], number: int | None) -> int:
+    """Print a pass. `number` is `None` for the one-shot forms, which get no
+    rule and no heartbeat: there is nothing on screen above them to separate
+    them from, and `watch --once | tee` has to stay plain."""
+    if number is None or report:
+        if number is not None:
+            print(_rule(number))
+        for line in report:
+            print(line)
+        return EXIT_OK
+    # Nothing seen, nothing done. One line, with the time on it: a heartbeat
+    # without a clock cannot tell "nothing has changed" from "this died an
+    # hour ago".
+    print(f"{_clock()} · no change")
+    return EXIT_OK
+
+
+def _acted(result: TickResult) -> bool:
+    return bool(
+        result.dispatched or result.readied or result.merged or result.reclaimed or result.refused
+    )
+
+
+def _completion(result: TickResult) -> str:
     line = f"pass complete: {result.dispatched} dispatched"
     if result.readied:
         line += f", {result.readied} PR(s) marked ready"
@@ -339,10 +392,22 @@ def _pass(args: argparse.Namespace, config: SchedulerConfig, api: GhCli | None) 
         line += f", {result.merged} PR(s) merged"
     if result.reclaimed:
         line += f", {result.reclaimed} stalled dispatch(es) reclaimed"
-    print(line)
-    for notice in result.refused:
-        print(f"NOTE {notice}")
-    return EXIT_OK
+    return line
+
+
+def _clock() -> str:
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def _rule(number: int) -> str:
+    """The separator between passes.
+
+    Width comes from the terminal so it reaches the edge and no further; a rule
+    that wraps is two rules. `get_terminal_size` answers 80 when there is no
+    terminal at all, which is the right answer for a log file too.
+    """
+    head = f"── {_clock()}  pass {number} "
+    return head + "─" * max(0, shutil.get_terminal_size().columns - len(head))
 
 
 def _config(args: argparse.Namespace) -> SchedulerConfig | int:

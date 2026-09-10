@@ -590,6 +590,9 @@ Remaining, in build order:
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | D13.1 | Graph watcher: save → re-plan; hot/cold/refused; `dispatch:hold`     | A save re-plans in place; a dirty graph file degrades `verify: auto`        |
+
+The report half of D13.1 is shipped, ahead of the watcher: a looping pass prints the full picture
+once and thereafter only what moved. Its decision record is below.
 | D6   | Local lane executor: worktree, runner invocation, push, PR, recovery | One real capability-gated task end-to-end                                  |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
@@ -1764,6 +1767,60 @@ about the workflow at all. It moves to `tests/test_stdlib_only.py`. The original
 not resolve a fresh dependency tree inside a job holding a token that can assign work"; the
 scheduler moving onto a workstation, under a person's own credential, makes that argument stronger
 rather than weaker. `pyyaml` had no consumer left and leaves the dev dependencies with it.
+
+### D13.1 — the report, once somebody is reading every pass (shipped)
+
+"Report every task, not just the ones moving, so an idle pass explains itself" was right for a
+cron job, whose log entries are each read in isolation. It does not survive the move to a
+terminal. At a 60-second interval, work that takes twenty minutes produces twenty identical
+blocks, and the one transition the reader is waiting for is buried in them. Same shape of argument
+as the dead man's switch above: an artifact of the old deployment, kept out of habit.
+
+So a looping pass prints the full picture once and thereafter only the difference, with a timed
+heartbeat when there is none. The transition itself is the thing worth printing —
+`In Review → Done` is what somebody is waiting for, and the old report threw it away because it
+held no memory.
+
+**This is the licensed use of the snapshot, and the line is worth restating.** D13's rule is that
+the process may hold a snapshot for *rendering*, but every decision is recomputed from a fresh
+read. A delta view is the first thing that wants a memory, so it is exactly the case the rule was
+written for: `summarise` takes the previous plan, `plan_tick` cannot see it.
+
+**The rule was broken within the hour, and the live run caught it.** The first implementation
+printed the heartbeat and returned *before* executing, which meant an unchanged pass did no work —
+a merge GitHub had refused would never be retried while nothing else moved. The engine could tell
+whether anyone was looking. Execution now happens above the printing decision and a pass that
+acted is never reported as no change. `TestPrintingNeverGatesWorking` holds the line: a repository
+frozen so it cannot move, three passes, three dispatches.
+
+**Deferrals and notices are part of "unchanged", not just statuses.** A task deferred behind an
+open pull request stays deferred for as long as that pull request is open. Diffing on statuses
+alone would reprint it every 60 seconds, the heartbeat would never fire, and the whole exercise
+would buy nothing.
+
+**No dependency graph is drawn, and this is the reason.** The question a status list cannot answer
+is *why* a task is blocked — which is one hop, not a graph, so it gets one hop on the line that
+raised it: `document-flags   Blocked   ← json-output encoding-fallback`. The live run justified it
+immediately by naming two blockers where the old report named none. A drawn graph loses on three
+counts: it does not change, because the topology is committed TOML and only the statuses move; an
+indented tree is *wrong* for a DAG, since a diamond forces a node to be printed twice or an edge
+dropped, and a diamond is the shape D4 was tested against; and orientation to an unfamiliar plan
+is a one-time need, which belongs to `validate` and its plan-shape metrics. The graph-shaped thing
+still worth showing is downstream reach — when three tasks are ready and the cap admits one, FIFO
+picks arbitrarily and `unblocks 3` would say whether it picked well — but that is a D15 question.
+
+**In-place output was considered and rejected.** A redrawn status board erases the answer to the
+only question a person comes back with, which is what happened while they were away; it
+contradicts "a scheduler that has stopped is observable by the fact that it is not printing", since
+a redrawn display is not printing when healthy either; and hand-rolled cursor arithmetic under the
+zero-dependency rule breaks on the cases that cannot be tested here — a wrapped line makes every
+subsequent "move up N" wrong for the rest of the session. `cargo`, `uv` and `vite` are all
+append-only scrollback with at most a transient tail; the feel being borrowed comes from fast
+feedback and errors that name the fix, not from repainting.
+
+**The one-shot forms are deliberately untouched.** `--once` and `--state` get no rule, no delta
+and no heartbeat. There is nothing on screen above them to separate them from, and
+`dispatchkit watch --once | tee` has to stay something you can paste into an issue.
 
 ### One local task, and one dispatcher
 

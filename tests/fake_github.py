@@ -25,6 +25,9 @@ class FakeGitHub:
     #: What the double stamps on an assignment. A test that cares about the
     #: stall moves it; everything else never reads it.
     clock: datetime = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+    #: The seed, kept so a subclass can refuse to move. Only `TestPrinting-
+    #: NeverGatesWorking` uses it, to hold a pass's input still.
+    original: RepoState = field(default_factory=lambda: RepoState(()))
 
     def fetch_state(self) -> RepoState:
         self.calls.append("fetch_state()")
