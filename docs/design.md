@@ -583,7 +583,7 @@ Shipped, each with a decision record below:
 | D9   | `verify: auto` merge                                          | Live: `stopwords` merged and closed with no human                        |
 | D9.1 | Acceptance-subset-of-CI and scope-drift guardrails            | Both failed against the live graph first, which is the point             |
 | D14  | Retire the Project board                                      | Live: `doctor --repo` green on a token with no `project` scope           |
-| D13  | `watch`: the scheduler moves local; repo-wide admission       | Restart mid-loop and the next pass is identical; the workflow is deleted |
+| D13  | `watch`: the scheduler moves local; repo-wide admission       | Live: a pass against the sandbox from a terminal, on `gh`'s credential   |
 
 Remaining, in build order:
 
@@ -1749,6 +1749,14 @@ already holds, for as long as their terminal is open. `init` no longer writes a 
 `doctor` no longer has a `workflow`, `workflow-source` or `workflow-inputs` check — a check that
 outlives its subsystem is worse than no check, because it fails an adopter for not having
 something nothing reads.
+
+**Proven live.** `dispatchkit watch --once --push --repo bioshrek/dispatchkit-sandbox`, run from
+a terminal on `gh`'s own credential with no `DISPATCHKIT_TOKEN` anywhere, read the repository and
+reported every task as `wordfreq/<id>` — the `TaskRef` spelling, from the pooled pass, against
+real issues. `json-output` was correctly deferred behind `encoding-fallback` on a file-scope
+conflict, and `document-flags` stayed `Blocked`. Exit 0, nothing dispatched, which is the right
+answer for that state. The convergence half is the restart test rather than a live observation,
+because there is no longer anything a restart could lose.
 
 **One test had to be rescued before its file was deleted.** `tests/test_workflow.py` also carried
 the assertion that `src/dispatchkit` imports nothing outside the standard library, which is not

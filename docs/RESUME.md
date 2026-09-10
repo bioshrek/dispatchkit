@@ -21,7 +21,7 @@ D1–D5.7, D7, D9, D9.1, D14 and D13 are implemented and green offline. 500 test
 | D5.7 | Draft-aware status, `MarkReady` for `verify: auto` | **done and proven live**; `Auto-merging` implies a merge is possible |
 | D7, D9, D9.1 | Retry budget, `verify: auto` merge, the two guardrails | **done and proven live** |
 | D14 | Retire the Project board | **done and proven live**; `doctor` green with no `project` scope |
-| D13 | `watch`: the scheduler moves local | done offline; the workflow, its token and its plan variable are deleted |
+| D13 | `watch`: the scheduler moves local | **done and proven live**; a pass ran from a terminal on `gh`'s credential |
 | D13.1, D6 | Graph watcher, local lane executor | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
