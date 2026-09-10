@@ -24,6 +24,11 @@ from dispatchkit.model import Lane, PullRequest, TaskId, TaskRef, Verify
 MANAGED_LABEL_PREFIXES = ("plan:", "lane:", "verify:")
 DISPATCHKIT_LABEL = "dispatchkit"
 
+#: The human's "not now" (D13.1c). It lives here rather than with the resolver's
+#: other labels because the adapter reads it back off the issue timeline, and a
+#: label spelt twice is a wire format spelt twice.
+LABEL_HOLD = "dispatch:hold"
+
 #: Labels the pipeline filters on, and the only thing `init` has to create on
 #: the repository itself. `dispatchkit` is the important one: the state query
 #: selects by it, so a repository without it returns nothing and a pass is a
@@ -64,6 +69,11 @@ class IssueState:
     # timeline rather than anywhere of our own, so the count of attempts stays
     # derived from the repository like every other part of `Status`.
     dispatches: tuple[datetime, ...] = ()
+    # When `dispatch:hold` was applied, from the same timeline (D13.1c). A hold
+    # ends a dispatch without the agent having failed, so the retry budget has
+    # to be able to tell the two apart, and the repository is the only place
+    # that remembers which.
+    holds: tuple[datetime, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

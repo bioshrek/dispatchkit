@@ -586,12 +586,13 @@ Shipped, each with a decision record below:
 | D13  | `watch`: the scheduler moves local; repo-wide admission       | Live: a pass against the sandbox from a terminal, on `gh`'s credential   |
 | D13.1a | The looping report prints what moved, not everything         | An unchanged pass prints one heartbeat line, and still does its work     |
 | D13.1b | `Cancelled`: closed as not planned satisfies nothing         | A dependent of a cancelled task is never dispatched, and is reported     |
+| D13.1c | `dispatch:hold`: the human's "not now"                       | A held task is not dispatched or merged, and is charged no attempt       |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D13.1 | The rest of intervention: `dispatch:hold`, the clean-tree gate, the graph watcher | A held task is not dispatched and is not charged an attempt; a save re-plans in place |
+| D13.1 | The last of intervention: the clean-tree gate on `verify: auto`, and the graph watcher | A dirty tree refuses a local dispatch; a save re-plans in place |
 | D6   | Local lane executor: worktree, runner invocation, push, PR, recovery | One real capability-gated task end-to-end                                  |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
@@ -606,9 +607,9 @@ flag rather than a second command. D13 also pooled admission across every plan i
 which is where the caps stopped being per-plan.
 
 D13.1 is the half held back deliberately, and it is being taken in pieces. The **report** is
-shipped: a looping pass prints the full picture once and only what moved thereafter. So is
-**`Cancelled`**, which was the live correctness bug in the set. What remains is the rest of
-**intervention** — `dispatch:hold` and the clean-tree gate — and the **graph watcher**.
+shipped: a looping pass prints the full picture once and only what moved thereafter. So are
+**`Cancelled`**, which was the live correctness bug in the set, and **`dispatch:hold`**. What
+remains is the clean-tree gate and the **graph watcher**.
 D6 is what makes `caps.local = 1` mean anything: the label nothing consumes finally gets
 a consumer, and it is where a per-task `model` or `effort` lands. D10 belongs after them rather
 than before, because the graph a planner has to produce is now one a watcher reloads — and it is
@@ -2050,6 +2051,36 @@ repairs — reopen it, or close the strandees as not planned too — both start 
 derives from mark events, so a naive reading would charge it, but the timeline carries the hold
 event too — a mark removal accompanied by a hold is not an attempt. Derived, like everything else,
 with nothing new stored.
+
+**Built: a hold is a status, not a deferral.** The two look interchangeable — both mean "not
+dispatched this pass" — and they are not. A deferral is the *scheduler's* choice, made against a
+cap or a scope conflict, and it clears itself; the report lists deferrals precisely so the reader
+knows they need do nothing. A hold is a *standing human decision* that will never clear on its
+own. Filing it under deferrals would invite the reader to wait for something that is waiting for
+them, so `Held` is the ninth status and `admit` skips it for free, because admission only ever
+considers `Ready`.
+
+`Held` outranks `Stuck` where both apply. Both can be true — a task can exhaust its budget and
+then be held — but only one is a decision somebody made, and reading `Stuck` over a held task
+sends the reader to the wrong repair.
+
+**A hold stops the merge, not only the dispatch.** The tempting reading is that a hold governs
+scheduling and leaves work already in flight alone. But auto-merge is the only thing dispatchkit
+does that changes `main` without a human; a hold that let a green `verify: auto` pull request land
+anyway would fail at exactly the moment the control matters most. So `held` gates `merge_ops`,
+`ready_ops` and `stall_ops` as well: the clock keeps running while a task is held, and reclaiming
+it as a stall would be the scheduler timing out its own instructions.
+
+**The discount is off the timeline, and the wiring is where it broke.** `attempts` stopped being
+`len(dispatches)` and became a walk over runs — each dispatch paired with the moment the next
+superseded it, discounted if a `dispatch:hold` event falls inside. That was correct on a
+hand-built task and still wrong in production, because `build_items` dropped the new field on the
+way past; the unit tests could not see it. The test that caught it resolves a whole `RepoState`
+and asserts the budget survives, which is the shape any new derived field needs.
+
+`LABEL_HOLD` lives in `github.py` rather than beside the resolver's other labels, because the
+adapter reads it back off the issue timeline as well: a label spelt in two modules is a wire
+format spelt twice.
 
 **None of this is a control plane.** Every intent above is ordinary GitHub state, so adding
 `dispatch:hold` from the web UI or closing an issue as not planned produces exactly what a command

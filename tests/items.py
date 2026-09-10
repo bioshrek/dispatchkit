@@ -38,6 +38,7 @@ def item(
     open_prs: tuple[int | PullRequest, ...] = (),
     attempts: int = 0,
     dispatches: tuple[datetime, ...] | None = None,
+    holds: tuple[datetime, ...] = (),
 ) -> TaskItem:
     return TaskItem(
         block=MachineBlock(
@@ -58,6 +59,7 @@ def item(
         labels=labels,
         open_prs=_prs(open_prs),
         dispatches=(dispatches if dispatches is not None else (_LONG_AGO,) * attempts),
+        holds=holds,
     )
 
 
@@ -85,6 +87,8 @@ def issue(
     assignees: tuple[str, ...] = (),
     labels: tuple[str, ...] = ("dispatchkit",),
     open_prs: tuple[int | PullRequest, ...] = (),
+    dispatches: tuple[datetime, ...] = (),
+    holds: tuple[datetime, ...] = (),
     node_id: str | None = None,
 ) -> IssueState:
     """The same synthetic task, but as GitHub would hand it back."""
@@ -108,6 +112,8 @@ def issue(
         cancelled=cancelled,
         assignees=assignees,
         open_prs=_prs(open_prs),
+        dispatches=dispatches,
+        holds=holds,
         node_id=node_id if node_id is not None else f"I_{number}",
     )
 

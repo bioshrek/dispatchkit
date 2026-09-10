@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Any
 
 from dispatchkit.doctor import parse_labels, parse_token_scopes
-from dispatchkit.github import IssueState, RepoState
+from dispatchkit.github import LABEL_HOLD, IssueState, RepoState
 from dispatchkit.model import Checks, PullRequest
 
 # The coding agent is a bot actor, so it cannot be assigned with
@@ -69,6 +69,14 @@ query($owner: String!, $repo: String!, $first: Int!) {
         stateReason
         labels(first: 20) { nodes { name } }
         assignees(first: 10) { nodes { login } }
+        holds: timelineItems(first: 50, itemTypes: [LABELED_EVENT]) {
+          nodes {
+            ... on LabeledEvent {
+              createdAt
+              label { name }
+            }
+          }
+        }
         dispatches: timelineItems(first: 50, itemTypes: [ASSIGNED_EVENT]) {
           nodes {
             ... on AssignedEvent {
@@ -127,7 +135,22 @@ def _parse_issue(node: dict[str, Any]) -> IssueState:
         open_prs=_parse_open_prs(node),
         node_id=node.get("id"),
         dispatches=_parse_dispatches(node),
+        holds=_parse_holds(node),
     )
+
+
+def _parse_holds(node: dict[str, Any]) -> tuple[datetime, ...]:
+    """When a human said "not now", so an attempt can be told from a failure."""
+    stamps = [
+        _stamp(event.get("createdAt"))
+        for event in node.get("holds", {}).get("nodes") or []
+        if (event.get("label") or {}).get("name") == LABEL_HOLD
+    ]
+    return tuple(sorted(stamp for stamp in stamps if stamp is not None))
+
+
+def _stamp(created: str | None) -> datetime | None:
+    return datetime.fromisoformat(created.replace("Z", "+00:00")) if created else None
 
 
 def _parse_dispatches(node: dict[str, Any]) -> tuple[datetime, ...]:

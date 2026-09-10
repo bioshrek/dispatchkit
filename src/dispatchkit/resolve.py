@@ -36,6 +36,7 @@ from dispatchkit.config import SchedulerConfig
 from dispatchkit.errors import GraphError
 from dispatchkit.github import (
     DISPATCHKIT_LABEL,
+    LABEL_HOLD,
     LabelIssue,
     MarkReady,
     MergePr,
@@ -62,14 +63,15 @@ _WILDCARD = "*?["
 class Status(Enum):
     """What the issues say a task is doing. Derived every pass, stored nowhere.
 
-    Seven of the eight are a restatement of something GitHub already shows —
-    dependencies open or closed, an assignee, an open pull request, a label, a
-    closed issue and how it was closed. `Auto-merging` is the only synthesized
+    Eight of the nine are a restatement of something GitHub already shows —
+    dependencies open or closed, an assignee, an open pull request, two
+    labels, a closed issue and how it was closed. `Auto-merging` is the only synthesized
     one, and it is the reason the report is worth printing at all.
     """
 
     BLOCKED = "Blocked"
     CANCELLED = "Cancelled"
+    HELD = "Held"
     READY = "Ready"
     DISPATCHED = "Dispatched"
     IN_REVIEW = "In Review"
@@ -93,6 +95,7 @@ class TaskItem:
     labels: tuple[str, ...]
     open_prs: tuple[PullRequest, ...]
     dispatches: tuple[datetime, ...]
+    holds: tuple[datetime, ...] = ()
     node_id: str | None = None
     #: Closed as not planned. Closed, but satisfying nothing (D13.1).
     cancelled: bool = False
@@ -125,12 +128,42 @@ class TaskItem:
         Counted from the issue's own assignment history, which GitHub keeps
         whatever happens to the assignment: a number only we remembered would
         be the one piece of scheduler state GitHub could not rebuild.
+
+        A dispatch a human held is not counted (D13.1c). The budget exists to
+        stop a task that keeps failing, and an interruption is not a failure —
+        charging it would let three holds exhaust a healthy task's budget and
+        mark it `Stuck`, the scheduler punishing someone for using the control
+        it gave them. A hold is credited against the dispatch it interrupted:
+        the one it followed, before the next began.
         """
-        return len(self.dispatches)
+        return sum(1 for start, end in self._runs() if not self._held_between(start, end))
+
+    def _runs(self) -> list[tuple[datetime, datetime | None]]:
+        """Each dispatch, paired with the moment the next one superseded it."""
+        starts = sorted(self.dispatches)
+        return [
+            (start, starts[position + 1] if position + 1 < len(starts) else None)
+            for position, start in enumerate(starts)
+        ]
+
+    def _held_between(self, start: datetime, end: datetime | None) -> bool:
+        return any(start <= hold and (end is None or hold < end) for hold in self.holds)
 
     @property
     def stuck(self) -> bool:
         return LABEL_STUCK in self.labels
+
+    @property
+    def held(self) -> bool:
+        """Has a human said "not now"? (D13.1c)
+
+        A standing decision, not a scheduling one — which is why it reads as a
+        status rather than a deferral, and why it stops merging as well as
+        dispatch. Merging is the only thing dispatchkit does that changes
+        `main` without a human, so a hold that let it through would fail at the
+        moment the control matters most.
+        """
+        return LABEL_HOLD in self.labels
 
     @property
     def claimed(self) -> bool:
@@ -218,6 +251,7 @@ def build_items(
                 labels=issue.labels,
                 open_prs=issue.open_prs,
                 dispatches=issue.dispatches,
+                holds=issue.holds,
                 node_id=issue.node_id,
             )
         )
@@ -270,6 +304,12 @@ def _status_of(task: TaskItem, closed: frozenset[TaskRef] | set[TaskRef]) -> Sta
         return Status.CANCELLED
     if task.closed:
         return Status.DONE
+    if task.held:
+        # Read before everything an open issue could otherwise say, including
+        # `Stuck`: both may be true, but only one of them is a decision
+        # somebody made, and blaming the retry budget for a human's choice
+        # sends the reader to the wrong repair.
+        return Status.HELD
     if task.stuck:
         # Read before `Ready`, because a stuck task is unassigned and would
         # otherwise satisfy every readiness test while never being dispatched
@@ -320,7 +360,7 @@ def ready_ops(items: Sequence[TaskItem]) -> tuple[MarkReady, ...]:
     """
     operations = []
     for task in items:
-        if task.closed or task.verify is not Verify.AUTO:
+        if task.closed or task.held or task.verify is not Verify.AUTO:
             continue
         operations += [
             MarkReady(task.ref, pr.number)
@@ -360,7 +400,7 @@ def merge_ops(items: Sequence[TaskItem], config: SchedulerConfig) -> tuple[Merge
     """
     operations = []
     for task in items:
-        if task.closed or task.verify is not Verify.AUTO:
+        if task.closed or task.held or task.verify is not Verify.AUTO:
             continue
         operations += [
             MergePr(task.ref, pr.number)
@@ -405,7 +445,7 @@ def stall_ops(
 
 
 def _stalled(task: TaskItem, config: SchedulerConfig, now: datetime) -> bool:
-    if task.closed or task.stuck or task.open_prs or not task.assignees:
+    if task.closed or task.held or task.stuck or task.open_prs or not task.assignees:
         return False
     if not task.dispatches:
         return False
