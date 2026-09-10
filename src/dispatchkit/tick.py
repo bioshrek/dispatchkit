@@ -65,6 +65,7 @@ from dispatchkit.resolve import (
     resolve,
     stall_ops,
     stranded_notices,
+    withheld_merges,
 )
 
 
@@ -133,7 +134,7 @@ def plan_tick(
     dirty: Collection[str] = (),
 ) -> TickPlan:
     items, notices = build_items(state)
-    statuses = resolve(items)
+    statuses = resolve(items, config)
     admission = admit(items, statuses, config, served=served)
 
     by_ref = {task.ref: task for task in items}
@@ -194,6 +195,7 @@ def plan_tick(
             *stranded_notices(items),
             *_unserved_claims(items, served),
             *_dirty_plan_notices(items, config, dirty),
+            *withheld_merges(items, config, dirty=dirty),
         ),
         blocked_on=blocking(items),
     )

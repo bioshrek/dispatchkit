@@ -242,7 +242,12 @@ class TestStalledCi:
                 1,
                 verify=Verify.AUTO,
                 assignees=("copilot-swe-agent",),
-                open_prs=(PullRequest(6, checks, mergeable=True),),
+                # Files and `touches` that agree, so the only thing this
+                # fixture varies is the CI state. Without them the pull
+                # request would be withheld for scope reasons and the pass
+                # would say so, which is a different test.
+                touches=("src/*",),
+                open_prs=(PullRequest(6, checks, mergeable=True, files=("src/a.py",)),),
             )
         )
 
@@ -374,7 +379,14 @@ class TestMarkingAutoPrsReady:
                 number=3,
                 verify=verify,
                 assignees=("copilot",),
-                open_prs=(PullRequest(7, checks, draft=draft, mergeable=True),),
+                # A declared scope the pull request stays inside, so the only
+                # thing these fixtures vary is the draft flag. Without it the
+                # merge would be withheld for scope reasons and the status
+                # would say `In review`, which is a different test.
+                touches=("src/*",),
+                open_prs=(
+                    PullRequest(7, checks, draft=draft, mergeable=True, files=("src/a.py",)),
+                ),
             )
         )
 
@@ -423,7 +435,16 @@ class TestMarkReadyConverges:
                 number=3,
                 verify=Verify.AUTO,
                 assignees=("copilot",),
-                open_prs=(PullRequest(7, Checks.PASSING, draft=True, mergeable=True),),
+                # A declared scope the pull request stays inside, so the only
+                # thing these fixtures vary is the draft flag. Without it the
+                # merge would be withheld for scope reasons and the status
+                # would say `In review`, which is a different test.
+                touches=("src/*",),
+                open_prs=(
+                    PullRequest(
+                        7, Checks.PASSING, draft=True, mergeable=True, files=("src/a.py",)
+                    ),
+                ),
             )
         )
 

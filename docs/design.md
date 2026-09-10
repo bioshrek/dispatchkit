@@ -1523,6 +1523,35 @@ traceback, which also discarded every board write queued behind the merge. Two f
 and `_status_of` now require `mergeable`, and a refused merge became a `Notice` rather than an
 exception, because a conflict is an ordinary outcome and a pass must survive it.
 
+**Built (D9.1): a withheld merge says why, and the status agrees.** Found live, and the way it was
+found is the point — a green, undrafted, mergeable pull request sat on the sandbox until someone
+asked out loud why nothing had happened. Every gate had worked exactly as designed: the agent had
+touched `tests/test_readme.py` and the graph declared only `README.md`, so the scope check
+refused. The pass printed nothing at all, and the board said `Auto-merging` over a pull request
+that would never merge.
+
+Silence is the wrong output for a withheld merge. `verify: auto` is a promise that the pipeline
+decides, so when the pipeline declines, the reason has to reach the person who can act on it —
+the same standard the cancelled-task and dirty-plan notices already meet. `withheld_merges` names
+the reason and the fix: `scope-drift` lists the undeclared files, `fenced-path` the fenced ones,
+`conflict` asks for a rebase, `empty` for a close, `no-scope` for a `touches` key.
+
+**One decision, read twice.** The notice and the status come from the same `_withheld`, so the
+report cannot say a thing will merge on one line and explain why it never will on the next.
+`Auto-merging` was already withheld from a stalled check, a draft and a conflict, each time for
+the same reason — the report must not assert something false — and scope drift and the fence are
+the fourth and fifth routes to that same lie.
+
+**What is deliberately not reported is as much of the design as what is.** A draft is about to be
+undrafted by `ready_ops` in this same pass; pending checks are the system working; a failure is
+already reported by `ci_notices`; a hold is a person saying "not now"; and a dirty plan has its
+own, more actionable line. A report that names every ordinary state is one a reader learns to
+skip, and then the line that matters goes unread with the rest.
+
+**Two test fixtures were quietly unrealistic**, and this found them: pull requests with no files
+against tasks with no `touches`, which would never have merged in life either. They were about CI
+state and the draft flag, so they now declare a scope their pull request stays inside.
+
 That is D5.6 (CI unchecked), D5.7 (draft unchecked) and now mergeability unchecked — three
 different fields, one habit. The generalisation is now explicit: _green is not a synonym for
 anything else._ Each precondition for a merge is a separate question, and `mergeable` defaults to

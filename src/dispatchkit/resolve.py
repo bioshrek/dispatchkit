@@ -276,14 +276,24 @@ def _satisfied(items: Sequence[TaskItem]) -> set[TaskRef]:
     return {task.ref for task in items if task.closed and not task.cancelled}
 
 
-def resolve(items: Sequence[TaskItem]) -> dict[TaskRef, Status]:
+def resolve(
+    items: Sequence[TaskItem], config: SchedulerConfig | None = None
+) -> dict[TaskRef, Status]:
     """Derive every task's status from the issues alone.
 
     Keyed by `TaskRef`, not by `TaskId`: `watch` pools every plan in the
     repository, and two plans may both contain `ports` (D13).
+
+    `config` is what the fence is read from, and without it a status cannot
+    tell a green pull request that will merge from one being withheld. Callers
+    that have a config should pass it; the ones that do not get the answer that
+    was correct before there was a fence to consult.
     """
     done = _satisfied(items)
-    return {task.ref: _status_of(task, done) for task in items}
+    withheld = (
+        frozenset(task.ref for task, _ in _withheld(items, config)) if config else frozenset()
+    )
+    return {task.ref: _status_of(task, done, withheld) for task in items}
 
 
 def blocking(items: Sequence[TaskItem]) -> dict[TaskRef, tuple[TaskId, ...]]:
@@ -304,7 +314,11 @@ def blocking(items: Sequence[TaskItem]) -> dict[TaskRef, tuple[TaskId, ...]]:
     }
 
 
-def _status_of(task: TaskItem, closed: frozenset[TaskRef] | set[TaskRef]) -> Status:
+def _status_of(
+    task: TaskItem,
+    closed: frozenset[TaskRef] | set[TaskRef],
+    withheld: frozenset[TaskRef] = frozenset(),
+) -> Status:
     if task.cancelled:
         # Read before `closed`: a cancelled issue is closed too, and calling it
         # `Done` is the whole bug.
@@ -334,11 +348,15 @@ def _status_of(task: TaskItem, closed: frozenset[TaskRef] | set[TaskRef]) -> Sta
         # A conflicting pull request is the same lie by a third route: green,
         # out of draft, and unmergeable until a human rebases it. Only a human
         # can move it, so `In Review` is the honest word.
+        # Scope drift and a fenced path are the fourth and fifth routes, and
+        # they arrive here as `withheld` so that the word on this line and the
+        # notice explaining it are one decision.
         if (
             task.verify is Verify.AUTO
             and not task.checks.stalled
             and not task.draft
             and task.mergeable
+            and task.ref not in withheld
         ):
             return Status.AUTO_MERGING
         return Status.IN_REVIEW
@@ -484,6 +502,113 @@ def _within_scope(files: Sequence[str], touches: Sequence[str]) -> bool:
     if not touches:
         return False
     return all(any(fnmatch(path, pattern) for pattern in touches) for path in files)
+
+
+def withheld_merges(
+    items: Sequence[TaskItem],
+    config: SchedulerConfig,
+    *,
+    dirty: Collection[str] = (),
+) -> tuple[Notice, ...]:
+    """Say why a `verify: auto` pull request that looks finished did not merge.
+
+    Found live: a green, undrafted, mergeable pull request sat on the sandbox
+    until someone asked out loud why nothing had happened. Every gate in
+    `merge_ops` had worked exactly as designed — the agent had touched a file
+    the graph never declared — and the pass printed nothing at all.
+
+    Silence is the wrong output for a withheld merge. `verify: auto` is a
+    promise that the pipeline decides, so when the pipeline declines, the
+    reason has to reach the person who can act on it. That is the same standard
+    the cancelled-task and dirty-plan notices already meet: a stopped thing is
+    named, never left looking merely unfinished.
+
+    What is deliberately *not* reported is as much of the design as what is. A
+    draft is about to be undrafted by `ready_ops` in this same pass; pending
+    checks are the system working; a failure is already reported by
+    `ci_notices`; a hold is a person saying "not now" and answering it every
+    pass argues with them; and a dirty plan has its own, more actionable line.
+    A report that names every ordinary state is one a reader learns to skip,
+    and then the line that matters goes unread with the rest.
+    """
+    return tuple(
+        Notice("withheld-merge", str(task.ref), _why(pr, task, config))
+        for task, pr in _withheld(items, config, dirty=dirty)
+    )
+
+
+def _withheld(
+    items: Sequence[TaskItem],
+    config: SchedulerConfig,
+    *,
+    dirty: Collection[str] = (),
+) -> tuple[tuple[TaskItem, PullRequest], ...]:
+    """The green pull requests this pass declined to merge, and their tasks.
+
+    One decision, read twice: the notice explains it and `_status_of` refuses
+    to call the task `Auto-merging`, so the report cannot say a thing will
+    merge on one line and why it never will on the next.
+    """
+    merging = {(operation.ref, operation.number) for operation in merge_ops(items, config)}
+    found: list[tuple[TaskItem, PullRequest]] = []
+    for task in items:
+        if task.closed or task.held or task.verify is not Verify.AUTO:
+            continue
+        if task.ref.plan in dirty:
+            continue
+        for pr in task.open_prs:
+            if (task.ref, pr.number) in merging:
+                continue
+            if pr.draft or pr.checks is not Checks.PASSING:
+                continue
+            found.append((task, pr))
+    return tuple(found)
+
+
+def _why(pr: PullRequest, task: TaskItem, config: SchedulerConfig) -> str:
+    """The one thing standing between a green pull request and `main`.
+
+    Each answer opens with a short tag, so one grep finds every instance of a
+    reason across a log without the code having to fragment into four of them —
+    the code stays `withheld-merge`, which is the thing a reader wants to
+    count.
+
+    First reason only. A pull request that conflicts *and* drifted needs
+    rebasing before the scope question can even be asked, and a list of every
+    gate it failed reads as an argument rather than an instruction.
+    """
+    if not pr.mergeable:
+        return (
+            f"conflict: #{pr.number} is green but conflicts with the base branch, so it "
+            "merges nowhere. Rebase it, and the next pass will merge it."
+        )
+    if not pr.files:
+        return (
+            f"empty: #{pr.number} changes no files. An empty pull request passes CI "
+            "trivially, so it is never merged unattended; close it, and the task will be "
+            "dispatched again."
+        )
+    fenced = [path for path in pr.files if config.is_fenced(path)]
+    if fenced:
+        return (
+            f"fenced-path: #{pr.number} is green but touches {', '.join(sorted(fenced))}, "
+            "which is inside the blast-radius fence: the pipeline does not rewrite its own "
+            "workflow, config or task graph unattended. Review and merge it yourself."
+        )
+    drifted = [
+        path for path in pr.files if not any(fnmatch(path, pattern) for pattern in task.touches)
+    ]
+    if not task.touches:
+        return (
+            f"no-scope: #{pr.number} is green, but {task.ref} declares no `touches`, so "
+            "there is nothing to check its scope against. Declare the files it may change, "
+            "or merge it yourself."
+        )
+    return (
+        f"scope-drift: #{pr.number} is green but also changed "
+        f"{', '.join(sorted(drifted))}, which {task.ref} did not declare in `touches`. "
+        "Widen `touches` if that was the intent, or merge it yourself."
+    )
 
 
 def stranded_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
