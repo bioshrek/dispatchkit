@@ -118,6 +118,9 @@ class TaskItem:
     cancelled: bool = False
     #: Linked pull requests that have already landed, and where (D16).
     merged: tuple[MergedPr, ...] = ()
+    #: When the issue closed (D15). Read by the retrospective only; the
+    #: scheduler cares whether a task is closed, never when.
+    closed_at: datetime | None = None
 
     @property
     def id(self) -> TaskId:
@@ -296,6 +299,7 @@ def build_items(
                 title=issue.title,
                 body=issue.body,
                 merged=issue.merged,
+                closed_at=issue.closed_at,
             )
         )
     return tuple(items), tuple(notices)

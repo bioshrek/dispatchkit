@@ -72,6 +72,7 @@ layers = [
     "dispatchkit.local",
     "dispatchkit.recover",
     "dispatchkit.apply",
+    "dispatchkit.retro",
     "dispatchkit.resolve",
     "dispatchkit.lints",
     "dispatchkit.metrics",
