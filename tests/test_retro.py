@@ -37,7 +37,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from dispatchkit.github import IssueState
-from dispatchkit.model import DEFAULT_BASE, MergedPr
+from dispatchkit.model import DEFAULT_BASE, Base, MergedPr
 from dispatchkit.resolve import build_items
 from dispatchkit.retro import Retrospective, retrospective
 from tests.graphs import graph, task
@@ -194,6 +194,50 @@ class TestTheTwoDurations:
 
         assert report.outcomes[0].overhead is None
         assert report.outcomes[0].measured is False
+
+
+class TestWhichPullRequestLanded:
+    def test_a_merge_into_another_branch_is_not_this_tasks_work(self) -> None:
+        """Found live. The plan's own pull request cross-references every
+        issue in the plan, so once a human merges `plan/mincount` into `main`
+        it appears as a merged pull request on all three tasks -- with the
+        wrong commit, the wrong merge time and a CI run that is the plan's,
+        not the task's.
+
+        `close_ops` was never fooled, because it checks the base. This asks
+        the same question for the same reason: the base is the evidence for
+        whose work a merge is.
+        """
+        task_base = Base("plan/mincount")
+        item = issue(
+            "one",
+            number=1,
+            base=task_base,
+            closed=True,
+            closed_at=at(13, 0),
+            dispatches=(at(12, 0),),
+            merged=(
+                MergedPr(
+                    21,
+                    DEFAULT_BASE,
+                    first_commit_at=at(8, 0),
+                    ci=timedelta(hours=1),
+                    merged_at=at(17, 0),
+                ),
+                MergedPr(
+                    18,
+                    task_base,
+                    first_commit_at=at(12, 5),
+                    ci=timedelta(minutes=5),
+                    merged_at=at(12, 30),
+                ),
+            ),
+        )
+        items, _ = build_items(state_of(item))
+        report = retrospective(items, plan="demo")
+
+        assert report.outcomes[0].overhead == timedelta(minutes=10)
+        assert report.outcomes[0].work == timedelta(minutes=30)
 
 
 class TestWhereWorkEnds:

@@ -1,0 +1,1421 @@
+{
+ "data": {
+  "repository": {
+   "pullRequests": {
+    "nodes": []
+   },
+   "issues": {
+    "nodes": [
+     {
+      "id": "I_kwDOUSWj2M8AAAABQSGhww",
+      "number": 1,
+      "title": "Limit output with --top N",
+      "body": "Printing every word is unusable on anything longer than a paragraph. Add a\n`--top N` option to `wordfreq` that prints only the N most frequent words.\n\n- The limit belongs in `cli.py`. `count_words` already returns the full list in\n  a stable order, and it should keep doing so \u2014 slicing is a presentation\n  concern, and the JSON task will need the same unsliced list.\n- Default to printing everything, so today's behaviour is unchanged when the\n  flag is absent.\n- `--top 0` should print nothing rather than everything; reject a negative N\n  with a non-zero exit and a message on stderr, matching how a missing file is\n  already handled.\n\nAdd tests to `tests/test_cli.py` whose names contain `top`, since the\nacceptance command selects on that.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k top && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: top-n\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: auto\nspend: false\ndepends: []\ntouches: [src/wordfreq/cli.py, tests/test_cli.py]\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-08T16:09:15Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:cloud"
+        },
+        {
+         "name": "verify:auto"
+        },
+        {
+         "name": "plan:wordfreq"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": [
+        {
+         "login": "bioshrek"
+        },
+        {
+         "login": "Copilot"
+        }
+       ]
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-08T14:00:49Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:00:50Z",
+         "label": {
+          "name": "lane:cloud"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:00:50Z",
+         "label": {
+          "name": "verify:human"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:00:50Z",
+         "label": {
+          "name": "plan:wordfreq"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T15:04:17Z",
+         "label": {
+          "name": "verify:auto"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-08T14:08:03Z",
+         "assignee": {
+          "login": "copilot-swe-agent"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:08:03Z",
+         "assignee": {
+          "login": "bioshrek"
+         }
+        }
+       ]
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 6,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-08T16:09:14Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-08T14:08:06Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-08T14:09:46Z",
+                 "updatedAt": "2026-09-08T15:06:49Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-08T16:09:17Z",
+                 "updatedAt": "2026-09-08T16:10:42Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "I_kwDOUSWj2M8AAAABQSGrDw",
+      "number": 2,
+      "title": "Filter stopwords with --stopwords",
+      "body": "`the` wins every count, which makes the output nearly useless. Add opt-in\nstopword filtering.\n\n- Add a `--stopwords` flag to `cli.py` and the filtering itself to `count.py`,\n  next to the counting it modifies. Keep the two separable: `count_words`\n  should take the stopword set as an argument rather than reaching for a\n  global, so it stays testable without the CLI.\n- Ship a small built-in English list (roughly the usual 25\u201350: articles,\n  pronouns, prepositions, auxiliaries). Put it in `count.py` as a frozenset.\n- Filtering happens after tokenising and before counting.\n- Off by default. Existing output must not change when the flag is absent.\n\nAdd tests to `tests/test_count.py` whose names contain `stopword`, since the\nacceptance command selects on that.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k stopword && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: stopwords\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: auto\nspend: false\ndepends: []\ntouches: [src/wordfreq/count.py, tests/test_count.py]\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-08T16:52:53Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:cloud"
+        },
+        {
+         "name": "verify:auto"
+        },
+        {
+         "name": "plan:wordfreq"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": [
+        {
+         "login": "bioshrek"
+        },
+        {
+         "login": "Copilot"
+        }
+       ]
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-08T14:01:02Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:02Z",
+         "label": {
+          "name": "lane:cloud"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:02Z",
+         "label": {
+          "name": "verify:human"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:02Z",
+         "label": {
+          "name": "plan:wordfreq"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T16:45:59Z",
+         "label": {
+          "name": "verify:auto"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-08T14:08:05Z",
+         "assignee": {
+          "login": "copilot-swe-agent"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:08:05Z",
+         "assignee": {
+          "login": "bioshrek"
+         }
+        }
+       ]
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 7,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "src/wordfreq/count.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            },
+            {
+             "path": "tests/test_count.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-08T16:52:52Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-08T14:08:09Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-08T16:50:47Z",
+                 "updatedAt": "2026-09-08T16:50:59Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-08T16:52:55Z",
+                 "updatedAt": "2026-09-08T16:53:31Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "I_kwDOUSWj2M8AAAABQSGyTg",
+      "number": 3,
+      "title": "Survive a non-UTF-8 file",
+      "body": "`cli.py` calls `read_text(encoding=\"utf-8\")`, so a Latin-1 file raises\n`UnicodeDecodeError` \u2014 an uncaught traceback, not the clean exit-2 error that a\nmissing file already gets.\n\n- Catch the decode failure and re-read with a fallback rather than giving up:\n  reading a file with a few undecodable bytes should still produce counts.\n  `errors=\"replace\"` on a second attempt is enough; a full charset guess is out\n  of scope.\n- Say something on stderr when the fallback is used, so a surprising count is\n  explainable. Do not make it an error: exit 0, because the command worked.\n- The existing `OSError` path (missing file, exit 2) must keep behaving.\n\nAdd tests to `tests/test_cli.py` whose names contain `encoding`, since the\nacceptance command selects on that. Write the fixture bytes with\n`Path.write_bytes`, not a str, or the test proves nothing.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k encoding && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: encoding-fallback\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: human\nspend: false\ndepends: []\ntouches: [src/wordfreq/cli.py, tests/test_cli.py]\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-10T08:35:05Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:cloud"
+        },
+        {
+         "name": "verify:human"
+        },
+        {
+         "name": "plan:wordfreq"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": [
+        {
+         "login": "bioshrek"
+        },
+        {
+         "login": "Copilot"
+        }
+       ]
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-08T14:01:12Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:12Z",
+         "label": {
+          "name": "lane:cloud"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:12Z",
+         "label": {
+          "name": "verify:human"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:12Z",
+         "label": {
+          "name": "plan:wordfreq"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-08T16:09:29Z",
+         "assignee": {
+          "login": "copilot-swe-agent"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T16:09:30Z",
+         "assignee": {
+          "login": "bioshrek"
+         }
+        }
+       ]
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 8,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T08:35:04Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-08T16:09:32Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-08T16:12:04Z",
+                 "updatedAt": "2026-09-08T16:12:17Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T08:35:06Z",
+                 "updatedAt": "2026-09-10T08:35:18Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "I_kwDOUSWj2M8AAAABQSG5eg",
+      "number": 4,
+      "title": "Emit machine-readable counts with --json",
+      "body": "The current output is aligned columns, which nothing downstream can consume.\nAdd `--json`.\n\n- Emit a JSON array of objects, one per word, in the same order the text output\n  uses: `[{\"word\": \"a\", \"total\": 2}]`. An array, not an object keyed by word,\n  because order is meaningful here and JSON objects do not promise it.\n- It must honour `--top N`, which is why this task waits on that one. Apply the\n  same limit to the same list; do not re-implement the slice.\n- Print nothing else on stdout in this mode \u2014 no header, no summary. Anything\n  extra makes the output unparseable, which defeats the flag.\n- An empty input is `[]`, not an empty string.\n\nAdd tests to `tests/test_cli.py` whose names contain `json`, and assert by\n`json.loads`-ing the captured stdout rather than by string matching.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k json && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: json-output\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: human\nspend: false\ndepends: [top-n]\ntouches: [src/wordfreq/cli.py, tests/test_cli.py]\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-10T08:44:56Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:cloud"
+        },
+        {
+         "name": "verify:human"
+        },
+        {
+         "name": "plan:wordfreq"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": [
+        {
+         "login": "bioshrek"
+        },
+        {
+         "login": "Copilot"
+        }
+       ]
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-08T14:01:22Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:22Z",
+         "label": {
+          "name": "lane:cloud"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:22Z",
+         "label": {
+          "name": "verify:human"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:22Z",
+         "label": {
+          "name": "plan:wordfreq"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-10T08:35:15Z",
+         "assignee": {
+          "login": "copilot-swe-agent"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T08:35:15Z",
+         "assignee": {
+          "login": "bioshrek"
+         }
+        }
+       ]
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 11,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T08:44:55Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T08:35:18Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T08:37:02Z",
+                 "updatedAt": "2026-09-10T08:37:14Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T08:44:57Z",
+                 "updatedAt": "2026-09-10T08:45:09Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "I_kwDOUSWj2M8AAAABQSG_uw",
+      "number": 5,
+      "title": "Document the new flags in the README",
+      "body": "Four flags landed and the README still documents none of them. Bring it up to\ndate; this task waits on all four so the surface it describes is final.\n\n- Document `--top`, `--stopwords`, `--json` and the non-UTF-8 fallback, each\n  with a short worked example in the existing style.\n- Replace the \"Why the payload is unfinished on purpose\" list: those gaps are\n  now closed, and leaving them there would be a lie about the code.\n- Keep it a README, not a manual. A few lines per flag.\n\nAdd `tests/test_readme.py` asserting the README mentions `--top`, `--stopwords`,\n`--json` and the encoding fallback, and make it pass. The acceptance is\n`uv run pytest -q -k readme`.\n\nIt is a test rather than a shell grep for a reason worth knowing: this task is\n`verify = \"auto\"`, which means the merge is gated on CI being green, so an\nacceptance CI does not run gates nothing at all. Writing it as a test puts the\ncheck in the same pipeline that decides the merge.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k readme\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: document-flags\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: cloud\nrequires: []\nverify: auto\nspend: false\ndepends: [top-n, stopwords, json-output, encoding-fallback]\ntouches: [README.md, tests/test_readme.py]\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-10T09:03:12Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:cloud"
+        },
+        {
+         "name": "verify:auto"
+        },
+        {
+         "name": "plan:wordfreq"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": [
+        {
+         "login": "bioshrek"
+        },
+        {
+         "login": "Copilot"
+        }
+       ]
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-08T14:01:30Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:31Z",
+         "label": {
+          "name": "lane:cloud"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:31Z",
+         "label": {
+          "name": "verify:auto"
+         }
+        },
+        {
+         "createdAt": "2026-09-08T14:01:31Z",
+         "label": {
+          "name": "plan:wordfreq"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-10T08:45:03Z",
+         "assignee": {
+          "login": "copilot-swe-agent"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T08:45:03Z",
+         "assignee": {
+          "login": "bioshrek"
+         }
+        }
+       ]
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 12,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "README.md"
+            },
+            {
+             "path": "tests/test_readme.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T09:03:11Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T08:45:05Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T08:47:17Z",
+                 "updatedAt": "2026-09-10T08:47:30Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T09:03:14Z",
+                 "updatedAt": "2026-09-10T09:03:25Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "I_kwDOUSWj2M8AAAABQrUHaw",
+      "number": 13,
+      "title": "Report the package version with --version",
+      "body": "`wordfreq` has no way to say which version it is. `pyproject.toml` declares\n`version = \"0.1.0\"`, but nothing surfaces it, so a bug report cannot name the\nbuild it came from.\n\n- Add `--version` to the CLI. It prints the version and exits 0, and it does\n  so without requiring the `path` argument \u2014 a user asking which version they\n  have does not have a file in mind.\n- Take the number from the installed package metadata\n  (`importlib.metadata.version`), not a second literal in the source. Two\n  places holding one version number is how they come to disagree.\n- Expose it as `wordfreq.__version__` as well, so a caller importing the\n  library can read it without shelling out.\n\nAdd tests to `tests/test_cli.py` whose names contain `version`: one that the\nflag prints the number from the metadata, and one that it works with no path\nargument given.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k version && uv run ruff check .\n```\n\n_Milestone wordfreq v0.2._\n\n<!-- dispatchkit\nv: 1\nid: version-flag\nplan: wordfreq\nmilestone: \"wordfreq v0.2\"\nlane: local\nrequires: []\nverify: auto\nspend: false\ndepends: []\ntouches: [src/wordfreq/__init__.py, src/wordfreq/cli.py, tests/test_cli.py]\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-10T15:56:57Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:local"
+        },
+        {
+         "name": "verify:auto"
+        },
+        {
+         "name": "plan:wordfreq"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": []
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-10T15:26:50Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T15:26:50Z",
+         "label": {
+          "name": "lane:local"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T15:26:50Z",
+         "label": {
+          "name": "verify:auto"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T15:26:50Z",
+         "label": {
+          "name": "plan:wordfreq"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T15:32:48Z",
+         "label": {
+          "name": "dispatch:local"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T15:39:57Z",
+         "label": {
+          "name": "dispatch:local"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T15:42:57Z",
+         "label": {
+          "name": "dispatch:local"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": []
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 14,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "src/wordfreq/__init__.py"
+            },
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T15:56:55Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T15:55:29Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T15:55:40Z",
+                 "updatedAt": "2026-09-10T15:55:55Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T15:56:58Z",
+                 "updatedAt": "2026-09-10T15:57:09Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "I_kwDOUSWj2M8AAAABQsOZ7A",
+      "number": 15,
+      "title": "Drop rare words with --min-count N",
+      "body": "A long document produces a very long tail: hundreds of words that appear once.\nThey push the interesting counts off the screen, and `--top N` is the wrong\ntool for the job \u2014 it asks \"how many rows\" when the question is \"how often is\noften enough\".\n\n- Add a `min_count` parameter to `count_words` in `src/wordfreq/count.py`. It\n  drops any word whose total is below the threshold, after counting. Default\n  it to `1`, which keeps everything and so changes nothing for existing\n  callers.\n- Add `--min-count N` to the CLI, passing it through. A negative value is an\n  error: exit 2 with a message on stderr, the way `--top` already handles one.\n- `--min-count` and `--top` compose. Filter by count first, then take the top\n  N of what survives \u2014 a limit applied before the filter would return fewer\n  rows than asked for and look like a bug.\n\nAdd tests to `tests/test_count.py` whose names contain `mincount`: one that\nthe threshold drops words below it and keeps words at it, one that the default\nchanges nothing, and one that it composes with `--top` in that order.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k mincount && uv run ruff check . && uv run ruff format --check .\n```\n\n_Milestone wordfreq v0.3._\n\n<!-- dispatchkit\nv: 2\nid: min-count\nplan: mincount\nmilestone: \"wordfreq v0.3\"\nlane: local\nrequires: []\nverify: auto\nspend: false\ndepends: []\ntouches: [src/wordfreq/count.py, src/wordfreq/cli.py, tests/test_count.py]\nbase: plan/mincount\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-10T17:09:45Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:local"
+        },
+        {
+         "name": "verify:auto"
+        },
+        {
+         "name": "plan:mincount"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": []
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-10T17:00:47Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:47Z",
+         "label": {
+          "name": "lane:local"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:47Z",
+         "label": {
+          "name": "verify:auto"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:47Z",
+         "label": {
+          "name": "plan:mincount"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:02:27Z",
+         "label": {
+          "name": "dispatch:local"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:09:43Z",
+         "label": {
+          "name": "dispatch:local"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": []
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 18,
+          "state": "MERGED",
+          "baseRefName": "plan/mincount",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "README.md"
+            },
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "src/wordfreq/count.py"
+            },
+            {
+             "path": "tests/test_count.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T17:09:31Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T17:03:54Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T17:07:04Z",
+                 "updatedAt": "2026-09-10T17:07:24Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T17:09:34Z",
+                 "updatedAt": "2026-09-10T17:09:45Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        },
+        {
+         "source": {
+          "number": 21,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "README.md"
+            },
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "src/wordfreq/count.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            },
+            {
+             "path": "tests/test_count.py"
+            },
+            {
+             "path": "tests/test_readme.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T17:47:16Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T17:09:31Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T17:21:11Z",
+                 "updatedAt": "2026-09-10T17:21:23Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T17:47:21Z",
+                 "updatedAt": "2026-09-10T17:47:29Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "I_kwDOUSWj2M8AAAABQsObgA",
+      "number": 16,
+      "title": "Summarise the count with --total",
+      "body": "`wordfreq` prints a table of counts and nothing else, so answering \"how many\nwords are in this file at all\" means piping the output through `awk`.\n\n- Add `--total` to the CLI. With it, print one extra line after the table\n  giving the total number of words counted and the number of distinct words,\n  in that order.\n- It counts what was actually counted: if `--stopwords` dropped words, they\n  are not in the total. The line describes the table above it, not the file.\n- Without the flag, nothing changes. Print the line to stdout, after the\n  table, so a reader sees it last.\n\nAdd tests to `tests/test_cli.py` whose names contain `total`: one that the\nline appears with the flag and not without it, and one that it reflects the\nfiltering `--stopwords` did.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k total && uv run ruff check . && uv run ruff format --check .\n```\n\n_Milestone wordfreq v0.3._\n\n<!-- dispatchkit\nv: 2\nid: total-line\nplan: mincount\nmilestone: \"wordfreq v0.3\"\nlane: local\nrequires: []\nverify: auto\nspend: false\ndepends: []\ntouches: [src/wordfreq/cli.py, tests/test_cli.py]\nbase: plan/mincount\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-10T17:17:24Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:local"
+        },
+        {
+         "name": "verify:auto"
+        },
+        {
+         "name": "plan:mincount"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": []
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-10T17:00:48Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:49Z",
+         "label": {
+          "name": "lane:local"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:49Z",
+         "label": {
+          "name": "verify:auto"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:49Z",
+         "label": {
+          "name": "plan:mincount"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:13:35Z",
+         "label": {
+          "name": "dispatch:local"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": []
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 19,
+          "state": "MERGED",
+          "baseRefName": "plan/mincount",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T17:17:20Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T17:15:46Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T17:15:58Z",
+                 "updatedAt": "2026-09-10T17:16:10Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T17:17:23Z",
+                 "updatedAt": "2026-09-10T17:17:34Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        },
+        {
+         "source": {
+          "number": 21,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "README.md"
+            },
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "src/wordfreq/count.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            },
+            {
+             "path": "tests/test_count.py"
+            },
+            {
+             "path": "tests/test_readme.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T17:47:16Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T17:09:31Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T17:21:11Z",
+                 "updatedAt": "2026-09-10T17:21:23Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T17:47:21Z",
+                 "updatedAt": "2026-09-10T17:47:29Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     },
+     {
+      "id": "I_kwDOUSWj2M8AAAABQsOcwg",
+      "number": 17,
+      "title": "Document the new flags in the README",
+      "body": "The README documents every flag `wordfreq` has. `--min-count` and `--total`\nare now two of them and neither is there.\n\n- Add both to the flag list in `README.md`, in the same style as the flags\n  already documented: what each does, and what its default is.\n- Say how `--min-count` composes with `--top`, because the order matters and a\n  reader who guesses wrong will think one of the two is broken.\n- Say that `--total` describes the table it follows, not the file, so a reader\n  using it with `--stopwords` is not surprised by a smaller number.\n\n`tests/test_readme.py` already asserts that the README documents the flags the\nCLI accepts. Extend it so that assertion covers both new flags \u2014 the test name\nmust contain `readme`, which is what the acceptance command selects.\n\n## Acceptance\n\n```sh\nuv run pytest -q -k readme && uv run ruff format --check .\n```\n\n_Milestone wordfreq v0.3._\n\n<!-- dispatchkit\nv: 2\nid: min-count-readme\nplan: mincount\nmilestone: \"wordfreq v0.3\"\nlane: local\nrequires: []\nverify: auto\nspend: false\ndepends: [min-count, total-line]\ntouches: [README.md, tests/test_readme.py]\nbase: plan/mincount\n-->\n",
+      "state": "CLOSED",
+      "stateReason": "COMPLETED",
+      "closedAt": "2026-09-10T17:20:57Z",
+      "labels": {
+       "nodes": [
+        {
+         "name": "dispatchkit"
+        },
+        {
+         "name": "lane:local"
+        },
+        {
+         "name": "verify:auto"
+        },
+        {
+         "name": "plan:mincount"
+        }
+       ]
+      },
+      "assignees": {
+       "nodes": []
+      },
+      "holds": {
+       "nodes": [
+        {
+         "createdAt": "2026-09-10T17:00:51Z",
+         "label": {
+          "name": "dispatchkit"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:51Z",
+         "label": {
+          "name": "lane:local"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:51Z",
+         "label": {
+          "name": "verify:auto"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:00:51Z",
+         "label": {
+          "name": "plan:mincount"
+         }
+        },
+        {
+         "createdAt": "2026-09-10T17:17:37Z",
+         "label": {
+          "name": "dispatch:local"
+         }
+        }
+       ]
+      },
+      "dispatches": {
+       "nodes": []
+      },
+      "timelineItems": {
+       "nodes": [
+        {
+         "source": {
+          "number": 20,
+          "state": "MERGED",
+          "baseRefName": "plan/mincount",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "README.md"
+            },
+            {
+             "path": "tests/test_readme.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T17:20:52Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T17:19:29Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T17:19:41Z",
+                 "updatedAt": "2026-09-10T17:19:51Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T17:20:55Z",
+                 "updatedAt": "2026-09-10T17:21:07Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        },
+        {
+         "source": {
+          "number": 21,
+          "state": "MERGED",
+          "baseRefName": "main",
+          "isDraft": false,
+          "mergeable": "UNKNOWN",
+          "files": {
+           "nodes": [
+            {
+             "path": "README.md"
+            },
+            {
+             "path": "src/wordfreq/cli.py"
+            },
+            {
+             "path": "src/wordfreq/count.py"
+            },
+            {
+             "path": "tests/test_cli.py"
+            },
+            {
+             "path": "tests/test_count.py"
+            },
+            {
+             "path": "tests/test_readme.py"
+            }
+           ]
+          },
+          "mergedAt": "2026-09-10T17:47:16Z",
+          "first_commit": {
+           "nodes": [
+            {
+             "commit": {
+              "committedDate": "2026-09-10T17:09:31Z"
+             }
+            }
+           ]
+          },
+          "commits": {
+           "nodes": [
+            {
+             "commit": {
+              "checkSuites": {
+               "nodes": [
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "SUCCESS",
+                 "createdAt": "2026-09-10T17:21:11Z",
+                 "updatedAt": "2026-09-10T17:21:23Z"
+                },
+                {
+                 "status": "COMPLETED",
+                 "conclusion": "FAILURE",
+                 "createdAt": "2026-09-10T17:47:21Z",
+                 "updatedAt": "2026-09-10T17:47:29Z"
+                }
+               ]
+              }
+             }
+            }
+           ]
+          }
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
+}

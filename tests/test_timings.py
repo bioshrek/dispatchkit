@@ -160,11 +160,10 @@ class TestWhenTheWorkLanded:
 
 
 class TestHowLongCiTook:
-    def test_it_spans_the_check_suites(self) -> None:
-        """First suite created to last suite finished.
+    def test_it_is_the_longest_single_suite(self) -> None:
+        """Suites run concurrently, so the longest one is the wall clock.
 
-        Not the sum: suites run concurrently, and adding them up would report
-        an elapsed time no clock ever measured.
+        Not the sum, which would report an elapsed time no clock measured.
         """
         state = parse_state(
             payload(
@@ -181,7 +180,33 @@ class TestHowLongCiTook:
             )
         )
 
-        assert state.issues[0].merged[0].ci == timedelta(minutes=6)
+        assert state.issues[0].merged[0].ci == timedelta(minutes=5)
+
+    def test_a_rerun_days_later_does_not_become_a_ci_duration(self) -> None:
+        """Found live, on the sandbox's `encoding-fallback`.
+
+        A head commit can carry suites from separate runs -- a re-run, or a
+        pipeline that was fixed and tried again. Spanning the earliest start
+        to the latest finish reported one of them as taking a day and sixteen
+        hours, when both rounds took thirteen seconds. The gap between two CI
+        runs is not a CI run.
+        """
+        state = parse_state(
+            payload(
+                issue_node(
+                    prs=[
+                        merged_pr(
+                            suites=[
+                                suite("2026-09-08T16:12:04Z", "2026-09-08T16:12:17Z"),
+                                suite("2026-09-10T08:35:06Z", "2026-09-10T08:35:18Z"),
+                            ]
+                        )
+                    ]
+                )
+            )
+        )
+
+        assert state.issues[0].merged[0].ci == timedelta(seconds=13)
 
     def test_a_pull_request_with_no_suites_reads_as_absent(self) -> None:
         state = parse_state(payload(issue_node(prs=[merged_pr(suites=[])])))

@@ -283,22 +283,30 @@ def _first_commit(source: dict[str, Any]) -> datetime | None:
 
 
 def _ci_elapsed(source: dict[str, Any]) -> timedelta | None:
-    """How long the check suites took, first started to last finished.
+    """How long CI took on this pull request: its longest single suite.
 
-    Elapsed, not summed: suites run concurrently, and adding them together
-    would report a duration no clock ever measured. A suite missing either
-    timestamp is skipped rather than treated as instant -- half the
-    retrospective's job is refusing to turn an absence into a zero.
+    Not the sum -- suites run concurrently, and adding them would report a
+    duration no clock ever measured. And not the span from the earliest start
+    to the latest finish either, which was the first version and is wrong for
+    a reason only real data showed: a head commit can carry suites from
+    separate runs, a re-run or a pipeline fixed and tried again, and that span
+    then measures the gap *between* two CI runs. The sandbox reported a
+    thirteen-second job as having taken a day and sixteen hours.
+
+    The longest suite is the wall clock of a round however many rounds there
+    were, since concurrent suites overlap and a later round can only be
+    longer, never further away.
+
+    A suite missing either timestamp is skipped rather than treated as
+    instant: half this module's job is refusing to turn an absence into a zero.
     """
     spans = [
-        (start, end)
+        end - start
         for suite in _check_suites(source)
         if (start := _stamp(suite.get("createdAt"))) is not None
         and (end := _stamp(suite.get("updatedAt"))) is not None
     ]
-    if not spans:
-        return None
-    return max(end for _, end in spans) - min(start for start, _ in spans)
+    return max(spans) if spans else None
 
 
 def _parse_files(source: dict[str, Any]) -> tuple[str, ...]:

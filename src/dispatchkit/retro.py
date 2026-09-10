@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from dispatchkit.metrics import max_antichain
-from dispatchkit.model import TaskGraph, TaskRef
+from dispatchkit.model import MergedPr, TaskGraph, TaskRef
 from dispatchkit.resolve import TaskItem
 
 #: How many times its own overhead a task must have worked for the split to
@@ -252,7 +252,7 @@ def _positive(span: timedelta) -> timedelta | None:
 
 
 def _outcome(item: TaskItem) -> TaskOutcome:
-    landed = next(iter(item.merged), None)
+    landed = _landed_pr(item)
     first_commit = landed.first_commit_at if landed else None
     return TaskOutcome(
         ref=item.ref,
@@ -263,6 +263,19 @@ def _outcome(item: TaskItem) -> TaskOutcome:
         merged_at=landed.merged_at if landed else None,
         closed_at=item.closed_at,
     )
+
+
+def _landed_pr(item: TaskItem) -> MergedPr | None:
+    """The merged pull request that carried *this task's* work.
+
+    The base is the evidence, exactly as it is for `close_ops`. A plan's own
+    pull request cross-references every issue in the plan, so the moment a
+    human merges the plan branch into trunk it shows up as a merged pull
+    request on all of them -- carrying the plan's first commit, the plan's
+    merge time and the plan's CI. Taking the first merge in the list read a
+    three-minute task as having started nine hours before it was dispatched.
+    """
+    return next((pr for pr in item.merged if pr.base == item.base), None)
 
 
 def _producing_dispatch(
