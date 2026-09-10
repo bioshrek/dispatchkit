@@ -65,6 +65,15 @@ reviewer all run the same check. Two rules follow from that:
 - It must be a **subset of what CI runs**, or `verify = "auto"` merges on a green check that never
   ran the thing the task promised. `validate` refuses the graph (`acceptance-not-in-ci`) rather
   than warning, because the failure mode is a silent merge.
+
+  "Subset" is **prefix matching on the literal command string**: a CI command must equal the
+  acceptance clause or be a prefix of it. So with `uv run pytest -q` in CI, an acceptance of
+  `uv run pytest -q tests/test_widget.py` passes — it narrows what CI runs — while
+  `uv run pytest tests/test_widget.py` does not, because it is not an extension of any CI command.
+  An acceptance of several `&&`-joined clauses must have every clause covered. The check is a
+  conservative approximation and it is wrong in the safe direction: it can refuse a task CI really
+  does cover, and the remedy is to widen CI or use `verify = "human"`. Neither merges by mistake.
+  The check only applies to `verify = "auto"` tasks.
 - It must be **runnable on a clean checkout**. `uv run pytest -m unit -k widget` is an acceptance;
   "the tests pass and it looks right" is not.
 
@@ -103,7 +112,12 @@ Cycles, self-edges, duplicates and unknown targets are all errors.
 
 #### `touches`
 
-An **advisory** declaration of the files the task is expected to change. It does two things:
+An **advisory** declaration of the files the task is expected to change, matched as `fnmatch`
+globs, so `*`, `?` and `[...]` all work. Note that `fnmatch` is **not** path-aware: `*` crosses
+directory separators, so `docs/*.md` already matches `docs/plans/a.md`, and writing `docs/**/*.md`
+narrows rather than widens — it requires at least one intermediate directory and so misses
+`docs/a.md`. Prefer the single star. Paths need not exist yet; the plan describes work nobody has
+done. `touches` does two things:
 
 - The scheduler prefers not to run two tasks with overlapping scope at the same time, which
   reduces conflicts.
@@ -133,7 +147,10 @@ Five short sections, and no more:
 3. **The non-obvious constraints only.** This is where a decision made once, elsewhere, gets
    localised to the task that needs it.
 4. **The definition of done.**
-5. **The context pointer.**
+5. **The context pointer.** Prefer the plan's top-level `doc` key, which every issue already
+   carries. If a brief does name a specific file, make sure `touches` covers it — that is exactly
+   what `scope-omits-named-path` is checking, and the answer is almost always to widen `touches`
+   rather than to remove the reference.
 
 It must not restate the plan, must not give step-by-step instructions, and must not repeat
 `depends`, `touches` or `verify`. A prose copy of structured data is a copy that drifts, and

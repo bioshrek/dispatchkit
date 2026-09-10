@@ -768,12 +768,12 @@ Shipped, each with a decision record below:
 | D13.1d | The clean-tree gate: `verify: auto` needs a committed graph file | A dirty plan degrades to `human`; a clean one merges as before          |
 | D13.1e | The graph watcher: a save cuts the wait short and re-plans      | A saved graph re-plans in place; nothing is written, and a typo is not fatal |
 | D9.2 | Scope drift advises rather than vetoes; the fence keeps the authority | A drifting green pull request merges and is reported; a fenced one still refuses |
+| D10  | Plan-authoring contract: schema page, body lints, authoring guide | An agent given only the two docs produces a graph `validate --strict` accepts |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |
 
@@ -2613,6 +2613,120 @@ same family as `estimate_minutes`: knobs a planner has to guess at, already earm
 if they go unused. `acceptance` is the counter-example worth keeping in view — it binds the
 outcome tightly and says nothing about method, which is the shape every agent-facing field should
 have.
+
+### D10 decision record — the plan-authoring contract (shipped)
+
+The schema had never been written down. It existed as `parse.py`'s key tuples, a handful of
+examples, and this document — which meant the only complete reader of the contract was the parser,
+and the only complete author of a plan was somebody who had read the parser. That is a fine
+position for a tool with one user and a bad one for a tool whose first instruction is `validate`.
+
+**`estimate_minutes` left the schema.** It fed exactly one lint, `under-economic-floor`, which
+compared a declared estimate against a multiple of dispatch overhead — arithmetic over a number
+the author had invented, gating on a guess. It never fired. Worse, it was a *forecast key wearing
+the clothes of a measurement*: the quantity is real and worth knowing, but the graph is the one
+place it cannot be known. D15 computes the same floor from the timeline, where it is a fact rather
+than an intention. Removing the key is the honest version of the feature.
+
+A note on how it was removed, because it nearly cost more than it saved. Deleting the block with a
+scripted `re.sub` also silently removed the `unknown-capability` and `duplicate-capability` checks
+that happened to sit inside the matched span. Two tests caught it immediately, which is the system
+working. The rule that follows is smaller than the incident: **read the diff after any scripted
+edit to source**, because a regex does not know what a function is.
+
+**`validate` now reads the bodies.** Two of the defects that actually reach an agent were
+invisible to the tool: a task with no `body_file` at all, and a body naming a path the task's
+`touches` does not cover. Both are lints rather than errors — a plan with thin bodies executes,
+it just executes badly, and `lints.py`'s rule is that only `validate_graph` may stop a push.
+
+The `specs` parameter is tri-state and the third state is load-bearing. `None` means the caller
+did not read the bodies, so the body lints stay silent; `{}` means it read them and found none, so
+every task is thin. Without the distinction, every in-memory caller — and there are many, since
+planners are pure — would either lie by omission or emit false warnings. `thin-body` agrees with
+`build_body` by construction: both test the same `.strip()`, so the lint fires exactly when the
+rendered issue would fall back to the title.
+
+`scope-omits-named-path` reads a backticked token as a path only if it contains a slash, which
+admits no flag, no command, no version; fenced blocks are stripped first, because a fence is
+illustration rather than scope. A bare `README.md` in prose is therefore missed, deliberately:
+catching it requires a list of file extensions, and that list is a list of guesses that will be
+wrong for the next repository. Under-matching a lint is recoverable; a lint that cries wolf gets
+turned off.
+
+`test_strict_mode_passes_a_clean_graph` gained body files rather than an exemption. A graph that
+dispatches agents with nothing but a title is not a clean graph, whatever its shape, and a test
+fixture that disagrees with the contract is a slow argument against the contract.
+
+**The page is tested, not proofread.** `docs/schema.md` is the one document a reader takes
+literally: they copy the example and they believe the tables. So the example must parse, validate
+and lint clean; the key tables must equal the parser's key sets *in both directions*; and the
+error and warning lists must equal what the modules raise. Both directions matter, and they fail
+differently — a key the parser gained and the page never mentioned is merely invisible, while a
+key the page lists and the parser rejects sends a reader to an error message on their first
+command.
+
+Writing that test immediately found three error codes the page had missed and one key described as
+an enum that is a boolean, before anybody read it. Which is the argument, and it is the same
+argument as `scope-omits-named-path` one paragraph up: prose drifts from code silently, and the
+fix is never to be more careful.
+
+The example is three tasks rather than two because two serial tasks trip `chain-graph` — a page
+teaching decomposition cannot open by illustrating the shape it warns about. The README's example
+had to be widened for the same reason, one commit earlier. That both examples independently came
+out as chains is worth noticing: the chain is the shape a plan falls into when nobody is thinking
+about width, which is precisely why the lint exists.
+
+**The optional `doc` key** points at the document the plan came from. It renders one line into
+every issue body, and the line carries its own precedence: the issue is the contract, the document
+is context, and a disagreement between them goes in the pull request rather than being reconciled
+by the agent. An agent handed two documents will otherwise average them, and averaging a stale
+plan with a current issue is how a decomposition error becomes a merged one.
+
+It is rendered into the body rather than into a prompt template because the cloud lane has no
+template — a rule only one lane is told is not a rule. The local runner already builds its prompt
+from the body, so one edit serves both. No machine-block key and no version bump: the reference is
+prose and its reader is a language model, so making it structured would buy nothing and cost every
+existing issue a rewrite.
+
+The reference is not pinned to a commit, and a plan edited between review and run therefore hands
+the agent a brief nobody approved. Accepted rather than solved: the part that binds is on the
+issue, which is pinned by being written once, and pinning the document would require the graph to
+carry a SHA that a human would have to bump by hand on every edit — a synchronisation obligation
+in exchange for a guarantee about a document that is explicitly only context.
+
+**The authoring guide is the deliverable's real product.** `docs/authoring.md` carries the
+judgement the schema reference cannot: find the shared interface first, because that is what turns
+a chain into a fan; write only the edges you can justify in a `for` clause, because vague unease is
+the main cause of a serial plan; and never write step-by-step instructions into a brief, because
+they convert an agent into an interpreter, which is the one thing it is worse at than a shell
+script.
+
+Its acceptance was the honest one — hand an agent nothing but `schema.md` and `authoring.md` and
+see whether what comes back validates. That is a test of the documentation, not of the agent, and
+it is the only test of documentation that is not self-congratulatory.
+
+It passed: an agent forbidden from reading the source, the tests, the README or this document
+produced a five-task plan that `validate --strict` accepted with no errors and no warnings, at
+depth 3 and width 3. It found the step-1 move unaided — one contract task, three implementations
+fanning out from it, a wiring task joining two of them — which is the specific judgement the guide
+exists to transmit.
+
+The failures it reported are the more useful half, and three were real gaps rather than
+misreadings. **The subset rule was named but not defined**, so "must be a subset of what CI runs"
+gave no way to tell whether `uv run pytest -q tests/x.py` is covered by `uv run pytest -q`; it is,
+by literal prefix, and now the page says so. **The glob dialect was unstated.** And the brief's
+"context pointer" section sat in visible tension with `scope-omits-named-path`: the guide asks for
+a pointer and a lint objects to naming paths, with nothing saying that the resolution is to widen
+`touches` or to use the `doc` key.
+
+Writing the glob paragraph produced the best evidence in the deliverable. I documented `fnmatch` as
+*not* crossing a directory separator — plausible, consistent with every path-glob most people have
+used, and false: `*` crosses slashes, so `docs/*.md` already matches `docs/plans/a.md`, and
+`docs/**/*.md` **narrows**, requiring an intermediate directory and silently missing `docs/a.md`.
+The evaluation plan used `docs/**/*.md`. So the trap is one an author walks into unprompted, the
+documentation that would have warned them stated the opposite, and only running the function
+caught it. That claim is now pinned by a test asserting both the behaviour and the sentence, which
+is the general remedy: a documented semantic should be executable wherever it can be.
 
 ## First real plan
 

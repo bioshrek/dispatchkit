@@ -164,8 +164,10 @@ without spending a retry. Being built next: the graph watcher that re-plans on s
 lane executor (D6) — until D6 lands a `lane = "local"` task
 is deferred with `no-executor` and reserves nothing, rather than being marked for a listener that
 is not there.
-[docs/design.md](docs/design.md) carries the reasoning and a decision record per deliverable;
-[docs/RESUME.md](docs/RESUME.md) has the next actions.
+[docs/schema.md](docs/schema.md) is the reference for what may appear in a plan, and
+[docs/authoring.md](docs/authoring.md) is the guide for writing one — including what the warnings
+are actually telling you to change. [docs/design.md](docs/design.md) carries the reasoning and a
+decision record per deliverable; [docs/RESUME.md](docs/RESUME.md) has the next actions.
 
 ## Development
 

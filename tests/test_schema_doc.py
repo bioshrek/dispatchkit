@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from fnmatch import fnmatch
 from pathlib import Path
 
 import pytest
@@ -138,3 +139,25 @@ class TestTheCodeListsAreCurrent:
             real |= set(re.findall(r'(?:GraphIssue|add)\(\s*"([a-z-]+)"', source))
 
         assert listed_codes("**Errors** stop the push") == real
+
+
+class TestTheGlobClaimIsTrue:
+    """The page claims `touches` globs are `fnmatch`, and that `*` crosses a
+    slash. I wrote the opposite first and it read entirely plausibly, which is
+    the argument for pinning a documented semantic to the function that
+    implements it."""
+
+    def test_a_single_star_crosses_a_directory_separator(self) -> None:
+        assert fnmatch("docs/plans/a.md", "docs/*.md")
+
+    def test_a_double_star_therefore_narrows_rather_than_widens(self) -> None:
+        # The trap the page warns about: `docs/**/*.md` reads like "everything
+        # under docs" and in fact demands an intermediate directory.
+        assert not fnmatch("docs/a.md", "docs/**/*.md")
+        assert fnmatch("docs/plans/a.md", "docs/**/*.md")
+
+    def test_the_page_says_so(self) -> None:
+        body = section("#### `touches`")
+
+        assert "crosses" in body
+        assert "narrows rather than widens" in body
