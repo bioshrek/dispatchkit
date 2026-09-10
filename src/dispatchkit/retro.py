@@ -379,18 +379,23 @@ def _ratio(outcome: TaskOutcome) -> str:
 
 
 def _duration(span: timedelta | None) -> str:
-    """Whole units, largest two. Seconds are noise at this scale.
+    """Whole units, largest two, dropping to seconds under a minute.
 
     `-` rather than `0m` for an absent value: the difference between "not
-    measured" and "instant" is the one this module exists to preserve.
+    measured" and "instant" is the one this module exists to preserve. Which
+    is also why anything under a minute keeps its seconds -- the sandbox's CI
+    takes thirteen of them, and rounding a real measurement to `0m` puts it in
+    the same shape as the missing ones.
     """
     if span is None:
         return "-"
     total = int(span.total_seconds())
     hours, rest = divmod(total, 3600)
-    minutes = rest // 60
+    minutes, seconds = divmod(rest, 60)
     if hours and minutes:
         return f"{hours}h {minutes}m"
     if hours:
         return f"{hours}h"
-    return f"{minutes}m"
+    if minutes:
+        return f"{minutes}m"
+    return f"{seconds}s"

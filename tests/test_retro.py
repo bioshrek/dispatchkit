@@ -39,7 +39,7 @@ import pytest
 from dispatchkit.github import IssueState
 from dispatchkit.model import DEFAULT_BASE, Base, MergedPr
 from dispatchkit.resolve import build_items
-from dispatchkit.retro import Retrospective, retrospective
+from dispatchkit.retro import Retrospective, _duration, retrospective
 from tests.graphs import graph, task
 from tests.items import issue, state_of
 
@@ -620,3 +620,23 @@ class TestRetryRate:
         )
 
         assert report.retried == 1
+
+
+class TestHowDurationsRead:
+    """A report nobody can read is a report nobody folds back into anything."""
+
+    def test_a_short_span_keeps_its_seconds(self) -> None:
+        """`0m` is what an absent value should look like, and it is not one.
+
+        The sandbox's CI takes thirteen seconds. Rounding that to `0m` puts a
+        real measurement in the same shape as the missing ones this module
+        spends most of its care keeping distinct.
+        """
+        assert _duration(timedelta(seconds=13)) == "13s"
+
+    def test_an_absent_span_is_a_dash_not_a_zero(self) -> None:
+        assert _duration(None) == "-"
+
+    def test_longer_spans_drop_to_whole_units(self) -> None:
+        assert _duration(timedelta(minutes=13, seconds=40)) == "13m"
+        assert _duration(timedelta(hours=2, minutes=1)) == "2h 1m"
