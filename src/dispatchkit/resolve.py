@@ -377,7 +377,12 @@ def ready_ops(items: Sequence[TaskItem]) -> tuple[MarkReady, ...]:
     return tuple(operations)
 
 
-def merge_ops(items: Sequence[TaskItem], config: SchedulerConfig) -> tuple[MergePr, ...]:
+def merge_ops(
+    items: Sequence[TaskItem],
+    config: SchedulerConfig,
+    *,
+    dirty: Collection[str] = (),
+) -> tuple[MergePr, ...]:
     """Merge the `verify: auto` pull requests that have earned it.
 
     This is the only thing dispatchkit does that changes `main` without a human,
@@ -404,10 +409,19 @@ def merge_ops(items: Sequence[TaskItem], config: SchedulerConfig) -> tuple[Merge
       unattended, and it is not hypothetical — a drifting pull request caused a
       real collision here, because the concurrency exclusion reasons about
       *declared* scope and had nothing to go on.
+    - A clean graph file (D13.1). `verify: auto` is merge authority, and
+      apply-on-save deleted the human review that used to grant it. The
+      replacement is git: a plan whose file is dirty in the working tree
+      degrades to `human` for the pass, so that authority cannot leak out of an
+      unsaved experiment.
     """
     operations = []
     for task in items:
         if task.closed or task.held or task.verify is not Verify.AUTO:
+            continue
+        if task.ref.plan in dirty:
+            # Degraded, not refused: a person can still merge it. Only the
+            # automatic authority is withheld.
             continue
         operations += [
             MergePr(task.ref, pr.number)

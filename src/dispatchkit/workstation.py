@@ -196,3 +196,47 @@ class Workstation(Protocol):
         env: Mapping[str, str],
         timeout: timedelta,
     ) -> RunResult: ...
+
+
+#: `git status --porcelain` prefixes: two status characters and a space.
+_STATUS = 3
+
+
+def dirty_plans(status: str, plans: Path) -> frozenset[str]:
+    """Which plans have uncommitted changes, from `git status --porcelain`.
+
+    The clean-tree gate (D13.1) needs exactly this and nothing else: a dirty
+    `src/` is the ordinary condition of a developer's afternoon and says
+    nothing about whether a `verify` value was ever reviewed.
+
+    Every kind of dirty counts — modified, staged, untracked — because the
+    question is what a reviewer could have seen, not what git calls it. Paths
+    are quoted by git when they contain a space, and getting that wrong would
+    fail *open*, which is the wrong direction for a gate.
+    """
+    found: set[str] = set()
+    for line in status.splitlines():
+        if len(line) <= _STATUS:
+            continue
+        for raw in line[_STATUS:].split(" -> "):
+            # A rename is `old -> new`; both are checked, since either being a
+            # graph file means a graph file moved.
+            path = Path(_unquote(raw.strip()))
+            if path.suffix != ".toml":
+                continue
+            try:
+                relative = path.relative_to(plans)
+            except ValueError:
+                continue
+            if len(relative.parts) == 1:
+                found.add(relative.stem)
+    return frozenset(found)
+
+
+def _unquote(raw: str) -> str:
+    """git quotes a path containing a space, and C-escapes one containing a
+    quote. `shlex` handles both, and is already imported for `acceptance`."""
+    if not raw.startswith('"'):
+        return raw
+    parts = shlex.split(raw)
+    return parts[0] if parts else raw

@@ -400,7 +400,13 @@ def _pass(
         state = loaded
 
     now = datetime.now(UTC)
-    plan = plan_tick(state, config=config, now=now, served=served_lanes(local))
+    plan = plan_tick(
+        state,
+        config=config,
+        now=now,
+        served=served_lanes(local),
+        dirty=CliWorkstation(root=Path()).dirty(plans=config.plans),
+    )
     report = list(summarise_tick(plan, since=since))
 
     # Execution comes before the printing decision, and never depends on it.

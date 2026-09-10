@@ -130,6 +130,7 @@ def plan_tick(
     config: SchedulerConfig,
     now: datetime,
     served: Collection[Lane] = SERVED_LANES,
+    dirty: Collection[str] = (),
 ) -> TickPlan:
     items, notices = build_items(state)
     statuses = resolve(items)
@@ -175,7 +176,7 @@ def plan_tick(
             *stalls,
             *dispatch_ops,
             *ready_ops(items),
-            *merge_ops(items, config),
+            *merge_ops(items, config, dirty=dirty),
         ),
         statuses=projected,
         items=tuple(items),
@@ -192,6 +193,7 @@ def plan_tick(
             *ci_notices(items),
             *stranded_notices(items),
             *_unserved_claims(items, served),
+            *_dirty_plan_notices(items, config, dirty),
         ),
         blocked_on=blocking(items),
     )
@@ -247,6 +249,33 @@ def _unserved_claims(items: Sequence[TaskItem], served: Collection[Lane]) -> tup
         )
         for task in items
         if not task.closed and task.lane not in served and LABEL_LOCAL_CLAIM in task.labels
+    )
+
+
+def _dirty_plan_notices(
+    items: Sequence[TaskItem], config: SchedulerConfig, dirty: Collection[str]
+) -> tuple[Notice, ...]:
+    """Say why a green `verify: auto` pull request is sitting there unmerged.
+
+    Only for the tasks it actually stopped, which is why this asks `merge_ops`
+    rather than testing the condition again: editing a graph file is normal,
+    and a notice on every pass would train the reader to skip the line that
+    matters. The one worth printing is the pull request that *would* have
+    merged.
+    """
+    if not dirty:
+        return ()
+    would = {operation.ref for operation in merge_ops(items, config)}
+    stopped = {operation.ref for operation in merge_ops(items, config, dirty=dirty)}
+    return tuple(
+        Notice(
+            "dirty-plan",
+            str(ref),
+            f"{ref} is `verify: auto` and ready to merge, but {ref.plan} has uncommitted "
+            "changes, so it falls back to `verify: human` for this pass. Commit the graph "
+            "file, or merge it yourself.",
+        )
+        for ref in sorted(would - stopped, key=str)
     )
 
 

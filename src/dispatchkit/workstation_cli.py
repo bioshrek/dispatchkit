@@ -30,7 +30,7 @@ from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 
-from dispatchkit.workstation import RunResult, Worktree, ref_of
+from dispatchkit.workstation import RunResult, Worktree, dirty_plans, ref_of
 
 #: How much of a child's output is kept. The agent is chatty and the tail is
 #: what a failure is diagnosed from; the whole of it would be posted nowhere
@@ -69,6 +69,18 @@ def push_command(remote: str, branch: str) -> list[str]:
         remote,
         f"{branch}:refs/heads/{branch}",
     ]
+
+
+def status_command(plans: Path) -> list[str]:
+    """What is uncommitted under the plans directory, and nothing else.
+
+    Narrowed at the git end rather than filtered afterwards: in a repository
+    mid-refactor the untracked list runs to thousands of lines, none of which
+    can answer the only question being asked. `--untracked-files=all` because
+    a plan that has never been committed has never been reviewed, which is the
+    strongest form of what the gate refuses.
+    """
+    return ["git", "status", "--porcelain", "--untracked-files=all", "--", str(plans)]
 
 
 def _seconds(timeout: timedelta) -> float:
@@ -125,6 +137,17 @@ class CliWorkstation:
     @property
     def _start(self) -> str:
         return f"{self.remote}/{self.base}"
+
+    def dirty(self, *, plans: Path) -> frozenset[str]:
+        """Which plans have uncommitted changes (D13.1).
+
+        Fails *open*: a repository git cannot read dirties nothing. Failing
+        closed would refuse every auto-merge on a machine where `watch` runs
+        outside a checkout, which is a legitimate way to use it — the graph
+        lives on GitHub as well as on disk.
+        """
+        result = self._git(status_command(plans))
+        return dirty_plans(result.output, plans) if result.ok else frozenset()
 
     def worktrees(self) -> tuple[Worktree, ...]:
         """Each one, and what it holds.

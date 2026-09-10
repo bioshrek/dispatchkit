@@ -762,12 +762,13 @@ Shipped, each with a decision record below:
 | D6.3 | The executor: worktree, prompt, runner, acceptance, push, PR   | Acceptance gates the pull request; the mark comes off however it ends     |
 | D6.4 | Recovery from the disk outward, and the one-dispatcher lockfile | A failed push keeps its tree and still releases; recovering twice is a no-op |
 | D6.5 | `watch --local`: the lane served, without holding up a pass    | A running task starts nothing else and stops no merge; `doctor --local` |
+| D13.1d | The clean-tree gate: `verify: auto` needs a committed graph file | A dirty plan degrades to `human`; a clean one merges as before          |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D13.1 | The last of intervention: the clean-tree gate on `verify: auto`, and the graph watcher | A dirty tree refuses a local dispatch; a save re-plans in place |
+| D13.1e | The graph watcher: a save re-validates, re-lints and re-plans   | A save re-plans in place; mutation stays debounced and explicit           |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |
@@ -1748,6 +1749,25 @@ is one of three kinds, and the watcher should say which:
 it. The cheapest honest replacement is git itself: `verify: auto` requires the graph file to be
 clean in the working tree, and a dirty file degrades that task to `human` for the pass. Merge
 authority then cannot leak out of an unsaved experiment, and it costs one `git status`.
+
+**Built (D13.1d): the gate is git, and it degrades rather than refuses.** A plan whose graph file
+is dirty in the working tree falls back to `verify: human` for the pass — the task is not blocked,
+a person can still merge it, and only the automatic authority is withheld. Plans are independent,
+so one unsaved experiment does not stop the rest of the repository.
+
+Three choices the tests forced. *Every kind of dirty counts* — modified, staged, untracked —
+because the question is what a reviewer could have seen, not what git calls it, and a plan that
+has never been committed has never been reviewed at all. *A rename dirties both names*, since one
+plan gained a file and another lost its only one, and a gate fails closed rather than reasoning
+about which mattered. But *a repository git cannot read dirties nothing*: failing closed there
+would refuse every auto-merge on a machine where `watch` runs outside a checkout, which is a
+legitimate way to use it, because the graph lives on GitHub too.
+
+**Dispatch is deliberately untouched.** The gate is about merge authority alone. Refusing to
+dispatch from a dirty graph would mean editing a file stops the work already described by it,
+which is the opposite of what a graph file is for. And the notice is emitted only for a pull
+request that *would* have merged — editing a graph is normal, and saying so every pass would train
+the reader to skip the line that matters.
 
 **The rule a long-running process most needs.** "There is no stored state" was easy to hold when
 every pass was a fresh job. A loop will want to remember what it saw, and the moment it does, the
