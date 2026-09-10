@@ -22,7 +22,7 @@ import json
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from dispatchkit.doctor import parse_labels, parse_token_scopes
@@ -74,6 +74,7 @@ query($owner: String!, $repo: String!, $first: Int!) {
         body
         state
         stateReason
+        closedAt
         labels(first: 20) { nodes { name } }
         assignees(first: 10) { nodes { login } }
         holds: timelineItems(first: 50, itemTypes: [LABELED_EVENT]) {
@@ -103,10 +104,15 @@ query($owner: String!, $repo: String!, $first: Int!) {
                   isDraft
                   mergeable
                   files(first: 100) { nodes { path } }
+                  first_commit: commits(first: 1) {
+                    nodes { commit { committedDate } }
+                  }
                   commits(last: 1) {
                     nodes {
                       commit {
-                        checkSuites(first: 20) { nodes { status conclusion } }
+                        checkSuites(first: 20) {
+                          nodes { status conclusion createdAt updatedAt }
+                        }
                       }
                     }
                   }
@@ -160,6 +166,7 @@ def _parse_issue(node: dict[str, Any]) -> IssueState:
         node_id=node.get("id"),
         dispatches=_parse_dispatches(node),
         holds=_parse_holds(node),
+        closed_at=_stamp(node.get("closedAt")),
     )
 
 
@@ -245,8 +252,51 @@ def _parse_merged_prs(node: dict[str, Any]) -> tuple[MergedPr, ...]:
         name = source.get("baseRefName") or ""
         if Base.check(name) is not None:
             continue
-        merged.append(MergedPr(int(source["number"]), Base(name)))
+        merged.append(
+            MergedPr(
+                int(source["number"]),
+                Base(name),
+                first_commit_at=_first_commit(source),
+                ci=_ci_elapsed(source),
+            )
+        )
     return tuple(merged)
+
+
+def _first_commit(source: dict[str, Any]) -> datetime | None:
+    """When work on this pull request actually started (D15).
+
+    Overhead is dispatch to first commit, so this asks a separate connection
+    from the `commits(last: 1)` the checks are read off: that one is the head,
+    which is what CI ran, and on any task with more than one commit the two
+    are different moments.
+    """
+    nodes = (source.get("first_commit") or {}).get("nodes") or []
+    stamps = [
+        _stamp((node.get("commit") or {}).get("committedDate"))
+        for node in nodes
+        if node.get("commit")
+    ]
+    return next((stamp for stamp in stamps if stamp is not None), None)
+
+
+def _ci_elapsed(source: dict[str, Any]) -> timedelta | None:
+    """How long the check suites took, first started to last finished.
+
+    Elapsed, not summed: suites run concurrently, and adding them together
+    would report a duration no clock ever measured. A suite missing either
+    timestamp is skipped rather than treated as instant -- half the
+    retrospective's job is refusing to turn an absence into a zero.
+    """
+    spans = [
+        (start, end)
+        for suite in _check_suites(source)
+        if (start := _stamp(suite.get("createdAt"))) is not None
+        and (end := _stamp(suite.get("updatedAt"))) is not None
+    ]
+    if not spans:
+        return None
+    return max(end for _, end in spans) - min(start for start, _ in spans)
 
 
 def _parse_files(source: dict[str, Any]) -> tuple[str, ...]:
@@ -272,8 +322,20 @@ def _parse_checks(source: dict[str, Any]) -> Checks:
     commits = (source.get("commits") or {}).get("nodes") or []
     if not commits:
         return Checks.NONE
-    suites = ((commits[0].get("commit") or {}).get("checkSuites") or {}).get("nodes") or []
-    return Checks.combine(_suite_checks(suite) for suite in suites)
+    return Checks.combine(_suite_checks(suite) for suite in _check_suites(source))
+
+
+def _check_suites(source: dict[str, Any]) -> list[dict[str, Any]]:
+    """The check suites on this pull request's head commit.
+
+    One reader for two questions -- CI's verdict, and how long it took -- so
+    the two cannot come to disagree about which commit they are describing.
+    """
+    commits = (source.get("commits") or {}).get("nodes") or []
+    if not commits:
+        return []
+    nodes = ((commits[0].get("commit") or {}).get("checkSuites") or {}).get("nodes") or []
+    return [suite for suite in nodes if isinstance(suite, dict)]
 
 
 def _suite_checks(suite: dict[str, Any]) -> Checks:

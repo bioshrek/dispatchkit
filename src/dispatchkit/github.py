@@ -116,6 +116,11 @@ class IssueState:
     # closing keyword entirely, so this is the only evidence that the work is
     # in -- and the branch is half of it.
     merged: tuple[MergedPr, ...] = ()
+    # When the issue closed (D15). The end of `work`, and the only one of the
+    # retrospective's timestamps the issue itself holds. `None` on an open
+    # issue and on any payload recorded before the field was asked for, which
+    # is an absence rather than an error.
+    closed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

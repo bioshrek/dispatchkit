@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import NewType
 
@@ -198,6 +199,16 @@ class MergedPr:
 
     number: int
     base: Base
+    #: When the agent stopped setting up and started working (D15). Overhead
+    #: ends here, so it is the *first* commit rather than the head one CI ran.
+    #: `None` means unmeasured, never zero: a merge can arrive with no commit
+    #: GitHub will show us, and a zero would be a task somebody finished
+    #: instantly, dragging every median toward work nobody did.
+    first_commit_at: datetime | None = None
+    #: How long the check suites on this pull request took, end to end (D15).
+    #: Elapsed rather than summed, because suites run concurrently and adding
+    #: them would report a duration no clock ever measured.
+    ci: timedelta | None = None
 
 
 @dataclass(frozen=True, slots=True)

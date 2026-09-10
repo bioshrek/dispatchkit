@@ -3136,6 +3136,68 @@ saying plainly in the authoring guidance: an `acceptance` narrower than CI does 
 to pass, it makes their failures unactionable.
 
 
+### D15 design — the plan retrospective
+
+D2 deleted `estimate_minutes` on the argument that the graph is the one place its quantity cannot
+be known, and promised the same number would come back as an observation. This is that promise
+being kept. Everything below is derived from the issue timeline, which is where `Attempts` and
+`Status` already come from; nothing is stored, and no schema key is added back.
+
+**What is measured, and from which facts.** Four timestamps per task, all of them already in the
+repository:
+
+| Quantity   | Read from                                            |
+| ---------- | ---------------------------------------------------- |
+| dispatch   | the assignment, or the `dispatch:local` label        |
+| first work | the first commit on the pull request that landed     |
+| CI         | the check suites on that pull request                |
+| done       | the issue's own `closedAt`                           |
+
+From those, two durations. **Overhead** is dispatch → first commit, plus CI: the price of handing
+a task to an agent at all, paid again in full by every split. **Work** is dispatch → close, the
+whole elapsed span of the attempt that succeeded. A task whose work is not comfortably larger than
+its overhead did not earn its own dispatch — which is exactly what `under-economic-floor` tried to
+decide in advance, from a number the planner invented.
+
+**Overhead is measured on the last dispatch, not the first.** A retry pays the overhead again, so
+including retries would report a task's overhead as two or three overheads and make every retried
+task look enormous. The retries are not lost; they are already reported as `Attempts`, which is the
+honest place for them, because a retry is a failure to count rather than a cost to amortise.
+
+**Achieved width is the interesting number, and it is new.** `metrics.py` reports what the graph
+*allows*: depth, and the maximum antichain. The timeline says what actually happened — the largest
+number of tasks whose dispatch-to-close intervals overlapped at one moment. The gap between the two
+is the honest measure of whether splitting paid, and it is a gap no forecast can produce. A plan of
+width 5 that never ran more than two tasks at once was serial in practice, and the reasons are
+findable: a lane cap, a human review that batched, or an edge that was ordering-by-narrative after
+all. Reporting promise beside outcome is the whole point; a retrospective that only prints outcomes
+leaves the reader to remember what was expected.
+
+**It reports; it does not gate.** Open question 2 asks whether the measured floor should become a
+rule again, and the answer stays no for now: feeding an observed median into `validate` recreates
+the lint that was just deleted, with better numbers but the same failure mode — a plan refused for
+missing a threshold derived from plans that are not this one. The output is meant for a human
+folding the numbers back into the planner skill, which is the human act D15 was always listed as
+needing.
+
+**The timings ride in the existing snapshot rather than a second query.** Retro needs three fields
+the scheduler does not read: `closedAt`, the first commit's date, and the check suites' timestamps.
+The alternative — a separate retro query, joined on issue number — was rejected. `RepoState` is
+documented as the whole world precisely so that nothing can disagree with it, and a second snapshot
+type is a second world with its own parser, its own fixtures and its own opportunity to drift.
+The cost of the decision is honest and small: three more fields on connections the state query
+already walks, fetched on a loop that runs them every sixty seconds. The benefit is that
+`--state` keeps working, so the retrospective is testable from a recorded payload like everything
+else.
+
+**A task with nothing to measure is reported as unmeasured, never as zero.** A task closed by hand,
+one whose pull request predates the timings being collected, one merged from a branch with no
+commits GitHub will show us — each yields a missing timestamp. Substituting zero would drag every
+median toward a task nobody worked on and quietly inflate the plan's apparent parallelism. The
+count of tasks that could not be measured is printed, because a retrospective covering four of
+twelve tasks is a different claim from one covering all twelve.
+
+
 ## First real plan
 
 Dispatchkit is the priority; video generation is its payload. Two unfinished systems built at once
