@@ -600,6 +600,10 @@ having to find the process.
 A task is done when its PR merges with `Closes #N`, which closes the issue, which makes
 dependents ready on the next pass. There is no separate "mark complete" step to forget.
 
+That free closure is a property of the *default branch*, not of merging: GitHub interprets closing
+keywords only when a PR targets the default branch. D16 moves plan work onto its own base and so
+must take the closure over — see its design note below.
+
 The `acceptance` command from the task graph is injected into the issue body as the definition
 of done, so both agent lanes run the same check the reviewer will run. A PR that fails CI leaves
 the issue open and assigned — it stays out of the ready set until a human intervenes, which is
@@ -776,6 +780,7 @@ Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| D16  | The plan branch: a plan integrates on its own base, merged by a human | Both lanes branch from `plan/<name>`; a plan's tasks reach `Done` with `main` untouched |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |
 
 D14 came first because D13 should not be built against something that is being deleted: the
@@ -793,8 +798,10 @@ remains is the clean-tree gate and the **graph watcher**.
 D6 is what makes `caps.local = 1` mean anything: the label nothing consumes finally gets
 a consumer, and it is where a per-task `model` or `effort` lands. D10 belongs after them rather
 than before, because the graph a planner has to produce is now one a watcher reloads — and it is
-where `estimate_minutes` leaves the schema. D15 is last because it has nothing to measure until a
-plan has finished.
+where `estimate_minutes` leaves the schema. D16 comes before D15 because it changes the topology
+D15 would otherwise measure: a retrospective built against merges into `main` would have to be
+rewritten the moment a plan integrates somewhere else. D15 is last because it has nothing to
+measure until a plan has finished.
 
 Two deliverables are dropped rather than deferred, which is why the numbering has gaps.
 **Alerting** — a Lark bot with transition-only dedupe — existed to push failures somewhere a human
@@ -823,6 +830,7 @@ is least able to help itself.
 | D11  | Configure branch protection; ratify what a failing check is allowed to stop          | Privileged + UX        |
 | D6.6 | Watch the first unattended local run on your own machine, and say what may run there | Trust                  |
 | D15  | Supply a finished plan to measure, and fold the result back into the skill           | Prerequisite           |
+| D16  | Decide whether a plan is a feature branch or a stream of increments; protect `plan/*` | Philosophy + privileged |
 
 The privileged acts are unavoidable and trivial — narrowing a token, setting branch protection so
 `doctor`'s merge-gate check can pass. They need no thought, only an account,
@@ -2920,6 +2928,75 @@ and they clustered where the evidence was thinnest: the lane with the largest bl
 least proof, and five of the seven were unreachable from any test that does not start a real
 process. The lesson is not to write more doubles. It is that *live proof is per-deliverable* — a
 green suite says the parts behave, and only a real run says the seams do.
+
+### D16 design — the plan branch (designed, unbuilt)
+
+Today every task merges into `main`, so a plan is a stream of independent increments landing in
+the trunk, and a half-finished plan is a half-finished feature in the default branch. The
+alternative is that a plan is a feature: its tasks integrate on a branch of their own, and the
+finished plan is merged into `main` by a human, once.
+
+This is a philosophical fork, not only a mechanical one. Trunk-based is what the system currently
+embodies, and it is coherent: every task carries its own `## Acceptance`, so every task is meant
+to be independently shippable, behind a flag if need be. If a task cannot stand alone in `main`,
+that is an argument the decomposition is wrong. The counter-argument is about trust rather than
+decomposition: unattended agents writing straight into the default branch is a large thing to
+ask, and D6.6 found a defect — acceptance passing on uncommitted work, leaving an empty branch
+that CI would call green — whose blast radius was exactly `main`. An integration branch is a
+containment boundary, and it makes `verify: auto` easier to defend rather than harder.
+
+**Both lanes can honour it**, which is the fact that decides feasibility. The local lane already
+has the field: `CliWorkstation.base` exists, hardcoded to `main`, and `_start` derives the ref
+every worktree branches from. The cloud lane looked like the blocker — the agent opens its own
+pull request, so nothing dispatchkit writes controls the base — but `replaceActorsForAssignable`,
+the mutation the assignment already uses, takes an `agentAssignment` input, and that input carries
+`baseRef`: *"The base ref/branch for the repository. Defaults to the default branch if not
+provided."* Verified by introspection against the live schema, not from documentation. So the
+change is a per-plan `base` threaded to two places, and the lanes stay symmetric. Had they not,
+this deliverable would be refused rather than built lane-by-lane: the same plan behaving
+differently depending on `lane` is worse than the problem it solves. Telling the cloud agent its
+base in the issue *text* is not an option — that is D6.6's finding 6 again, correctness resting on
+a sentence in a prompt.
+
+**The dependency invariant gets stronger, not weaker.** The rule the scheduler states is "ready ⇒
+dependencies closed", but the property that makes it useful is unstated: *the dependencies' code
+is in the base the next task starts from*. Today those coincide only because everything merges to
+`main` and everything branches from `main`. On a plan branch they coincide more tightly — a
+dependent branches from a tip carrying exactly its dependencies, without the unrelated churn
+`main` accumulates.
+
+**Three things must change, and the first is not optional.**
+
+1. **Closure becomes dispatchkit's job.** Closing keywords are interpreted only on the default
+   branch; elsewhere they are ignored and *no link is created at all*. So a retargeted pull
+   request closes nothing, no task ever reads `Done`, and the plan deadlocks on its first task.
+   A pass must close the issue when it observes that task's PR merged **into that plan's base** —
+   the base matters, because a merged PR that went elsewhere is not evidence the task landed. It
+   covers both verifies: for `verify: auto` the scheduler did the merge, and for `verify: human`
+   the next pass sees the result. Two properties survive intact: status stays *derived*, because
+   the issue is still the only record of done and dispatchkit merely writes what GitHub used to
+   write; and the operation is idempotent for free, since closing a closed issue is a no-op. One
+   piece of luck makes this small — the state query finds pull requests through
+   `CROSS_REFERENCED_EVENT`, any mention of `#N`, rather than through the closing-keyword link, so
+   PR *discovery* is unaffected and only closure moves.
+2. **The merge gate re-anchors.** `doctor` checks branch protection on `main` so `verify: auto`
+   cannot outrun CI. With auto-merge landing in `plan/*` — unprotected by default — the gate
+   `doctor` verifies stops being the gate that runs, and the guarantee weakens in silence, which
+   is the failure mode D11 exists to prevent. `doctor` must check the plan branch it will actually
+   merge into.
+3. **Somebody creates and finishes the branch.** `apply` creates `plan/<name>` from `main` if
+   absent, idempotently. When the last task closes, the scheduler opens the `plan/<name>` → `main`
+   pull request: one review, of a whole feature, which is the human sign-off this deliverable is
+   for. That PR is never auto-merged whatever the tasks' `verify` said.
+
+`base` is a per-plan key defaulting to `main`, so every existing plan keeps today's behaviour and
+the trunk-based reading stays available to anyone who wants it.
+
+Two things noticed while confirming the above, recorded because they answer older questions.
+`AgentAssignmentInput` also carries `customAgent` and `customInstructions` — D6.1 recorded that a
+per-task `model` or `effort` had nowhere to live on the cloud side, and that is where it lives.
+And `targetRepositoryId` means a plan's tasks need not all run in the repository holding the
+issues, which is the beginning of cross-repository plans.
 
 ## First real plan
 

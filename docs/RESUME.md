@@ -9,9 +9,19 @@ and the exact next actions.
 D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.6, D10 and D11 are implemented and green
 offline. 915 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
 
-**Only D15 remains** — the plan retrospective, which measures dispatch overhead and work from the
-timeline rather than from a schema key. It is unblocked: the sandbox's `wordfreq` plan is
-finished, so there is a real timeline to measure.
+**D16 then D15 remain.** D16 is the plan branch: a plan integrates on its own base and a human
+merges the finished feature into `main` once, rather than every task landing in the trunk. It is
+newly designed — see the D16 note in `docs/design.md` — and it comes first because D15 would
+otherwise measure a topology D16 changes. D15 is the plan retrospective, measuring dispatch
+overhead and work from the timeline rather than from a schema key; it is unblocked, since the
+sandbox's `wordfreq` plan is finished and there is a real timeline to read.
+
+The fact that made D16 feasible: the cloud lane *can* be given a base branch. The assignment
+already uses `replaceActorsForAssignable`, and that mutation takes `agentAssignment.baseRef`
+(confirmed by introspection against the live schema). Without it the lanes could not have stayed
+symmetric and D16 would have been refused. The part that is not free is issue closure — closing
+keywords work only on the default branch, so dispatchkit has to close issues itself or every plan
+deadlocks on its first task.
 
 D6.6 ran the local lane against a real repository for the first time and found **seven** defects,
 five of them unreachable from any test that does not start a real process — including the one that
@@ -52,6 +62,7 @@ against the patterns, and `init` will not exit 0 over a failing local check. See
 | D9.2 | Scope drift advises; the repo fence keeps the merge authority | done |
 | D10 | Plan-authoring contract: `docs/schema.md`, body lints, `docs/authoring.md` | done; an agent given only the two docs produced a `--strict`-clean plan |
 | D11 | `doctor` closes over the fence and a missing `gh`; `init` gated on the local checks | done; the fence override discarded every self-protection |
+| D16 | The plan branch: a plan integrates on its own base, merged by a human | designed, unbuilt; build before D15 |
 | D15 | Plan retrospective: overhead and work from the timeline | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
