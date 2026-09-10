@@ -11,16 +11,28 @@ plan = "refactor"
 id = "ports"
 title = "Define the application ports"
 milestone = "M2"
+lane = "cloud"
 verify = "auto"
 acceptance = "uv run pytest tests/unit -q"
 touches = ["src/app/ports/**", "tests/unit/**"]
 
 [[task]]
-id = "adapter"
+id = "fs-adapter"
 title = "Implement the filesystem adapter"
 milestone = "M2"
-depends = [{ on = "ports", reason = "needs the Protocol to implement" }]
-touches = ["src/app/adapters/**"]
+lane = "cloud"
+acceptance = "uv run pytest tests/adapters/test_fs.py -q"
+depends = [{ on = "ports", for = "the Protocol to implement" }]
+touches = ["src/app/adapters/fs.py", "tests/adapters/test_fs.py"]
+
+[[task]]
+id = "s3-adapter"
+title = "Implement the S3 adapter"
+milestone = "M2"
+lane = "cloud"
+acceptance = "uv run pytest tests/adapters/test_s3.py -q"
+depends = [{ on = "ports", for = "the Protocol to implement" }]
+touches = ["src/app/adapters/s3.py", "tests/adapters/test_s3.py"]
 ```
 
 ```sh
