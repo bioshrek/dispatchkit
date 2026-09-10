@@ -25,7 +25,7 @@ process with no shell anywhere in the path.
 from __future__ import annotations
 
 import shlex
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -75,6 +75,27 @@ def branch_name(ref: TaskRef, attempt: int) -> str:
     and nothing in the system reads it back.
     """
     return f"dispatchkit/{ref.plan}/{ref.id}/{attempt}"
+
+
+def free_branch(ref: TaskRef, attempt: int, *, taken: Collection[str]) -> str:
+    """`branch_name`, advanced past any name already in use (D6.6).
+
+    A failed run keeps its branch, and the retry asked for the same name, so
+    `git worktree add -b` refused and the task failed at `worktree` before the
+    agent was ever started -- every time, until the budget marked it stuck.
+
+    The name repeated because `attempts` comes from the issue timeline, read at
+    the start of a pass and so before that pass writes its own mark; two passes
+    can legitimately compute the same number, and concurrent passes are allowed
+    by design. Uniqueness was never something the attempt count could promise,
+    and uniqueness is the only thing `branch_name` needed it for.
+
+    Pure, and only ever moves forward: the kept branches are evidence, so no
+    name is reused and nothing is deleted to make room.
+    """
+    while branch_name(ref, attempt) in taken:
+        attempt += 1
+    return branch_name(ref, attempt)
 
 
 def prompt_for(title: str, body: str) -> str:
@@ -180,11 +201,24 @@ class Workstation(Protocol):
 
     def worktrees(self) -> tuple[Worktree, ...]: ...
 
+    def branches(self) -> tuple[str, ...]:
+        """Every local branch, so a retry can step over the ones a failed run
+        kept (D6.6)."""
+
     def create_worktree(self, *, path: Path, branch: str) -> RunResult: ...
 
     def remove_worktree(self, *, path: Path) -> None: ...
 
     def commits(self, *, path: Path) -> int: ...
+
+    def commit(self, *, path: Path, message: str) -> RunResult:
+        """Everything the agent left, including files it added.
+
+        The executor commits rather than the agent, because the executor is
+        already the side of the fence that owns git — it makes the worktree and
+        it pushes. Asking the agent would make whether the work survives depend
+        on a sentence in a prompt (D6.6).
+        """
 
     def push(self, *, path: Path, branch: str) -> RunResult: ...
 

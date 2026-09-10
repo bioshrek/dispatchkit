@@ -39,10 +39,26 @@ class FakeWorkstation:
     push_fails: bool = False
     #: git's own message when `worktree add` refuses, or empty for success.
     create_fails: str = ""
+    #: Local branches already on disk, including the ones failed runs kept.
+    branches_: tuple[str, ...] = ()
+    #: What `commit` should report, or success.
+    commit_result: RunResult | None = None
+    committed: list[str] = field(default_factory=list)
+
+    def commit(self, *, path: Path, message: str) -> RunResult:
+        self.calls.append(f"commit({path})")
+        if self.commit_result is not None:
+            return self.commit_result
+        self.committed.append(message)
+        return RunResult(("git", "commit"), 0)
 
     def worktrees(self) -> tuple[Worktree, ...]:
         self.calls.append("worktrees()")
         return self.existing
+
+    def branches(self) -> tuple[str, ...]:
+        self.calls.append("branches()")
+        return self.branches_
 
     def create_worktree(self, *, path: Path, branch: str) -> RunResult:
         self.calls.append(f"create_worktree({path}, {branch})")

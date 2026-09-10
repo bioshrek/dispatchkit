@@ -61,6 +61,15 @@ def commits_command(base: str) -> list[str]:
     return ["git", "rev-list", "--count", f"{base}..HEAD"]
 
 
+def stage_command() -> list[str]:
+    """`--all` covers files the agent created, which `commit --all` would not."""
+    return ["git", "add", "--all"]
+
+
+def commit_command(message: str) -> list[str]:
+    return ["git", "commit", "--message", message]
+
+
 def push_command(remote: str, branch: str) -> list[str]:
     return [
         "git",
@@ -69,6 +78,16 @@ def push_command(remote: str, branch: str) -> list[str]:
         remote,
         f"{branch}:refs/heads/{branch}",
     ]
+
+
+def branches_command() -> list[str]:
+    """Local branch names, one per line, with no decoration.
+
+    `for-each-ref` rather than `git branch`, which pads, marks the current one
+    with an asterisk and may paginate. This is read back by name-matching, so a
+    decorated name is a name that never matches.
+    """
+    return ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"]
 
 
 def status_command(plans: Path) -> list[str]:
@@ -187,6 +206,29 @@ class CliWorkstation:
         result = self._git(commits_command(self._start), cwd=path)
         counted = result.output.strip()
         return int(counted) if result.ok and counted.isdigit() else 0
+
+    def branches(self) -> tuple[str, ...]:
+        result = self._git(branches_command())
+        if not result.ok:
+            # A retry that cannot list branches is better off trying the name
+            # it computed than not running: the worst case is the collision
+            # this exists to avoid, which is exactly where it started.
+            return ()
+        return tuple(line.strip() for line in result.output.splitlines() if line.strip())
+
+    def commit(self, *, path: Path, message: str) -> RunResult:
+        """Stage everything, then commit it.
+
+        The failure is returned, not raised, and the caller does not read it as
+        the last word: `git commit` also exits non-zero when there was nothing
+        to commit, which is the agent-did-nothing case rather than a broken
+        machine. `local.py` tells them apart by counting commits afterwards
+        instead of by parsing git's message.
+        """
+        staged = self._git(stage_command(), cwd=path)
+        if not staged.ok:
+            return staged
+        return self._git(commit_command(message), cwd=path)
 
     def push(self, *, path: Path, branch: str) -> RunResult:
         return self._git(push_command(self.remote, branch), cwd=path)

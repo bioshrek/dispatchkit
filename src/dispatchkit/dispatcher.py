@@ -148,8 +148,7 @@ class LocalDispatcher:
         if task is None:
             return None
         self.running = task.ref
-        self._clear(task, items)
-        self._running = self.spawn(lambda: self._run(task, now))
+        self._running = self.spawn(lambda: self._run(task, now, items))
         return task
 
     def _clear(self, task: TaskItem, items: Sequence[TaskItem]) -> None:
@@ -166,15 +165,47 @@ class LocalDispatcher:
         )
         execute_recovery(plan, api=self.api, machine=self.machine)
 
-    def _run(self, task: TaskItem, now: datetime) -> None:
-        self.last = run_local(
-            task,
-            api=self.api,
-            machine=self.machine,
-            config=self.config,
-            root=self.root,
-            now=now,
-        )
+    def _run(self, task: TaskItem, now: datetime, items: Sequence[TaskItem]) -> None:
+        """The thread's whole body, so nothing escapes it.
+
+        A thread that raises prints to stderr and vanishes, leaving `last`
+        unset — the pass then says "did not report" about a failure it had the
+        reason for, and exits 0. `run_local` handles its own stages; this is
+        the last resort for everything around them, including `_clear` and the
+        machine calls it makes before the run proper starts (D6.6).
+        """
+        try:
+            # Inside the guard, and on the thread: clearing is part of the run,
+            # and a machine that raises here used to take the pass down with it
+            # rather than failing the one task (D6.6).
+            self._clear(task, items)
+            self.last = run_local(
+                task,
+                api=self.api,
+                machine=self.machine,
+                config=self.config,
+                root=self.root,
+                now=now,
+            )
+        except Exception as exc:  # noqa: BLE001 - the alternative is a silent thread
+            detail = f"{type(exc).__name__}: {exc}"
+            self.last = LocalRun(str(task.ref), "", "dispatcher", False, detail)
+            _release(self.api, task, detail)
+
+
+def _release(api: GitHubApi, task: TaskItem, detail: str) -> None:
+    """Say what happened and unclaim the task, best effort.
+
+    Best effort because this runs when something already went wrong, and the
+    thing that went wrong may be the API itself. A mark left on is recoverable
+    — `recover` releases a claim with no worktree — but a thread that dies
+    while trying to report is not.
+    """
+    try:
+        api.comment(number=task.number, body=f"`dispatchkit` stopped: {detail}")
+        api.edit_labels(number=task.number, remove=(LABEL_LOCAL_CLAIM,))
+    except Exception:  # noqa: BLE001,S110 - nothing left to report it to
+        pass
 
 
 def _claimed(items: Sequence[TaskItem], marked: Collection[TaskRef] = ()) -> TaskItem | None:

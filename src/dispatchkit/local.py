@@ -48,7 +48,7 @@ from dispatchkit.workstation import (
     Workstation,
     acceptance_argv,
     acceptance_of,
-    branch_name,
+    free_branch,
     prompt_for,
     worktree_path,
 )
@@ -85,7 +85,10 @@ def run_local(
     runner = config.runner
     ref = task.ref
     attempt = task.attempts + 1
-    branch = branch_name(ref, attempt)
+    # Not `branch_name(ref, attempt)`: a failed run keeps its branch, and two
+    # passes can compute the same attempt because it is read from the timeline
+    # before the pass writes its own mark (D6.6).
+    branch = free_branch(ref, attempt, taken=machine.branches())
     path = worktree_path(root, ref)
     env = runner.environment(os.environ if environ is None else environ)
 
@@ -132,6 +135,27 @@ def run_local(
             api, task, _failed(ref, branch, "agent", agent), machine=machine, path=path
         )
 
+    committed = machine.commit(path=path, message=f"{task.title}\n\nFor #{task.number}\n")
+    # The commit's own exit code is not the question: `git commit` also fails
+    # when there was nothing to commit. Counting is the question, and it
+    # answers the agent-already-committed case with the same rule (D6.6).
+    if machine.commits(path=path) == 0:
+        return _finish(
+            api,
+            task,
+            LocalRun(
+                str(ref),
+                branch,
+                "commit",
+                False,
+                "the agent made no changes to commit, so there is nothing to open a "
+                "pull request from"
+                + (f" (`git commit` said: {committed.output})" if not committed.ok else ""),
+            ),
+            machine=machine,
+            path=path,
+        )
+
     for clause in clauses:
         checked = machine.run(list(clause), cwd=path, env=env, timeout=runner.timeout)
         if not checked.ok:
@@ -149,11 +173,18 @@ def run_local(
             api, task, _failed(ref, branch, "push", pushed), machine=machine, path=path
         )
 
-    number = api.open_pr(
-        head=branch,
-        title=task.title,
-        body=f"{prompt_for(task.title, task.body)}\n\nCloses #{task.number}\n",
-    )
+    try:
+        number = api.open_pr(
+            head=branch,
+            title=task.title,
+            body=f"{prompt_for(task.title, task.body)}\n\nCloses #{task.number}\n",
+        )
+    except RuntimeError as exc:
+        # `gh_cli` raises for any non-zero `gh`. Every machine stage above is
+        # already a value rather than an exception; this is the one that was
+        # not, and it went around `_finish` and left the mark on (D6.6). The
+        # worktree stays: whatever the pull request refused, the work is in it.
+        return _finish(api, task, LocalRun(str(ref), branch, "report", False, str(exc)))
     machine.remove_worktree(path=path)
     return _finish(
         api,

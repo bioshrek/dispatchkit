@@ -54,7 +54,10 @@ def setup(**issue_kwargs: object) -> tuple[FakeGitHub, FakeWorkstation]:
     defaults: dict[str, object] = {"lane": Lane.LOCAL}
     defaults.update(issue_kwargs)
     api = FakeGitHub(state=state_of(issue("gpu", 1, **defaults)))  # type: ignore[arg-type]
-    return api, FakeWorkstation()
+    # One commit: since D6.6 the executor commits the agent's work and refuses
+    # to open a pull request when there is nothing ahead of the base, so an
+    # agent that did something is part of the happy path's setup.
+    return api, FakeWorkstation(commit_counts={ROOT / "demo" / "gpu": 1})
 
 
 class TestTheHappyPath:
@@ -213,7 +216,10 @@ class TestWhenAcceptanceFails:
         assert machine.pushed == ["dispatchkit/demo/gpu/1"]
 
     def test_a_run_with_no_commits_pushes_nothing(self) -> None:
-        api, machine = setup()
+        api, _ = setup()
+        # Its own machine: `setup` now gives the worktree a commit, and this is
+        # the case where there is not one.
+        machine = FakeWorkstation()
         machine.outcomes["check"] = RunResult(("check",), 1, "1 failed")
         run_local(task_of(api), api=api, machine=machine, config=CONFIG, root=ROOT, now=NOW)
         assert machine.pushed == []
