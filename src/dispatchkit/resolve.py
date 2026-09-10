@@ -146,6 +146,22 @@ class TaskItem:
         return self.block.touches
 
     @property
+    def landed(self) -> bool:
+        """Has this task's work merged into its plan's branch? (D16)
+
+        The base is the evidence, not the merge. Any account may open a pull
+        request that cross-references an issue and merge it into a branch of
+        its own; if that counted, an outsider could reach into the graph.
+
+        Read by two things that must agree: `close_ops`, which closes the
+        issue, and the status, which stops the task being handed out again in
+        the window before that close lands. When those two were separate
+        judgements, a pass closed an issue and dispatched it in the same
+        breath.
+        """
+        return any(merged.base == self.base for merged in self.merged)
+
+    @property
     def attempts(self) -> int:
         """How many times this task has been handed to an agent.
 
@@ -380,6 +396,23 @@ def _status_of(
         ):
             return Status.AUTO_MERGING
         return Status.IN_REVIEW
+    if task.landed:
+        # The work is on the branch; only the bookkeeping is outstanding, and
+        # this same pass is about to do it. Without this the task is open,
+        # unassigned and has no open pull request -- every readiness test
+        # passes, so the pass closes the issue and dispatches it again, to an
+        # agent that finds its own work already merged. On `main` the window
+        # never existed: GitHub closed the issue in the instant it merged.
+        #
+        # Read after `open_prs`, so a follow-up pull request on a landed task
+        # is still reported rather than abandoned; before `claimed`, because a
+        # stale assignment says less than a merge does.
+        #
+        # This is the status word only. Dependents are released by
+        # `_satisfied`, which reads the issue's own closure, so nothing
+        # downstream starts on the strength of our reading -- a pass that
+        # closes and then fails must leave dependents blocked.
+        return Status.DONE
     if task.claimed:
         return Status.DISPATCHED
     # A dependency with no issue at all (deleted, or never applied) is not
@@ -434,12 +467,12 @@ def close_ops(items: Sequence[TaskItem]) -> tuple[CloseIssue, ...]:
       the graph by merging into a branch of their own.
 
     Pure, like every other rule here: the merges arrive in the snapshot and the
-    decision comes back out as data.
+    decision comes back out as data. The second condition is `landed`, shared
+    with the status: the pass must not close a task and dispatch it in the same
+    breath because two places asked the same question differently.
     """
     return tuple(
-        CloseIssue(task.ref, task.number)
-        for task in items
-        if not task.closed and any(merged.base == task.base for merged in task.merged)
+        CloseIssue(task.ref, task.number) for task in items if not task.closed and task.landed
     )
 
 
