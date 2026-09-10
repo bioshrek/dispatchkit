@@ -778,12 +778,14 @@ Shipped, each with a decision record below:
 | D11  | The checks close over the fence and a missing `gh`; `init` gated on them | A fence that omits the config is red; `init` over one exits non-zero |
 | D6.6 | The local lane's first live trial, and the seven defects it found  | Live: `wordfreq --version` exists because a local agent wrote it, unattended |
 | D16  | The plan branch: a plan integrates on its own base, merged by a human | Both lanes are handed the base; a merge into it closes the task, and the plan's own PR is never merged |
+| D15  | Plan retrospective: overhead and work measured from the timeline     | Live: two finished plans reported their own floor, and both bought less than 1x |
 
-Remaining, in build order:
-
-| Step | Deliverable                                                          | Proven by                                                                  |
-| ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |
+Nothing remains. That is a statement about the build list, not about the tool: the list was
+always the set of things that had to exist before a plan could be handed over and come back
+finished, and D15 was the last of them because it is the only one that needed a finished plan to
+read. What the retrospective then said about those plans -- that neither bought any speedup at
+all -- is not a leftover deliverable. It is the first real question, and it belongs to whoever
+authors the next graph.
 
 D14 came first because D13 should not be built against something that is being deleted: the
 terminal view is what replaces the board, and writing one to feed the other would be work done
@@ -3136,7 +3138,7 @@ saying plainly in the authoring guidance: an `acceptance` narrower than CI does 
 to pass, it makes their failures unactionable.
 
 
-### D15 design — the plan retrospective
+### D15 design — the plan retrospective (built; the record follows)
 
 D2 deleted `estimate_minutes` on the argument that the graph is the one place its quantity cannot
 be known, and promised the same number would come back as an observation. This is that promise
@@ -3197,6 +3199,84 @@ median toward a task nobody worked on and quietly inflate the plan's apparent pa
 count of tasks that could not be measured is printed, because a retrospective covering four of
 twelve tasks is a different claim from one covering all twelve.
 
+
+### D15 — the plan retrospective
+
+Built as designed in shape and changed in five places by the two finished plans it was pointed at.
+The offline tests were green before any of those places were known, which is the whole argument
+for pointing it at something real: every fixture in this repository is rendered by our own code
+and can only prove the code agrees with itself. So a live GraphQL payload was recorded verbatim
+as `tests/fixtures/live_timings.json` — the lesson D16's trial paid for — and a single
+plausibility assertion over it found two defects in one run.
+
+**Overhead is measured on the dispatch the commit came from.** The design said "the last
+dispatch", which assumes every dispatch produced something. It does not. A task merged, then
+re-dispatched by the bug the D16 trial turned up, then closed, has a last dispatch *after* its
+only commit, and the report said its overhead was minus two hours. The commit is the evidence for
+which run did the work, so the commit chooses: the last dispatch at or before the first commit.
+A `_positive` guard turns any remaining backwards span into "unmeasured" rather than a number,
+because a negative duration is a premise that was wrong, and printing it invites somebody to
+average it.
+
+**Work ends when the work landed, not when the bookkeeping caught up.** The design said
+dispatch → close. Since D16 the close is dispatchkit's own act on a *later* pass, so
+dispatch → close measures the poll interval as well as the task. `work` now runs to the merge,
+falling back to the close for a task finished by hand, which has no merge to run to.
+
+**CI duration is the longest single suite, not the span across all of them.** A head commit can
+carry suites from separate runs — a re-run, or a pipeline fixed and tried again — and the span
+from the earliest starting to the latest finishing then measures the *gap between* two CI runs.
+A thirteen-second job was reported as a day and sixteen hours. Found by the plausibility
+assertion, and unfindable offline: no fixture we would have thought to write has two runs in it.
+
+**A plan's own pull request appears on every issue in the plan.** It cross-references all of them,
+so the moment a human merges the plan branch into trunk it is a merged pull request on each task —
+carrying the plan's first commit, the plan's merge time and the plan's CI. `close_ops` was never
+fooled, because it checks the base. The retrospective took the first merge in the list, and now
+asks the same question for the same reason. The second defect from the same assertion, and a
+reminder that "the merged PR for this issue" is not a well-defined phrase in a repository where
+plans integrate on their own branches.
+
+**The overhead figure is lane-shaped, and this is the finding that matters.** A task that took
+forty hours reported three seconds of overhead. Not a bug: a cloud agent creates its branch and
+pushes within seconds of being assigned, so dispatch → first commit is near zero however long the
+work then takes. A local run does the opposite — dispatchkit's own executor commits once, when the
+run finishes — so the same span is nearly the whole task. Both numbers are real; they measure
+opposite things; and nothing in the numbers tells a reader which they are looking at. Every task
+line now carries its lane and the report closes with the warning. The deeper point is that
+"when did the agent start working" is not observable through GitHub for either lane, so the floor
+is a within-lane comparison and cannot be anything more honest than that.
+
+**What the two plans actually said.**
+
+|                    | `wordfreq` (6 tasks, cloud + local) | `mincount` (3 tasks, local) |
+| ------------------ | ----------------------------------- | --------------------------- |
+| median overhead    | 28s                                 | 2m                          |
+| median work        | 1h 9m                               | 3m                          |
+| width promised     | 4                                   | 2                           |
+| width achieved     | 2                                   | 1                           |
+| makespan vs serial | 49h 48m vs 45h 53m — **0.9x**       | 18m vs 14m — **0.8x**       |
+| below the floor    | 1 of 6                              | 2 of 3                      |
+
+Both plans were **slower than running their tasks one after another**, and `mincount` never ran
+two tasks at once at all. `mincount` is explained — `caps.local = 1`, so a graph of width 2 had
+one runner — and that is itself the point: the promised width was never achievable in the
+configuration it ran under, and nothing before D15 could say so. `wordfreq` reached 2 of a
+promised 4, and its makespan is dominated by a single task that sat 40 hours between dispatch and
+merge, which is the operator's availability and not the agent's.
+
+Which is the caveat the numbers must be read with: on a hand-driven `watch --once`, wall-clock
+spans measure the human running the passes. A makespan is only a claim about the plan when
+something is polling continuously. The retrospective is honest about what it read; it cannot be
+honest about what it read *through*.
+
+**It still does not gate.** Open question 2 asked whether the measured floor should become a rule,
+and the real numbers argue harder for no than the design did. The observed median overhead spans
+28s to 2m across two plans in the same repository, dominated by which lane ran and who was
+watching. A `validate` rule built on that would refuse plans for the shape of the operator's
+afternoon. The deleted `overhead_minutes = 10` guess was not merely unknowable, as D2 argued —
+it was wrong by an order of magnitude in one lane and by a factor of five in the other, in
+opposite directions.
 
 ## First real plan
 

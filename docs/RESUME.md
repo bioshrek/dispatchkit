@@ -6,12 +6,20 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.6, D10, D11 and D16 are implemented and
-green offline. 1038 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
+D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.6, D10, D11, D16 and D15 are implemented
+and green offline. 1103 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
 
-**Only D15 remains** — the plan retrospective, measuring dispatch overhead and work from the
-timeline rather than from a schema key. It is unblocked: the sandbox's `wordfreq` plan is
-finished and there is a real timeline to read.
+**Nothing remains on the build list.** D15 was the last of it, and it is proven live: `retro` was
+run against both finished sandbox plans and reported that neither bought any speedup at all
+(`wordfreq` 0.9x, `mincount` 0.8x, both slower than running the tasks one after another). The
+live run found five things the offline tests could not — see the D15 record in `docs/design.md`.
+The one to carry forward: **the overhead figure is only comparable within a lane**, because a
+cloud agent commits within seconds of being assigned and a local run commits when it finishes, so
+dispatch-to-first-commit measures opposite things in the two lanes.
+
+That the list is empty is a statement about the build, not the tool. The first real question now
+belongs to whoever authors the next graph: both plans promised more width than they achieved, and
+`mincount` promised 2 while running under `caps.local = 1`.
 
 **D16 is proven live.** The `mincount` plan ran end to end on `plan/mincount` in the sandbox —
 `apply` through a proposed plan pull request — and found two defects nothing offline could reach:
@@ -66,7 +74,7 @@ against the patterns, and `init` will not exit 0 over a failing local check. See
 | D10 | Plan-authoring contract: `docs/schema.md`, body lints, `docs/authoring.md` | done; an agent given only the two docs produced a `--strict`-clean plan |
 | D11 | `doctor` closes over the fence and a missing `gh`; `init` gated on the local checks | done; the fence override discarded every self-protection |
 | D16 | The plan branch: a plan integrates on its own base, merged by a human | done; proven live by the sandbox's `mincount` plan |
-| D15 | Plan retrospective: overhead and work from the timeline | designed, unbuilt |
+| D15 | Plan retrospective: overhead and work from the timeline | done; proven live against both finished sandbox plans |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
 `tools/dispatch/`) on 2026-09-08. `art_strategy` is intended to become adopter #1.

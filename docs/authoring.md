@@ -27,6 +27,13 @@ concurrency in return. If you find yourself writing one, the decomposition is wr
 This is also why "just split it smaller" is bad advice on its own. Smaller is only better when the
 pieces are **independent**.
 
+**What the numbers turned out to be.** `dispatchkit retro <graph>` measures all of this from a
+finished plan's issue timeline, and the first two plans it was pointed at both came out *slower
+than serial* — 0.9x and 0.8x. Both promised more width than they achieved (4 → 2, and 2 → 1
+under `caps.local = 1`). So treat a promised width as the ceiling it is, check it against the
+caps the plan will actually run under, and run `retro` on your plan when it finishes rather than
+trusting the arithmetic above. Overhead is only comparable within a lane; the report explains why.
+
 ## The procedure
 
 **1. Find the interface first.** The single highest-value move is to identify the contract that
