@@ -6,8 +6,13 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7, D7, D9, D9.1, D14, D13, D13.1a/b/c and D6.0/D6.1 are implemented and green offline. 612 tests, `ruff`,
-`mypy --strict`, `lint-imports` all clean via `make check`.
+D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.5 and D10 are implemented and green
+offline. 822 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
+
+**Only D11 and D15 remain.** D11 is `doctor` completeness and a gated interactive `init`; D15 is
+the plan retrospective, which measures dispatch overhead and work from the timeline rather than
+from a schema key. D15 is unblocked — the sandbox's `wordfreq` plan is finished, so there is a
+real timeline to measure.
 
 | Step | What | State |
 |------|------|-------|
@@ -27,7 +32,11 @@ D1–D5.7, D7, D9, D9.1, D14, D13, D13.1a/b/c and D6.0/D6.1 are implemented and 
 | D13.1c | `dispatch:hold`: not now, and not charged an attempt | done; stops dispatch and auto-merge, offline-proven only |
 | D6.0 | A lane with no executor is refused, not marked | done; fixes a silent permanent stall on `lane: local` |
 | D6.1 | Runner argv template, model allowlist, env floor, `caps.local` invariant | done; the human decisions D6 needed are made |
-| D13.1d, D6.2+ | Clean-tree gate, graph watcher, the executor itself | designed, unbuilt |
+| D13.1d, D13.1e | Clean-tree gate for `verify: auto`; the graph watcher re-plans on save | done |
+| D6.2–D6.5 | The `Workstation` port, the executor, recovery, `watch --local` | done |
+| D9.2 | Scope drift advises; the repo fence keeps the merge authority | done |
+| D10 | Plan-authoring contract: `docs/schema.md`, body lints, `docs/authoring.md` | done; an agent given only the two docs produced a `--strict`-clean plan |
+| D11, D15 | `doctor` completeness + gated `init`; plan retrospective | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
 `tools/dispatch/`) on 2026-09-08. `art_strategy` is intended to become adopter #1.
