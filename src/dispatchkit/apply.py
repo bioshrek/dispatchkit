@@ -38,7 +38,7 @@ from dispatchkit.github import (
     RepoState,
     UpdateIssue,
 )
-from dispatchkit.model import DEFAULT_BASE, Task, TaskGraph, TaskId
+from dispatchkit.model import DEFAULT_BASE, Base, Task, TaskGraph, TaskId
 
 
 def desired_labels(task: Task, *, plan: str) -> tuple[str, ...]:
@@ -51,7 +51,12 @@ def desired_labels(task: Task, *, plan: str) -> tuple[str, ...]:
 
 
 def build_body(
-    task: Task, *, plan: str, spec: str | None = None, doc: str | None = None
+    task: Task,
+    *,
+    plan: str,
+    spec: str | None = None,
+    doc: str | None = None,
+    base: Base = DEFAULT_BASE,
 ) -> str:
     """The issue body: prose for a human, then the machine block for the scheduler.
 
@@ -73,7 +78,7 @@ def build_body(
             "them yourself._"
         )
     sections.append(f"_Milestone {task.milestone}._")
-    sections.append(render_block(task, plan=plan))
+    sections.append(render_block(task, plan=plan, base=base))
     return "\n\n".join(sections) + "\n"
 
 
@@ -86,7 +91,9 @@ def plan_apply(
     operations: list[Operation] = []
 
     for task in graph.tasks:
-        body = build_body(task, plan=graph.plan, spec=specs.get(task.id), doc=graph.doc)
+        body = build_body(
+            task, plan=graph.plan, spec=specs.get(task.id), doc=graph.doc, base=graph.base
+        )
         labels = desired_labels(task, plan=graph.plan)
         issue = existing.pop(task.id, None)
 

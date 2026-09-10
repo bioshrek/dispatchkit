@@ -123,3 +123,65 @@ class TestTheGraphRejectsABadBase:
 class TestTheSchemaStaysClosed:
     def test_an_unknown_top_level_key_is_still_refused(self) -> None:
         assert any("unknown" in message for message in issues_of(f'bass = "x"\n{GRAPH}'))
+
+
+class TestTheBaseReachesTheIssue:
+    """Found live: `apply` created the branch and wrote `base: main` (D16).
+
+    Every offline test read the base back out of a fixture built by
+    `tests/items.py`, which renders its own block. Nothing exercised the path
+    that actually matters -- graph file to issue body -- so a `base` that was
+    parsed, validated and then dropped on the floor between `plan_apply` and
+    `render_block` was invisible until an issue existed to read.
+
+    The machine block is the only place a base can travel: `watch` is allowed
+    to run with no checkout, so a base left in the graph file is a base the
+    scheduler cannot see.
+    """
+
+    def test_the_body_carries_the_plans_base(self) -> None:
+        from dispatchkit.apply import build_body
+        from tests.graphs import task as make_task
+
+        body = build_body(make_task("a"), plan="demo", base=Base("plan/demo"))
+        assert "base: plan/demo" in body
+
+    def test_a_plan_on_main_still_says_main(self) -> None:
+        from dispatchkit.apply import build_body
+        from tests.graphs import task as make_task
+
+        assert "base: main" in build_body(make_task("a"), plan="demo")
+
+    def test_it_survives_the_whole_of_apply(self) -> None:
+        from dispatchkit.apply import plan_apply
+        from dispatchkit.github import CreateIssue, RepoState
+        from tests.graphs import graph
+        from tests.graphs import task as make_task
+
+        plan = plan_apply(graph(make_task("a"), base=Base("plan/demo")), RepoState(()))
+        created = [op for op in plan.operations if isinstance(op, CreateIssue)]
+        assert created and "base: plan/demo" in created[0].body
+
+    def test_and_reads_back_as_the_base_the_scheduler_uses(self) -> None:
+        from dispatchkit.apply import plan_apply
+        from dispatchkit.github import CreateIssue, IssueState, RepoState
+        from dispatchkit.resolve import build_items
+        from tests.graphs import graph
+        from tests.graphs import task as make_task
+
+        plan = plan_apply(graph(make_task("a"), base=Base("plan/demo")), RepoState(()))
+        created = next(op for op in plan.operations if isinstance(op, CreateIssue))
+        items, _ = build_items(
+            RepoState(
+                (
+                    IssueState(
+                        number=1,
+                        title=created.title,
+                        body=created.body,
+                        labels=created.labels,
+                        closed=False,
+                    ),
+                )
+            )
+        )
+        assert [str(item.base) for item in items] == ["plan/demo"]
