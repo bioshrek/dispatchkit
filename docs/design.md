@@ -584,12 +584,14 @@ Shipped, each with a decision record below:
 | D9.1 | Acceptance-subset-of-CI and scope-drift guardrails            | Both failed against the live graph first, which is the point             |
 | D14  | Retire the Project board                                      | Live: `doctor --repo` green on a token with no `project` scope           |
 | D13  | `watch`: the scheduler moves local; repo-wide admission       | Live: a pass against the sandbox from a terminal, on `gh`'s credential   |
+| D13.1a | The looping report prints what moved, not everything         | An unchanged pass prints one heartbeat line, and still does its work     |
+| D13.1b | `Cancelled`: closed as not planned satisfies nothing         | A dependent of a cancelled task is never dispatched, and is reported     |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D13.1 | Intervention and the graph watcher — see below for what of it is shipped | A cancelled task blocks its dependents; a save re-plans in place            |
+| D13.1 | The rest of intervention: `dispatch:hold`, the clean-tree gate, the graph watcher | A held task is not dispatched and is not charged an attempt; a save re-plans in place |
 | D6   | Local lane executor: worktree, runner invocation, push, PR, recovery | One real capability-gated task end-to-end                                  |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
@@ -604,9 +606,9 @@ flag rather than a second command. D13 also pooled admission across every plan i
 which is where the caps stopped being per-plan.
 
 D13.1 is the half held back deliberately, and it is being taken in pieces. The **report** is
-shipped: a looping pass prints the full picture once and only what moved thereafter. What remains
-is **intervention** — `Cancelled`, `dispatch:hold`, the clean-tree gate — and the **graph
-watcher**, in that order, because the first is a live correctness bug and the second is a feature.
+shipped: a looping pass prints the full picture once and only what moved thereafter. So is
+**`Cancelled`**, which was the live correctness bug in the set. What remains is the rest of
+**intervention** — `dispatch:hold` and the clean-tree gate — and the **graph watcher**.
 D6 is what makes `caps.local = 1` mean anything: the label nothing consumes finally gets
 a consumer, and it is where a per-task `model` or `effort` lands. D10 belongs after them rather
 than before, because the graph a planner has to produce is now one a watcher reloads — and it is
@@ -2022,6 +2024,27 @@ completed is `Done`, closed as not planned is `Cancelled` and satisfies nothing 
 query gains `stateReason`, which is the whole cost. Dependents then stay blocked forever, which is
 correct, and must be _reported_ as such, in the same family as the dangling-dependency error: a
 graph that silently stops is the failure this system exists to prevent.
+
+**What `Cancelled` cost, once built.** The read was as cheap as predicted: one field in
+`STATE_QUERY`, one `cancelled: bool` on `IssueState` and on `TaskItem`. What was not obvious from
+the sketch is that `closed` is asked six different questions in `resolve.py` — is this finished
+with, may a dependency discharge against it, is it still merging, could it stall — and only *one*
+of them changes. Splitting them out as `_satisfied()`, the set a dependency edge may be discharged
+against, keeps the distinction in one named place rather than as five near-identical guards a
+later reader has to re-derive. A cancelled task is closed for every other purpose, which is why
+`cancelled` is a second field and not a third state.
+
+The default has to be *not* cancelled: every recorded fixture predates the field, and an open
+issue reports `stateReason: REOPENED`, which is not a cancellation. Guessing the other way would
+strand tasks that were merely done — turning a silent over-release into a silent over-block, which
+is quieter but not better.
+
+**Reporting the dead end is transitive, and stops at anything closed.** Naming only the immediate
+dependent invites someone to unblock it and expect the rest to follow, so `stranded_notices()`
+walks the reverse edges. It stops at a closed task in either sense: somebody did the work anyway,
+or decided it was not wanted, and either way its own dependents are released by it rather than
+held by the cancellation behind it. The notice names the cancelled task, because the two useful
+repairs — reopen it, or close the strandees as not planned too — both start there.
 
 **A hold does not spend an attempt.** The human interrupted; the agent did not fail. `attempts`
 derives from mark events, so a naive reading would charge it, but the timeline carries the hold

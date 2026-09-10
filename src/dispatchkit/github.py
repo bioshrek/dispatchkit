@@ -47,6 +47,11 @@ class IssueState:
     body: str
     labels: tuple[str, ...]
     closed: bool
+    # Closed as *not planned* rather than as completed (D13.1). A separate
+    # field rather than a third state, because everything that asks "is this
+    # finished with?" still wants `closed`; only dependency satisfaction cares
+    # which kind of closed it was.
+    cancelled: bool = False
     # The scheduler's inputs (D4): assignment is the dispatch lock, and an open
     # linked PR is how "work is under way" is observed without a side table.
     assignees: tuple[str, ...] = ()

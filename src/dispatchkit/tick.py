@@ -64,6 +64,7 @@ from dispatchkit.resolve import (
     ready_ops,
     resolve,
     stall_ops,
+    stranded_notices,
 )
 
 
@@ -152,7 +153,7 @@ def plan_tick(state: RepoState, *, config: SchedulerConfig, now: datetime) -> Ti
         statuses=projected,
         admitted=tuple(dispatched),
         deferred=admission.deferred,
-        notices=(*notices, *blocked_notices, *ci_notices(items)),
+        notices=(*notices, *blocked_notices, *ci_notices(items), *stranded_notices(items)),
         blocked_on=blocking(items),
     )
 

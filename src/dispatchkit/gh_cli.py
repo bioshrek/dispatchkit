@@ -66,6 +66,7 @@ query($owner: String!, $repo: String!, $first: Int!) {
         title
         body
         state
+        stateReason
         labels(first: 20) { nodes { name } }
         assignees(first: 10) { nodes { login } }
         dispatches: timelineItems(first: 50, itemTypes: [ASSIGNED_EVENT]) {
@@ -118,6 +119,10 @@ def _parse_issue(node: dict[str, Any]) -> IssueState:
         body=node["body"] or "",
         labels=tuple(label["name"] for label in node["labels"]["nodes"]),
         closed=node["state"] == "CLOSED",
+        # Absent in a recorded payload from before the field was requested, and
+        # `REOPENED` on an open issue. Both mean "not cancelled": guessing
+        # otherwise would strand tasks that are merely done.
+        cancelled=node["state"] == "CLOSED" and node.get("stateReason") == "NOT_PLANNED",
         assignees=tuple(user["login"] for user in (node.get("assignees", {}).get("nodes") or [])),
         open_prs=_parse_open_prs(node),
         node_id=node.get("id"),

@@ -62,13 +62,14 @@ _WILDCARD = "*?["
 class Status(Enum):
     """What the issues say a task is doing. Derived every pass, stored nowhere.
 
-    Six of the seven are a restatement of something GitHub already shows —
+    Seven of the eight are a restatement of something GitHub already shows —
     dependencies open or closed, an assignee, an open pull request, a label, a
-    closed issue. `Auto-merging` is the only synthesized one, and it is the
-    reason the report is worth printing at all.
+    closed issue and how it was closed. `Auto-merging` is the only synthesized
+    one, and it is the reason the report is worth printing at all.
     """
 
     BLOCKED = "Blocked"
+    CANCELLED = "Cancelled"
     READY = "Ready"
     DISPATCHED = "Dispatched"
     IN_REVIEW = "In Review"
@@ -93,6 +94,8 @@ class TaskItem:
     open_prs: tuple[PullRequest, ...]
     dispatches: tuple[datetime, ...]
     node_id: str | None = None
+    #: Closed as not planned. Closed, but satisfying nothing (D13.1).
+    cancelled: bool = False
 
     @property
     def id(self) -> TaskId:
@@ -210,6 +213,7 @@ def build_items(
                 block=block,
                 number=issue.number,
                 closed=issue.closed,
+                cancelled=issue.cancelled,
                 assignees=issue.assignees,
                 labels=issue.labels,
                 open_prs=issue.open_prs,
@@ -220,14 +224,25 @@ def build_items(
     return tuple(items), tuple(notices)
 
 
+def _satisfied(items: Sequence[TaskItem]) -> set[TaskRef]:
+    """The tasks a dependency edge may be discharged against.
+
+    Closed *and* completed. A task closed as not planned is finished with but
+    was never done, so releasing its dependents would dispatch work whose
+    prerequisite does not exist — which was live until D13.1, and reachable by
+    anyone tidying a backlog from the web UI.
+    """
+    return {task.ref for task in items if task.closed and not task.cancelled}
+
+
 def resolve(items: Sequence[TaskItem]) -> dict[TaskRef, Status]:
     """Derive every task's status from the issues alone.
 
     Keyed by `TaskRef`, not by `TaskId`: `watch` pools every plan in the
     repository, and two plans may both contain `ports` (D13).
     """
-    closed = {task.ref for task in items if task.closed}
-    return {task.ref: _status_of(task, closed) for task in items}
+    done = _satisfied(items)
+    return {task.ref: _status_of(task, done) for task in items}
 
 
 def blocking(items: Sequence[TaskItem]) -> dict[TaskRef, tuple[TaskId, ...]]:
@@ -241,14 +256,18 @@ def blocking(items: Sequence[TaskItem]) -> dict[TaskRef, tuple[TaskId, ...]]:
     Empty for anything ready or already running, so a caller can annotate
     unconditionally and get nothing where there is nothing to say.
     """
-    closed = {task.ref for task in items if task.closed}
+    done = _satisfied(items)
     return {
-        task.ref: tuple(dep for dep in task.block.depends if task.ref.sibling(dep) not in closed)
+        task.ref: tuple(dep for dep in task.block.depends if task.ref.sibling(dep) not in done)
         for task in items
     }
 
 
 def _status_of(task: TaskItem, closed: frozenset[TaskRef] | set[TaskRef]) -> Status:
+    if task.cancelled:
+        # Read before `closed`: a cancelled issue is closed too, and calling it
+        # `Done` is the whole bug.
+        return Status.CANCELLED
     if task.closed:
         return Status.DONE
     if task.stuck:
@@ -404,6 +423,63 @@ def _within_scope(files: Sequence[str], touches: Sequence[str]) -> bool:
     if not touches:
         return False
     return all(any(fnmatch(path, pattern) for pattern in touches) for path in files)
+
+
+def stranded_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
+    """Report the tasks a cancellation has stranded for good.
+
+    `Blocked` reads as "not yet". A task waiting on something closed as not
+    planned is not waiting — it can never run, and nothing else in the report
+    says so. This is the same family as the dangling-dependency error: a graph
+    that silently stops is the failure this system exists to prevent.
+
+    Reported transitively, because naming only the immediate dependent invites
+    someone to unblock it and expect the rest to follow.
+    """
+    order = {task.ref: position for position, task in enumerate(items)}
+    dependents: dict[TaskRef, list[TaskRef]] = {}
+    for task in items:
+        for dep in task.block.depends:
+            dependents.setdefault(task.ref.sibling(dep), []).append(task.ref)
+
+    notices = []
+    for task in items:
+        if not task.cancelled:
+            continue
+        stranded = _reachable(task.ref, dependents, closed={t.ref for t in items if t.closed})
+        if not stranded:
+            continue
+        listed = ", ".join(str(ref) for ref in sorted(stranded, key=lambda ref: order[ref]))
+        notices.append(
+            Notice(
+                "cancelled-dependency",
+                f"#{task.number}",
+                f"{task.ref} was closed as not planned, so {listed} can never run. "
+                "Reopen it if the work is still needed, or close them as not "
+                "planned too.",
+            )
+        )
+    return tuple(notices)
+
+
+def _reachable(
+    start: TaskRef, dependents: dict[TaskRef, list[TaskRef]], *, closed: set[TaskRef]
+) -> set[TaskRef]:
+    """Everything downstream of `start`, stopping at anything already closed.
+
+    A closed task is not stranded whatever its dependencies did — somebody did
+    the work anyway, or decided it was not needed — and its own dependents are
+    released by it rather than held by the cancellation behind it.
+    """
+    found: set[TaskRef] = set()
+    frontier = list(dependents.get(start, ()))
+    while frontier:
+        ref = frontier.pop()
+        if ref in found or ref in closed:
+            continue
+        found.add(ref)
+        frontier.extend(dependents.get(ref, ()))
+    return found
 
 
 def ci_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
