@@ -11,6 +11,8 @@ ratification of the decomposition informed:
 | `depth` close to `count`                       | `mostly-serial`        |
 | Serial pair, no other dependents, same routing | `merge-candidate`      |
 | Acceptance runs tests, `touches` names none    | `scope-omits-tests`    |
+| No `body_file`, so the brief is the title      | `thin-body`            |
+| Body names a path `touches` does not cover     | `scope-omits-named-path` |
 
 The cost model behind the shape lints: makespan is roughly critical-path length
 x (work + overhead), and overhead is fixed and far from free. Splitting a node

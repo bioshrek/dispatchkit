@@ -50,14 +50,28 @@ def desired_labels(task: Task, *, plan: str) -> tuple[str, ...]:
     )
 
 
-def build_body(task: Task, *, plan: str, spec: str | None = None) -> str:
+def build_body(
+    task: Task, *, plan: str, spec: str | None = None, doc: str | None = None
+) -> str:
     """The issue body: prose for a human, then the machine block for the scheduler.
 
     `acceptance` is injected verbatim so both lanes and the reviewer run the
     same check — the definition of done lives on the issue, not in a runner.
+
+    The `doc` pointer carries its own precedence. An agent handed two documents
+    averages them, so the ranking is rendered here rather than left to a prompt
+    template: the cloud lane has no template, and a rule that only one lane is
+    told is not a rule.
     """
     sections = [spec.strip() if spec and spec.strip() else task.title]
     sections.append(f"## Acceptance\n\n```sh\n{task.acceptance}\n```")
+    if doc:
+        sections.append(
+            f"_Background: `{doc}`. This issue is the contract and the document "
+            "is context; where they say different things, follow this issue and "
+            "note the disagreement in the pull request rather than reconciling "
+            "them yourself._"
+        )
     sections.append(f"_Milestone {task.milestone}._")
     sections.append(render_block(task, plan=plan))
     return "\n\n".join(sections) + "\n"
@@ -72,7 +86,7 @@ def plan_apply(
     operations: list[Operation] = []
 
     for task in graph.tasks:
-        body = build_body(task, plan=graph.plan, spec=specs.get(task.id))
+        body = build_body(task, plan=graph.plan, spec=specs.get(task.id), doc=graph.doc)
         labels = desired_labels(task, plan=graph.plan)
         issue = existing.pop(task.id, None)
 

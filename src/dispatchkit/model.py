@@ -198,6 +198,9 @@ class Task:
 class TaskGraph:
     plan: str
     tasks: tuple[Task, ...]
+    doc: str | None = None
+    """Optional pointer to the document this plan came out of. Prose for the
+    agent, never machine-read: it is context, and the issue is the contract."""
 
     def by_id(self) -> dict[TaskId, Task]:
         return {task.id: task for task in self.tasks}
