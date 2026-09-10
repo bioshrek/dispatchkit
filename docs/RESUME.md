@@ -6,12 +6,20 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.5, D10 and D11 are implemented and green
-offline. 866 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
+D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.6, D10 and D11 are implemented and green
+offline. 915 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
 
 **Only D15 remains** — the plan retrospective, which measures dispatch overhead and work from the
 timeline rather than from a schema key. It is unblocked: the sandbox's `wordfreq` plan is
 finished, so there is a real timeline to measure.
+
+D6.6 ran the local lane against a real repository for the first time and found **seven** defects,
+five of them unreachable from any test that does not start a real process — including the one that
+made the lane impossible in any repo `init` set up (`REQUIRED_LABELS` omitted every label the
+pipeline *writes*) and the one where nothing ever committed the agent's work, so `verify: auto`
+would have merged an empty branch while reporting the task done. The lane is now proven end to
+end: `wordfreq --version` exists because a local agent wrote it, unattended. Read the D6.6 record
+before touching `local.py` or `dispatcher.py`.
 
 D11 found three things `doctor` stayed green on, and the first is the one to know about: an
 explicit `fence.paths` **replaces** the derived default rather than adding to it, so a narrow list
@@ -40,6 +48,7 @@ against the patterns, and `init` will not exit 0 over a failing local check. See
 | D6.1 | Runner argv template, model allowlist, env floor, `caps.local` invariant | done; the human decisions D6 needed are made |
 | D13.1d, D13.1e | Clean-tree gate for `verify: auto`; the graph watcher re-plans on save | done |
 | D6.2–D6.5 | The `Workstation` port, the executor, recovery, `watch --local` | done |
+| D6.6 | First live trial of the local lane | done and proven live; found 7 defects, 5 invisible offline |
 | D9.2 | Scope drift advises; the repo fence keeps the merge authority | done |
 | D10 | Plan-authoring contract: `docs/schema.md`, body lints, `docs/authoring.md` | done; an agent given only the two docs produced a `--strict`-clean plan |
 | D11 | `doctor` closes over the fence and a missing `gh`; `init` gated on the local checks | done; the fence override discarded every self-protection |
@@ -237,6 +246,13 @@ Immediately outstanding, neither a milestone:
    `copilot_work_finished` timeline event, which `STATE_QUERY` does not request.
 
 ## Known gaps, in the order they will bite
+
+- **Live proof is per-deliverable, and a green suite is not it.** D6 was "done" for five
+  sub-steps and had never run; the first real dispatch found seven defects, and the two code paths
+  that would have caught the worst of them were the two that had never executed. Before calling a
+  lane finished, run it. `doctor --local` is also one layer too shallow — it checks that the runner
+  binary exists, not that the argv it will be handed is one that binary accepts, which is what let
+  a bad default model cost a whole dispatch attempt.
 
 - **Adding a `Status` option needs a manual board migration.** `init` refuses to replace the
   options of a populated single-select, because doing so deletes the values of every item using

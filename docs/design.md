@@ -770,6 +770,7 @@ Shipped, each with a decision record below:
 | D9.2 | Scope drift advises rather than vetoes; the fence keeps the authority | A drifting green pull request merges and is reported; a fenced one still refuses |
 | D10  | Plan-authoring contract: schema page, body lints, authoring guide | An agent given only the two docs produces a graph `validate --strict` accepts |
 | D11  | The checks close over the fence and a missing `gh`; `init` gated on them | A fence that omits the config is red; `init` over one exits non-zero |
+| D6.6 | The local lane's first live trial, and the seven defects it found  | Live: `wordfreq --version` exists because a local agent wrote it, unattended |
 
 Remaining, in build order:
 
@@ -820,6 +821,7 @@ is least able to help itself.
 | D6   | Name the runner CLI, its argv template and model allowlist; ratify the env allowlist | Environment + security |
 | D10  | Write the body contract; choose which existing plans are the known-good fixtures     | Judgement              |
 | D11  | Configure branch protection; ratify what a failing check is allowed to stop          | Privileged + UX        |
+| D6.6 | Watch the first unattended local run on your own machine, and say what may run there | Trust                  |
 | D15  | Supply a finished plan to measure, and fold the result back into the skill           | Prerequisite           |
 
 The privileged acts are unavoidable and trivial — narrowing a token, setting branch protection so
@@ -2833,6 +2835,91 @@ The through-line of all four: every one is a check that was never asked to hold,
 broke. A safe default nobody verified stayed safe, a happy path nobody left, a document nobody
 re-read, a convenience target nobody ran. The tests added here are cheap and boring, and each one
 would have caught its defect the day it landed.
+
+### D6.6 decision record — the local lane meets a real machine (shipped)
+
+Unplanned, and it should not have been. D6.0 through D6.5 built the local lane and proved it
+offline: the planner against synthetic graphs, the executor against `FakeWorkstation`. The
+question that opened this deliverable was whether any of it had ever run. It had not. Every
+"Live:" claim in the table above — D3, D5, D9, D13, D14 — belongs to the cloud lane, and the
+sandbox's only plan was five tasks all marked `lane: cloud`. There were no `live`-marked tests,
+because the marker exists for tests that may open a socket, and nothing had been written that
+wanted to.
+
+Risk and evidence were exactly inverted. The cloud lane runs an agent in somebody else's
+ephemeral container, and had all the proof. The local lane runs an agent **on this machine**, with
+a real checkout, and had none. The in-memory double is honest about what it can prove — it proves
+the planner — and the adapter is precisely the part it cannot reach.
+
+Seven defects, in the order the machine found them, each reproduced in a failing test before being
+fixed:
+
+1. **`REQUIRED_LABELS` omitted every label the pipeline writes.** It listed what the state query
+   *filters on*, while its docstring claimed to be the only thing `init` must create. `dispatch:local`,
+   `dispatch:stuck` and `dispatch:hold` were all missing, and `gh issue edit --add-label` refuses a
+   name that does not exist — so **the local lane could not have worked in any repository `init` set
+   up**. The cloud lane never noticed, because a cloud dispatch is an assignment rather than a label,
+   and no live task had ever exhausted its retry budget. The two paths that would have caught it are
+   the two that had never run. `LABEL_STUCK` moved down from `resolve.py` into `github.py`, since
+   `github` sits below `resolve` in the layer list. A test now scans every module for `LABEL_*` and
+   requires each `dispatch:`-prefixed one to be in the set.
+2. **A `RuntimeError` from `execute_tick` tracebacked out of `watch`.** `fetch_state` failures were
+   already handled; only the execute half was not, which is why the hole survived. The loop now
+   continues rather than exits, and sets `previous = None` so the next report is full rather than a
+   diff against a pass that did not finish — safe only because there is no stored state.
+3. **`--once --local` abandoned the task it started.** The thread is a daemon, so process exit
+   killed it: the issue stayed claimed and one attempt poorer, and three such runs would mark a task
+   stuck that nobody had run. `--once` now waits. The loop must never wait — that is D6.5 — and the
+   test double raises if it ever does.
+4. **The default model was one the runner refused.** Fixing it exposed the trap the fix would have
+   introduced: a narrowed `models` list with no explicit `model` would fail its own allowlist check,
+   so the fallback is now the first *allowed* model rather than the first default.
+5. **A retry deadlocked on its own evidence.** A failed run keeps its branch (D6.4), the retry asked
+   for the same name, and `git worktree add -b` refused — failing at `worktree` before the agent
+   started, for ever. The name repeats because `attempts` is read from the timeline at the *start* of
+   a pass, before that pass writes its own mark, so two passes can legitimately compute the same
+   number and concurrent passes are allowed by design. `free_branch` steps past any taken name rather
+   than reusing or deleting evidence.
+6. **Nobody committed the agent's work.** `run_local` went agent, acceptance, push, PR, and there is
+   no commit anywhere in it; nothing in the prompt asked for one either. The agent did the work,
+   left it in the working tree, and GitHub refused the pull request: *No commits between main and
+   dispatchkit/wordfreq/version-flag/3*. The traceback was the visible half. The dangerous half is
+   the run where it succeeds — acceptance had already passed **on the uncommitted tree**, so an
+   empty branch would carry a green CI run, because it *is* `main`, and `verify: auto` would merge
+   nothing at all while reporting the task done. The executor commits, because it already owns git
+   here: it makes the worktree and it pushes, since the child holds no credential. Asking the agent
+   would make whether the work survives depend on a sentence in a prompt. The commit goes in
+   *before* acceptance — committing does not change the working tree, so acceptance sees the same
+   files either way, but a run that fails acceptance then has a real commit on the branch it keeps,
+   which is what makes "kept for inspection" true. An agent that changed nothing is now a reported
+   failure rather than a refused pull request, and the same rule covers the agent that committed for
+   itself, by counting commits instead of parsing git's message.
+7. **A raising run took its thread down mute.** `self.last` was never set, so the pass said "did not
+   report" about a failure it had the whole reason for, and exited 0. The mark stayed on, because an
+   exception goes around `_finish` — the D6.0 bug arrived at from a direction D6.0 did not cover.
+   Every machine stage was already a value rather than an exception; only the `GitHubApi` calls
+   raised. `open_pr` now reports like the rest, `_clear` moved onto the thread and inside the guard,
+   and the dispatcher catches whatever is left.
+
+**Acceptance.** `wordfreq --version` exists, and a local agent wrote it: issue #13 dispatched,
+worktree created, agent run, work committed, acceptance passed, PR #14 opened with a 32-line diff
+across exactly the three declared files, CI green, auto-merged by a later pass, issue closed and
+the mark removed. The pass after that reported the task `Done` and did nothing, which is the
+convergence property holding across a real dispatch rather than an in-memory one.
+
+Two things were found and deliberately left. **`doctor --local` is one layer too shallow**: it
+checks that the runner binary exists, not that the argv it will be handed is one that binary
+accepts, which is what made defect 4 cost a whole dispatch. Deepening it collides with the rule
+that `doctor` without `--repo` inspects the working tree and opens no socket — a real tension, and
+resolving it hastily is how that rule would be lost. **The `no-executor` defer message names no
+remedy** — it says nothing in this build runs `lane: local`, when the answer is to pass `--local` —
+against `doctor`'s standard of a remedy per failure.
+
+The through-line is D11's, one layer down. Every defect was a check that was never asked to hold,
+and they clustered where the evidence was thinnest: the lane with the largest blast radius had the
+least proof, and five of the seven were unreachable from any test that does not start a real
+process. The lesson is not to write more doubles. It is that *live proof is per-deliverable* — a
+green suite says the parts behave, and only a real run says the seams do.
 
 ## First real plan
 
