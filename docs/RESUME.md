@@ -20,7 +20,7 @@ clean via `make check`.
 | D5.6 | CI-aware status, workflow template fix, `doctor` inputs | **done and proven live**; `verify: auto` now means something |
 | D5.7 | Draft-aware status, `MarkReady` for `verify: auto` | **done and proven live**; `Auto-merging` implies a merge is possible |
 | D7, D9, D9.1 | Retry budget, `verify: auto` merge, the two guardrails | **done and proven live** |
-| D14 | Retire the Project board | done offline; `repo` scope is the whole requirement |
+| D14 | Retire the Project board | **done and proven live**; `doctor` green with no `project` scope |
 | D13, D6 | `watch`, local lane executor | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as

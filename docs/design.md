@@ -582,7 +582,7 @@ Shipped, each with a decision record below:
 | D7   | Timeout, retry budget, `Stuck`                                | Attempts derived from the timeline; the budget terminates                |
 | D9   | `verify: auto` merge                                          | Live: `stopwords` merged and closed with no human                        |
 | D9.1 | Acceptance-subset-of-CI and scope-drift guardrails            | Both failed against the live graph first, which is the point             |
-| D14  | Retire the Project board                                      | `doctor` green on `repo` alone; no module names a project                |
+| D14  | Retire the Project board                                      | Live: `doctor --repo` green on a token with no `project` scope           |
 
 Remaining, in build order:
 
@@ -1684,10 +1684,18 @@ an edited task converge? Every convergence test in `test_apply.py`, `test_tick.p
 `test_init.py` survived the deletion unchanged in shape, which is the evidence that nothing
 scheduling-related was load-bearing on the board.
 
-The live half of the proof — a full pass on a token holding `repo` alone, and deleting the sandbox
-board — is a privileged act and is the one thing here a human still has to do. Nothing in the code
-reads a project any more, so the board's continued existence cannot affect a pass; deleting it is
-tidying, not a step.
+**The live half of the proof, and a correction to how it is obtained.** `doctor --repo` ran green
+on a token holding `repo`, `read:org`, `gist` and `admin:public_key` — no `project` — and every
+remote check answered, with the only failures being that repository's own unconfigured state. But
+the way to *get* that token is not `gh auth login`, which is what this record first said: a
+re-login re-grants whatever the OAuth app was previously authorised for, so it cannot narrow
+anything. Scopes come off with `gh auth refresh --remove-scopes project`, which is idempotent and
+refuses to remove the `repo`/`read:org`/`gist` minimum. Worth stating because the whole adoption
+argument for D14 is about a scope, and being wrong about how to drop one would undercut it.
+
+Deleting the sandbox board is the only privileged act left. Nothing in the code reads a project
+any more, so the board's continued existence cannot affect a pass; deleting it is tidying, not a
+step.
 
 ### One local task, and one dispatcher
 
