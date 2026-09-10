@@ -27,18 +27,21 @@ import json
 import shutil
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
 from dispatchkit.apply import execute_plan, plan_apply
 from dispatchkit.config import SchedulerConfig, find_config, load_config
+from dispatchkit.dispatcher import LocalDispatcher, served_lanes
 from dispatchkit.doctor import (
     Check,
     Diagnostics,
     LocalFacts,
     check_local,
     check_remote,
+    check_runner,
     healthy,
     summarise,
 )
@@ -48,9 +51,11 @@ from dispatchkit.github import RepoState
 from dispatchkit.init import execute_init, plan_init
 from dispatchkit.init import summarise as summarise_init
 from dispatchkit.lints import lint_graph
+from dispatchkit.local import LocalRun
 from dispatchkit.metrics import plan_shape
 from dispatchkit.model import TaskGraph, TaskId
 from dispatchkit.parse import parse_graph
+from dispatchkit.recover import DispatcherBusy, hold_dispatcher
 from dispatchkit.resolve import admit, build_items, resolve
 from dispatchkit.tick import TickPlan, TickResult, execute_tick, plan_tick
 from dispatchkit.tick import summarise as summarise_tick
@@ -60,6 +65,8 @@ from dispatchkit.validate import (
     validate_acceptance,
     validate_graph,
 )
+from dispatchkit.workstation import work_root
+from dispatchkit.workstation_cli import CliWorkstation
 
 #: Seconds between passes. Long enough not to spend an API rate limit on an
 #: idle backlog, short enough that a pull request going green is picked up
@@ -130,6 +137,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--push", action="store_true", help="perform the operations (default: dry run)"
     )
     watch_cmd.add_argument(
+        "--local",
+        action="store_true",
+        help="also run lane: local tasks on this machine (requires --push)",
+    )
+    watch_cmd.add_argument(
         "--config",
         type=Path,
         default=None,
@@ -142,6 +154,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     doctor_cmd.add_argument("--root", type=Path, default=Path(), help="repository root")
     doctor_cmd.add_argument(
         "--repo", help="owner/name; also checks the repository itself when given"
+    )
+    doctor_cmd.add_argument(
+        "--local",
+        action="store_true",
+        help="also check that the local lane's runner is installed on this machine",
     )
     doctor_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
 
@@ -282,6 +299,10 @@ def _watch(args: argparse.Namespace) -> int:
         print("dispatchkit: a dry run needs --state; use --push to run for real", file=sys.stderr)
         return EXIT_UNREADABLE
 
+    if getattr(args, "local", False) and api is None:
+        print("dispatchkit: --local requires --push", file=sys.stderr)
+        return EXIT_UNREADABLE
+
     # A file cannot change under the loop, so looping over one would reprint
     # the same pass forever. Saying so beats silently doing something else.
     once = args.once or api is None
@@ -295,21 +316,55 @@ def _watch(args: argparse.Namespace) -> int:
     # needs unwinding, because a half-finished pass leaves only the operations
     # it already sent, and the next pass re-derives everything.
     try:
-        if once:
-            return _pass(args, config, api)[0]
+        with _dispatcher(args, config, api) as local:
+            if once:
+                return _pass(args, config, api, local=local)[0]
 
-        previous: TickPlan | None = None
-        number = 0
-        while True:
-            number += 1
-            code, plan = _pass(args, config, api, since=previous, number=number)
-            if code != EXIT_OK:
-                return code
-            previous = plan
-            time.sleep(args.interval)
+            previous: TickPlan | None = None
+            number = 0
+            while True:
+                number += 1
+                code, plan = _pass(
+                    args, config, api, local=local, since=previous, number=number
+                )
+                if code != EXIT_OK:
+                    return code
+                previous = plan
+                time.sleep(args.interval)
+    except DispatcherBusy as busy:
+        print(f"dispatchkit: {busy}", file=sys.stderr)
+        return EXIT_UNREADABLE
     except KeyboardInterrupt:
+        # The local run, if there is one, dies with the process. Its mark
+        # stays on the issue and the next startup sweep releases it; that is
+        # what recovery is for, and why stopping needs to be no more graceful
+        # than this.
         print("\nwatch: stopped")
         return EXIT_OK
+
+
+@contextmanager
+def _dispatcher(
+    args: argparse.Namespace, config: SchedulerConfig, api: GhCli | None
+) -> Iterator[LocalDispatcher | None]:
+    """The local lane, if it was asked for, holding the machine while it runs.
+
+    The lockfile is taken for the whole loop rather than per pass: two `watch`
+    processes would both mark and both run, and the window between passes is
+    exactly when the second one would slip in.
+    """
+    if not getattr(args, "local", False) or api is None:
+        yield None
+        return
+    root = work_root(Path.home())
+    with hold_dispatcher(root.parent / "dispatcher.pid"):
+        local = LocalDispatcher(
+            api=api,
+            machine=CliWorkstation(root=root, repo=Path.cwd()),
+            config=config,
+            root=root,
+        )
+        yield local
 
 
 def _pass(
@@ -317,6 +372,7 @@ def _pass(
     config: SchedulerConfig,
     api: GhCli | None,
     *,
+    local: LocalDispatcher | None = None,
     since: TickPlan | None = None,
     number: int | None = None,
 ) -> tuple[int, TickPlan | None]:
@@ -343,7 +399,8 @@ def _pass(
             return loaded, None
         state = loaded
 
-    plan = plan_tick(state, config=config, now=datetime.now(UTC))
+    now = datetime.now(UTC)
+    plan = plan_tick(state, config=config, now=now, served=served_lanes(local))
     report = list(summarise_tick(plan, since=since))
 
     # Execution comes before the printing decision, and never depends on it.
@@ -355,10 +412,42 @@ def _pass(
         return _emit(report, number), plan
 
     result = execute_tick(plan, api)
+    report += _local(local, plan, now=now, first=since is None)
     if report or _acted(result):
         report.append(_completion(result))
         report += [f"NOTE {notice}" for notice in result.refused]
     return _emit(report, number), plan
+
+
+def _local(
+    local: LocalDispatcher | None, plan: TickPlan, *, now: datetime, first: bool
+) -> list[str]:
+    """Give the dispatcher its turn, and say what it did.
+
+    The dispatcher reads the same items the pass just resolved rather than
+    re-fetching: they were read a moment ago, and a second read would be a
+    second answer to a question that already has one.
+    """
+    if local is None:
+        return []
+    lines: list[str] = []
+    if first:
+        lines += [f"recover {note}" for note in local.recover(plan.items)]
+    if local.busy:
+        return [*lines, f"local: still running {local.running}"]
+    finished = local.take_finished()
+    if finished is not None:
+        lines.append(_finished(finished))
+    started = local.serve(plan.items, now=now, marked=plan.marked_local)
+    if started is not None:
+        lines.append(f"local: started {started.ref}")
+    return lines
+
+
+def _finished(run: LocalRun) -> str:
+    if run.ok:
+        return f"local: {run.ref} finished, opened #{run.pr}"
+    return f"local: {run.ref} failed at {run.stage}, branch {run.branch} kept"
 
 
 def _emit(report: Sequence[str], number: int | None) -> int:
@@ -447,6 +536,13 @@ def _doctor(args: argparse.Namespace) -> int:
         return facts
 
     checks = check_local(facts)
+    if getattr(args, "local", False):
+        # Only on request. An adopter who never uses the lane has no runner
+        # and is not unhealthy for it, and a check that is red for everybody
+        # is a check nobody reads.
+        config = _load_config(facts.config_path)
+        program = config.runner.argv[0] if not isinstance(config, int) else ""
+        checks = (check_runner(program, found=shutil.which(program) if program else None),) + checks
     if args.repo:
         api = GhCli(repo=args.repo)
         try:

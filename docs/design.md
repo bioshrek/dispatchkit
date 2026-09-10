@@ -407,6 +407,42 @@ substitutions and an allowlist of model names; a task may override `model` or `e
 graph, validated against that allowlist at `validate` time. Substitution replaces a whole argv
 element and never splits one, so there is no path back to a shell.
 
+**Built (D6.4): recovery preserves, then releases, then discards — and never another order.**
+Removing the worktree before the push destroys the thing being preserved, so a failed push keeps
+its tree: it is then the only copy left. The mark still comes off, because one bad push must not
+strand a task for ever, which is the entire class of bug recovery exists to end. Commits are
+pushed even for a *closed* task, since a branch costs nothing and silently deleting somebody's
+work does not; the comment is not, because a closed task closed when its pull request merged and
+there is nothing true left to say on it.
+
+**And recovery is scoped, not swept, before a run.** It runs at startup and again before every
+run — one function, two callers — because a retained failure sits at `<plan>/<id>`, which is not
+attempt-scoped, so `git worktree add` would fail on the retry. But the *second* call sweeps only
+that task's own leftovers. A full sweep there would find the mark the scheduler set moments
+earlier, see no worktree behind it, call it abandoned and release it, and the lane would mark and
+unmark for ever without running anything. Startup is the only moment at which "every mark is
+abandoned" is true, because that is the only moment at which nothing is ours.
+
+**Built (D6.5): the thread is a worker, not a place decisions live.** `watch --local` runs the
+dispatcher in the same process on a daemon thread, and the pass asks it exactly one question — is
+it still going? Every other fact is re-derived from GitHub each pass, so a restart loses the run
+and nothing else, and recovery is what turns a lost run back into a queued task. Ctrl-C therefore
+needs to be no more graceful than killing the process: the mark stays on the issue and the next
+startup sweep releases it.
+
+One wrinkle the tests found. The dispatcher reads the items the pass just resolved, and those were
+read *before* the pass wrote its mark — so a `watch --once --local` would have marked a task and
+then found nothing to run. The plan carries the refs it marked alongside them, which keeps the
+handoff explicit rather than papering over it with a second fetch.
+
+**Serving the lane and admitting to it are one switch.** D6.0 refuses a lane nothing runs; turning
+the executor on is exactly what makes that refusal wrong. `served_lanes(dispatcher)` is the only
+place that decides, so the two cannot disagree. `doctor --local` asks the remaining question one
+step earlier — is `argv[0]` actually installed — because finding that out when a task is already
+marked costs a dispatch and a comment on somebody's issue. It is opt-in: an adopter who never uses
+the lane has no runner and is not unhealthy for it, and a check that is red for everybody is a
+check nobody reads.
+
 **Recovering its own work.** Startup reconciles from the local disk outward. A worktree holding
 commits has its branch pushed and referenced in a comment on the issue; a worktree holding none is
 discarded; either way the mark comes off and the task returns to the ready set, where the next
@@ -417,7 +453,10 @@ needs no help from GitHub.
 
 **One at a time, enforced.** A pid lockfile under `~/.dispatchkit/` refuses a second `watch` on
 the same repository and names the process already holding it, because two of them would both mark
-and both run with no error anywhere.
+and both run with no error anywhere. *Built (D6.4):* the lockfile is held for the whole
+loop rather than per pass, since the window between passes is exactly when the second process
+would slip in, and a lockfile whose process is gone is taken over rather than obeyed — refusing
+for ever on a stale number would need a human to delete a file they were never told existed.
 
 **Built (D6.1): the runner is a list, and substitution cannot change its length.** The template
 lives in `.github/dispatchkit.toml` as an argv list, and the property tested is arithmetic rather
@@ -702,13 +741,14 @@ Shipped, each with a decision record below:
 | D6.1 | The runner: argv template, model allowlist, env floor, `caps.local` invariant | A value holding `; rm -rf /` is one argument; a named credential is refused |
 | D6.2 | The `Workstation` port, its pure helpers, and the second adapter | Every command is an argv list; a worktree path reads back as its task |
 | D6.3 | The executor: worktree, prompt, runner, acceptance, push, PR   | Acceptance gates the pull request; the mark comes off however it ends     |
+| D6.4 | Recovery from the disk outward, and the one-dispatcher lockfile | A failed push keeps its tree and still releases; recovering twice is a no-op |
+| D6.5 | `watch --local`: the lane served, without holding up a pass    | A running task starts nothing else and stops no merge; `doctor --local` |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | D13.1 | The last of intervention: the clean-tree gate on `verify: auto`, and the graph watcher | A dirty tree refuses a local dispatch; a save re-plans in place |
-| D6   | Local lane executor: worktree, runner invocation, push, PR, recovery | One real capability-gated task end-to-end                                  |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |

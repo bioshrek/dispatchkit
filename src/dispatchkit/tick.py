@@ -82,6 +82,15 @@ class TickPlan:
     #: like `statuses`: it answers "what would move this?" on the line that
     #: raised the question.
     blocked_on: Mapping[TaskRef, tuple[TaskId, ...]] = field(default_factory=dict)
+    #: The tasks as resolved, for the local dispatcher (D6.5). Handed over
+    #: rather than re-read because they were read a moment ago and a second
+    #: read would be a second answer to a question that already has one --
+    #: and, like `statuses`, nothing here re-enters a decision in this pass.
+    items: tuple[TaskItem, ...] = ()
+    #: Local tasks this pass is marking. The dispatcher needs them because the
+    #: state it holds was read *before* the mark was written, so without this
+    #: a `watch --once --local` would mark and then find nothing to run.
+    marked_local: tuple[TaskRef, ...] = ()
 
     def __bool__(self) -> bool:
         return bool(self.operations)
@@ -169,6 +178,12 @@ def plan_tick(
             *merge_ops(items, config),
         ),
         statuses=projected,
+        items=tuple(items),
+        marked_local=tuple(
+            operation.ref
+            for operation in dispatch_ops
+            if isinstance(operation, LabelIssue) and LABEL_LOCAL_CLAIM in operation.add
+        ),
         admitted=tuple(dispatched),
         deferred=admission.deferred,
         notices=(

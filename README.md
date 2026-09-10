@@ -62,6 +62,33 @@ prints the full report and exits. There is no cron and no GitHub
 Actions workflow — the scheduler is a command on your machine, running as you, and nothing moves
 while it is not running.
 
+## Running work on your own machine
+
+A task marked `lane = "local"` runs here rather than in the cloud sandbox, for the things a
+sandbox cannot offer: a GPU, an OS, local data, unrestricted network, or simply more time than a
+session cap allows. It is a capability escape hatch, not a way to go faster — parallelism is the
+cloud lane's job.
+
+```sh
+dispatchkit watch --repo owner/name --push --local
+dispatchkit doctor --local     # is the runner actually installed?
+```
+
+Without `--local`, a local task is never dispatched: it defers with `no-executor` and holds no
+slot, because a lane nothing runs should say so rather than mark an issue and wait for ever.
+
+One runs at a time, in its own `git worktree` under `~/.dispatchkit/work/`, branched from
+`origin/main`. dispatchkit fetches, branches, builds the prompt from the issue's prose, runs the
+agent, runs the task's `acceptance` command, pushes, and opens the pull request with `Closes #N`
+— the agent is handed a prepared, disposable tree and asked to do exactly one thing. The child
+process gets an explicit environment allowlist with no credential in it, so an agent-authored
+`acceptance` command cannot reach your token or push anywhere; the push happens in the parent.
+
+A failed run keeps its branch and its worktree so you can look at them, and returns the task to
+the queue. Nothing in that branch is ever read back — the retry starts clean. Stopping `watch`
+with Ctrl-C loses the run in progress; the next start finds the leftovers, preserves any commits,
+and puts the task back.
+
 ## Stopping a task, without a control plane
 
 Every intervention is ordinary GitHub state, so it works from the CLI, the web UI or a phone, and

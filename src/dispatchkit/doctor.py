@@ -127,6 +127,34 @@ def _scopes(scopes: tuple[str, ...] | None) -> Check:
     return Check("token-scopes", True, f"token holds {_quoted(REQUIRED_SCOPES)}")
 
 
+def check_runner(program: str, *, found: str | None) -> Check:
+    """Is the local runner actually on this machine? (D6.5)
+
+    Only `argv[0]` is in question. Everything after it is substitution, which
+    `RunnerConfig` validates at load, so the one thing left that can be wrong
+    here is whether the program exists — and finding that out when a task is
+    already marked costs a dispatch and a comment on somebody's issue.
+
+    The lookup itself is the CLI's, like every other fact here: this decides,
+    and something else goes and looks.
+    """
+    if not program:
+        return Check(
+            "local-runner",
+            False,
+            "`runner.argv` names no program",
+            "set runner.argv in .github/dispatchkit.toml",
+        )
+    if found is None:
+        return Check(
+            "local-runner",
+            False,
+            f"`{program}` is not on PATH, so `watch --local` could not run anything",
+            f"install {program}, or drop --local and route these tasks to the cloud lane",
+        )
+    return Check("local-runner", True, f"`{program}` is at {found}")
+
+
 def _agent(available: bool) -> Check:
     if not available:
         return Check(

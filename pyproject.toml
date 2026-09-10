@@ -66,6 +66,7 @@ layers = [
     "dispatchkit.workstation_cli",
     "dispatchkit.init",
     "dispatchkit.doctor",
+    "dispatchkit.dispatcher",
     "dispatchkit.tick",
     "dispatchkit.local",
     "dispatchkit.recover",
