@@ -32,8 +32,10 @@ class TestDefaults:
         assert load_config(write(tmp_path, "")) == SchedulerConfig()
 
     def test_a_partial_file_keeps_the_defaults_it_does_not_mention(self, tmp_path: Path) -> None:
-        config = load_config(write(tmp_path, "[caps]\nlocal = 2\n"))
-        assert (config.cap(Lane.CLOUD), config.cap(Lane.LOCAL)) == (3, 2)
+        # Named `cloud` rather than `local`: since D6.1 the local cap is an
+        # invariant fixed at 1, so it is no longer an example of anything.
+        config = load_config(write(tmp_path, "[caps]\ncloud = 5\n"))
+        assert (config.cap(Lane.CLOUD), config.cap(Lane.LOCAL)) == (5, 1)
 
 
 class TestOverrides:

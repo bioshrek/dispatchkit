@@ -38,10 +38,50 @@ DEFAULT_LOCATIONS = (Path(".github/dispatchkit.toml"), Path("dispatchkit.toml"))
 DEFAULT_PLANS = Path("docs/plans")
 GRAPH_SUFFIX = ".tasks.toml"
 
-TOP_LEVEL_KEYS = frozenset({"caps", "retry", "paths", "fence"})
+TOP_LEVEL_KEYS = frozenset({"caps", "retry", "paths", "fence", "runner"})
 RETRY_KEYS = frozenset({"budget"})
 PATHS_KEYS = frozenset({"plans"})
 FENCE_KEYS = frozenset({"paths"})
+RUNNER_KEYS = frozenset({"argv", "model", "models", "env", "timeout"})
+
+#: The substitutions an argv template may use. Closed, like every other
+#: grammar here: a template naming something else is a typo the adopter wants
+#: to hear about, not an element that silently renders as itself.
+PLACEHOLDERS = frozenset({"prompt", "prompt_file", "worktree", "model", "effort"})
+
+#: What a local run inherits from the parent process.
+#:
+#: The local lane executes a task's `acceptance` on the workstation, from a
+#: body an agent may have influenced, so the question is not "what might the
+#: runner want" but "what may an agent-authored command reach". The floor is
+#: what a program needs to find its files and speak to a terminal.
+#:
+#: `SSH_AUTH_SOCK` is absent deliberately, and it is the interesting one: with
+#: no agent socket the child cannot authenticate to a remote at all, which is
+#: why the executor pushes from the parent through `gh`. The credential and
+#: the untrusted command never share a process.
+DEFAULT_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL", "USER", "LOGNAME")
+
+#: Names an adopter may not add to the allowlist, however they spell them.
+#: An allowlist that can be told to allow the token is not an allowlist, and
+#: this file is as editable by a pull request as any other.
+SECRET_MARKERS = ("TOKEN", "SECRET", "KEY", "PASSWORD", "CREDENTIAL", "AUTH", "COOKIE", "SESSION")
+
+#: The runner as shipped. `-p` takes the prompt *text*, so `{prompt}` is the
+#: substitution rather than `{prompt_file}`; handing that flag a filename runs
+#: whatever the filename happens to say.
+DEFAULT_RUNNER_ARGV = (
+    "copilot",
+    "-p",
+    "{prompt}",
+    "--model",
+    "{model}",
+    "--autopilot",
+    "--yolo",
+    "--max-autopilot-continues",
+    "20",
+)
+DEFAULT_MODELS = ("claude-opus-5", "claude-sonnet-5")
 
 
 def find_config(root: Path = Path()) -> Path:
@@ -70,6 +110,66 @@ def default_fence(config_path: Path, plans: Path) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True, slots=True)
+class RunnerConfig:
+    """How a local task is run: the command, the model, the environment.
+
+    The command is a list and never a string. Substitution replaces whole
+    elements, so `n` template elements produce exactly `n` arguments whatever
+    the value contains — a prompt holding `; rm -rf /` is one argument that
+    happens to have a semicolon in it, because nothing ever parses it again.
+    """
+
+    argv: tuple[str, ...] = DEFAULT_RUNNER_ARGV
+    #: The model used when a task names none.
+    model: str = DEFAULT_MODELS[0]
+    #: What a task's own `model` may be set to. Empty means "no overrides":
+    #: a graph file is agent-authorable, so the permissive reading of an
+    #: unanswered question is the wrong one.
+    models: tuple[str, ...] = DEFAULT_MODELS
+    #: Added to `DEFAULT_ENV`, never replacing it.
+    env: tuple[str, ...] = ()
+    #: How long a child may run before the supervisor kills it. The hang case
+    #: is a child-process problem, so it is solved with a child-process
+    #: timeout rather than anything involving GitHub.
+    timeout: timedelta = timedelta(hours=2)
+
+    def allows(self, model: str) -> bool:
+        return model in self.models
+
+    def render(self, **values: str | None) -> list[str]:
+        """Fill the template. One element in, one element out, always."""
+        return [_substitute(element, values) for element in self.argv]
+
+    def environment(self, parent: Mapping[str, str]) -> dict[str, str]:
+        allowed = (*DEFAULT_ENV, *self.env)
+        return {name: value for name, value in parent.items() if name in allowed}
+
+
+def _substitute(element: str, values: Mapping[str, str | None]) -> str:
+    rendered = element
+    for name in PLACEHOLDERS:
+        token = "{" + name + "}"
+        if token not in rendered:
+            continue
+        value = values.get(name)
+        if value is None:
+            # Dropping the element would change the argument count and an
+            # empty string in its place is a different command from the one
+            # written. Neither is ours to choose.
+            raise GraphError(
+                [
+                    GraphIssue(
+                        "missing-substitution",
+                        element,
+                        f"the runner template needs `{name}`, which this task does not set",
+                    )
+                ]
+            )
+        rendered = rendered.replace(token, value)
+    return rendered
+
+
+@dataclass(frozen=True, slots=True)
 class SchedulerConfig:
     caps: Mapping[Lane, int] = field(default_factory=lambda: dict(DEFAULT_CAPS))
     retry_budget: int = 3
@@ -79,6 +179,7 @@ class SchedulerConfig:
     fence: tuple[str, ...] = field(
         default_factory=lambda: default_fence(DEFAULT_LOCATIONS[0], DEFAULT_PLANS)
     )
+    runner: RunnerConfig = field(default_factory=RunnerConfig)
 
     def cap(self, lane: Lane) -> int:
         """A lane with no configured cap admits nothing — fail closed."""
@@ -118,10 +219,13 @@ def load_config(path: Path | None = None) -> SchedulerConfig:
     budget = _read_budget(document, path, issues)
     plans = _read_plans(document, path, issues)
     fence = _read_fence(document, path, plans, issues)
+    runner = _read_runner(document, path, issues)
 
     if issues:
         raise GraphError(issues)
-    return SchedulerConfig(caps=caps, retry_budget=budget, plans=plans, fence=fence)
+    return SchedulerConfig(
+        caps=caps, retry_budget=budget, plans=plans, fence=fence, runner=runner
+    )
 
 
 def _read_caps(
@@ -137,6 +241,21 @@ def _read_caps(
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             issues.append(
                 GraphIssue("invalid-type", str(path), f"cap for `{name}` must be a count >= 0")
+            )
+            continue
+        if lane is Lane.LOCAL and value > 1:
+            # An invariant, not a default. More local parallelism is never
+            # what is actually wanted -- it is evidence the task did not need
+            # this machine -- and a silently clamped cap would suppress the
+            # feedback the lane exists to collect.
+            issues.append(
+                GraphIssue(
+                    "local-cap-invariant",
+                    str(path),
+                    "`caps.local` is fixed at 1: the local lane is a capability escape "
+                    "hatch, not a throughput mechanism. If tasks are queueing, drop the "
+                    "`requires` that pinned them here and let the cloud lane run them.",
+                )
             )
             continue
         caps[lane] = value
@@ -205,6 +324,122 @@ def _read_fence(
         issues.append(GraphIssue("invalid-type", str(path), "`fence.paths` must be strings"))
         return default_fence(path, plans)
     return tuple(str(pattern) for pattern in patterns)
+
+
+def _read_runner(
+    document: Mapping[str, object], path: Path, issues: list[GraphIssue]
+) -> RunnerConfig:
+    runner = _table(document, "runner")
+    issues.extend(
+        GraphIssue("unknown-key", str(path), f"unknown `runner` key `{key}`")
+        for key in sorted(set(runner) - RUNNER_KEYS)
+    )
+    argv = _read_argv(runner, path, issues)
+    models = _read_strings(runner, "models", DEFAULT_MODELS, path, issues)
+    env = _read_env(runner, path, issues)
+    model = runner.get("model", DEFAULT_MODELS[0])
+    if not isinstance(model, str) or not model:
+        issues.append(GraphIssue("invalid-type", str(path), "`runner.model` must be a string"))
+        model = DEFAULT_MODELS[0]
+    elif models and model not in models:
+        # A default outside its own allowlist is the config disagreeing with
+        # itself, and it fails on the first local task rather than here.
+        issues.append(
+            GraphIssue(
+                "invalid-value",
+                str(path),
+                f"`runner.model` is {model!r}, which `runner.models` does not list",
+            )
+        )
+    return RunnerConfig(argv=argv, model=model, models=models, env=env)
+
+
+def _read_argv(
+    runner: Mapping[str, object], path: Path, issues: list[GraphIssue]
+) -> tuple[str, ...]:
+    if "argv" not in runner:
+        return DEFAULT_RUNNER_ARGV
+    argv = runner["argv"]
+    if (
+        not isinstance(argv, Sequence)
+        or isinstance(argv, str)
+        or not argv
+        or not all(isinstance(element, str) for element in argv)
+    ):
+        # A string here is the one spelling that would reintroduce a shell,
+        # so it is refused by type rather than split on whitespace.
+        issues.append(
+            GraphIssue(
+                "invalid-type",
+                str(path),
+                "`runner.argv` must be a non-empty list of strings, so that the command "
+                "is never parsed by a shell",
+            )
+        )
+        return DEFAULT_RUNNER_ARGV
+    rendered = tuple(str(element) for element in argv)
+    issues.extend(
+        GraphIssue(
+            "unknown-placeholder",
+            str(path),
+            f"`runner.argv` uses {{{name}}}, which is not one of: "
+            + ", ".join(sorted(PLACEHOLDERS)),
+        )
+        for name in sorted(_placeholders(rendered) - PLACEHOLDERS)
+    )
+    return rendered
+
+
+def _placeholders(argv: Sequence[str]) -> set[str]:
+    found: set[str] = set()
+    for element in argv:
+        rest = element
+        while "{" in rest and "}" in rest[rest.index("{") :]:
+            start = rest.index("{")
+            end = rest.index("}", start)
+            found.add(rest[start + 1 : end])
+            rest = rest[end + 1 :]
+    return found
+
+
+def _read_env(
+    runner: Mapping[str, object], path: Path, issues: list[GraphIssue]
+) -> tuple[str, ...]:
+    env = _read_strings(runner, "env", (), path, issues)
+    for name in env:
+        if any(marker in name.upper() for marker in SECRET_MARKERS):
+            issues.append(
+                GraphIssue(
+                    "refused-env",
+                    str(path),
+                    f"`runner.env` may not name {name!r}: the local lane runs "
+                    "agent-authored commands, and an allowlist that can be told to allow "
+                    "a credential is not an allowlist",
+                )
+            )
+    return env
+
+
+def _read_strings(
+    table: Mapping[str, object],
+    key: str,
+    fallback: tuple[str, ...],
+    path: Path,
+    issues: list[GraphIssue],
+) -> tuple[str, ...]:
+    if key not in table:
+        return fallback
+    value = table[key]
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, str)
+        or not all(isinstance(element, str) for element in value)
+    ):
+        issues.append(
+            GraphIssue("invalid-type", str(path), f"`runner.{key}` must be a list of strings")
+        )
+        return fallback
+    return tuple(str(element) for element in value)
 
 
 def _table(document: Mapping[str, object], key: str) -> Mapping[str, object]:

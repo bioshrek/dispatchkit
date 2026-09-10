@@ -211,6 +211,20 @@ class TestTemplatesMatchThisRepository:
         assert config.plans == Path("docs/plans")
         assert config.is_fenced(".github/workflows/dispatchkit.yml")
 
+    def test_the_template_shows_what_will_run_on_the_adopters_machine(
+        self, tmp_path: Path
+    ) -> None:
+        # The runner argv is the one default that executes something, so it is
+        # written out rather than left implicit: an adopter should not have to
+        # read our source to find out what `lane = "local"` starts.
+        path = tmp_path / "dispatchkit.toml"
+        path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+        runner = load_config(path).runner
+
+        assert runner.render(prompt="do it", model=runner.model)[0] == "copilot"
+        assert runner.allows("claude-sonnet-5")
+        assert "GH_TOKEN" not in runner.environment({"GH_TOKEN": "x", "PATH": "/bin"})
+
 
 class TestNextSteps:
     """`init` must not leave the adopter believing the setup is complete.

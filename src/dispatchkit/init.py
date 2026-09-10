@@ -187,7 +187,10 @@ CONFIG_TEMPLATE = r"""# Scheduler settings for `dispatchkit`. Every key here has
 # Concurrent cloud agent tasks. Bounded by review capacity, not by API limits:
 # more open PRs than a person can read is a queue, not throughput.
 cloud = 3
-# Concurrent local tasks. One, because the local daemon shares a working tree.
+# Concurrent local tasks. Fixed at 1, and `dispatchkit` refuses a larger value:
+# the local lane is a capability escape hatch, not a throughput mechanism, so
+# tasks queueing here is a signal to drop the `requires` that pinned them
+# rather than a reason for another slot.
 local = 1
 
 [retry]
@@ -197,6 +200,42 @@ budget = 3
 [paths]
 # Where committed task graphs live: `<plans>/<plan>.tasks.toml`.
 plans = "docs/plans"
+
+[runner]
+# What runs a `lane = "local"` task on this machine. A list, never a string:
+# substitution replaces whole elements, so `n` elements here are `n` arguments
+# there whatever a value contains, and nothing is ever parsed by a shell.
+#
+# Substitutions: {prompt} {prompt_file} {worktree} {model} {effort}
+# `-p` takes the prompt text, so {prompt} is the right one; a CLI that reads a
+# file wants {prompt_file}. The child runs with the worktree as its cwd.
+argv = [
+    "copilot",
+    "-p",
+    "{prompt}",
+    "--model",
+    "{model}",
+    "--autopilot",
+    "--yolo",
+    "--max-autopilot-continues",
+    "20",
+]
+
+# The model used when a task names none, and what a task may name instead.
+# An empty `models` means tasks may not choose at all — graph files are
+# agent-authorable, so this list is the whole of that trust boundary.
+model = "claude-opus-5"
+models = ["claude-opus-5", "claude-sonnet-5"]
+
+# Extra environment variables the runner needs, added to the floor of
+# PATH, HOME, LANG, LC_ALL, TERM, TMPDIR, SHELL, USER, LOGNAME.
+#
+# The floor is short on purpose: the local lane runs a task's `acceptance` on
+# this machine from an issue body an agent may have influenced. `gh`'s
+# credential is not in scope, and neither is SSH_AUTH_SOCK — the child cannot
+# authenticate to a remote at all, because the executor pushes from the parent.
+# Naming a credential here is refused rather than honoured.
+env = []
 
 # The blast-radius fence: paths auto-merge must never touch unattended, because
 # the pipeline may not rewrite its own rules, its own routing or its own merge

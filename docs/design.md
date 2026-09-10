@@ -419,6 +419,38 @@ needs no help from GitHub.
 the same repository and names the process already holding it, because two of them would both mark
 and both run with no error anywhere.
 
+**Built (D6.1): the runner is a list, and substitution cannot change its length.** The template
+lives in `.github/dispatchkit.toml` as an argv list, and the property tested is arithmetic rather
+than a filter: `n` template elements produce exactly `n` arguments, whatever a substituted value
+contains. A prompt holding `; rm -rf /` is one argument that happens to have a semicolon in it,
+because nothing downstream parses it again. That is what makes it safe to let a graph file — an
+agent-authorable file — name a model at all.
+
+Two smaller rules fell out while building it. A placeholder with no value is an **error**, not an
+empty string: dropping the element changes the argument count and an empty one is a different
+command from the one written, and neither is ours to choose. And `runner.argv` given as a *string*
+is refused by type rather than split on whitespace, because that spelling is the one path back to
+a shell.
+
+**The environment allowlist has a floor an adopter may extend but not breach.** The child gets
+`PATH`, `HOME`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `SHELL`, `USER`, `LOGNAME` and whatever
+`runner.env` adds — except that a name matching a credential marker (`TOKEN`, `SECRET`, `KEY`,
+`PASSWORD`, `CREDENTIAL`, `AUTH`, `COOKIE`, `SESSION`) is **refused at load**. An allowlist that
+can be told to allow the token is not an allowlist, and this config file is as editable by a pull
+request as any other file in the tree.
+
+`SSH_AUTH_SOCK` is absent deliberately, and it is the load-bearing omission: with no agent socket
+the child cannot authenticate to a remote at all, which forces the executor to push from the
+**parent** through `gh`. The credential and the untrusted command never share a process, and that
+falls out of the allowlist rather than having to be remembered.
+
+**The shipped template passes the prompt as text, not as a path.** The first draft used
+`{prompt_file}` against `copilot -p`, which takes the prompt *itself* — it would have run whatever
+the filename happened to say. Both substitutions exist, because a CLI that reads a file is
+equally plausible; the default matches the CLI it names. The template is written out in full in
+the config rather than left implicit, since it is the one default that executes something, and an
+adopter should not have to read our source to learn what `lane = "local"` starts on their machine.
+
 **Found before D6 was built: marking for an absent executor is worse than doing nothing.** The
 dispatcher labelled a ready `lane: local` task `dispatch:local` and moved on, on the two-component
 reasoning above — the executor discovers work by reading issue state, so the label *is* the
@@ -539,8 +571,9 @@ damage to one wasted session.
 - No token is ever stored. The pass runs on the workstation against `gh`'s own keychain
   credential, so there is no secret in a repository and no long-lived PAT to leak. Nothing in the
   pipeline needs `contents: write` — only PRs mutate the tree.
-- Issue bodies are attacker-influencable text. The machine block is parsed as YAML with a safe
-  loader and validated against a strict schema; unknown keys and non-slug ids are rejected.
+- Issue bodies are attacker-influencable text. The machine block is parsed by a closed grammar of
+  its own in `block.py` — never a YAML loader, never `eval`, never a regex that accepts unknown
+  keys — and validated against a strict schema; unknown keys and non-slug ids are rejected.
   Nothing from an issue body is ever interpolated into a shell command — `acceptance` is
   executed as an argv list by the runner, not through a shell.
 - The process holds the workstation's credentials and the cloud lane never sees them; it
@@ -617,6 +650,7 @@ Shipped, each with a decision record below:
 | D13.1b | `Cancelled`: closed as not planned satisfies nothing         | A dependent of a cancelled task is never dispatched, and is reported     |
 | D13.1c | `dispatch:hold`: the human's "not now"                       | A held task is not dispatched or merged, and is charged no attempt       |
 | D6.0 | A lane with no executor is refused at admission               | A `lane: local` task defers on `no-executor` and reserves nothing        |
+| D6.1 | The runner: argv template, model allowlist, env floor, `caps.local` invariant | A value holding `; rm -rf /` is one argument; a named credential is refused |
 
 Remaining, in build order:
 
