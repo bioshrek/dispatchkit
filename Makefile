@@ -1,4 +1,4 @@
-.PHONY: check test lint types imports doctor validate resolve tick
+.PHONY: check test lint types imports doctor validate resolve pass
 
 # The whole gate, in the order that fails fastest.
 check: test lint types imports
@@ -15,9 +15,10 @@ types:
 imports:
 	uv run lint-imports
 
-# Can this repository run a pass at all? Offline without REPO/PROJECT.
+# Can this repository run a pass at all? Offline without REPO; the local half
+# (the fence, the config, the plans directory) is answered either way.
 doctor:
-	uv run dispatchkit doctor $(if $(REPO),--repo $(REPO) --project $(PROJECT),)
+	uv run dispatchkit doctor $(if $(REPO),--repo $(REPO),)
 
 # Check a task graph before it is reviewed or applied. Exit 0 valid, 1 invalid,
 # 2 unreadable.
@@ -28,6 +29,8 @@ validate:
 resolve:
 	uv run dispatchkit resolve --state $(STATE) --plan $(PLAN)
 
-# One scheduler pass, dry run against a recorded snapshot.
-tick:
-	uv run dispatchkit tick --plan $(PLAN) --state $(STATE)
+# One scheduler pass, dry run against a recorded snapshot. `tick` became
+# `watch --once` in D13, when a terminating pass turned into a flag rather
+# than a second command.
+pass:
+	uv run dispatchkit watch --once --state $(STATE)

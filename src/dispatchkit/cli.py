@@ -89,7 +89,12 @@ def plan_name(path: Path) -> str:
     return path.name.removesuffix(".toml").removesuffix(".tasks")
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The whole command surface, separated from running it.
+
+    So a test can ask what the CLI accepts without executing anything —
+    which is how the Makefile's two dead invocations were finally caught.
+    """
     parser = argparse.ArgumentParser(prog="dispatchkit", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -173,7 +178,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     init_cmd.add_argument("--repo", help="owner/name; creates the labels too when given")
     init_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     if args.command == "doctor":
         return _doctor(args)
     if args.command == "init":
