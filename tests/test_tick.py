@@ -1,6 +1,6 @@
 """D5: `tick` — the full scheduler pass, including the one mutating step.
 
-Load → resolve → reconcile → admit → dispatch. Only dispatch mutates work
+Load → resolve → report → admit → dispatch. Only dispatch mutates work
 assignment, and it is guarded by assignment itself: assigning the issue *is*
 the lock, so the claim being tested here is the same one D3 made about `apply`
 — run the pass twice and the second run must do nothing.
@@ -19,11 +19,11 @@ from dispatchkit.cli import main
 from dispatchkit.config import SchedulerConfig
 from dispatchkit.github import (
     AssignAgent,
+    IssueState,
     LabelIssue,
     MarkReady,
     MergePr,
     RepoState,
-    SetProjectField,
 )
 from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 from dispatchkit.resolve import LABEL_LOCAL_CLAIM, Status
@@ -64,7 +64,7 @@ class TestDispatchByLane:
         ] == [TaskId("a")]
 
     def test_a_closed_task_is_never_touched(self) -> None:
-        state = state_of(issue("a", 1, closed=True, fields={"Status": "Done"}))
+        state = state_of(issue("a", 1, closed=True))
         assert plan_tick(state, plan=PLAN, config=CONFIG, now=NOW).operations == ()
 
     def test_an_already_assigned_task_is_not_reassigned(self) -> None:
@@ -72,45 +72,48 @@ class TestDispatchByLane:
         assert dispatches(plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)) == []
 
 
-class TestBoardReconciliation:
-    def test_status_is_written_for_every_item_not_just_dispatched_ones(self) -> None:
-        # A board that only tracked in-flight work would be silent about the
-        # thing a human actually wants to know: why nothing is moving.
+class TestTheReport:
+    """What the pass prints, which since D14 is the whole of its output."""
+
+    def test_every_task_is_reported_not_just_the_dispatched_ones(self) -> None:
+        # A report covering only in-flight work would be silent about the thing
+        # a human actually wants to know: why nothing is moving.
         state = state_of(
-            issue("a", 1, closed=True, fields={"Status": "Ready"}),
-            issue("b", 2, depends=("a",), fields={"Status": "Done"}),
-            issue("c", 3, depends=("b",), fields={"Status": "Ready"}),
+            issue("a", 1, closed=True),
+            issue("b", 2, depends=("a",)),
+            issue("c", 3, depends=("b",)),
         )
-        writes = [
-            op
-            for op in plan_tick(state, plan=PLAN, config=CONFIG, now=NOW).operations
-            if isinstance(op, SetProjectField)
-        ]
-        assert [(op.task_id, op.value) for op in writes] == [
-            (TaskId("a"), "Done"),
-            (TaskId("b"), "Dispatched"),
-            (TaskId("c"), "Blocked"),
-        ]
+        plan = plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)
+        assert plan.statuses == {
+            TaskId("a"): Status.DONE,
+            TaskId("b"): Status.DISPATCHED,
+            TaskId("c"): Status.BLOCKED,
+        }
 
-    def test_a_task_dispatched_this_pass_is_recorded_as_dispatched_not_ready(self) -> None:
-        # Writing `Ready` for an issue we just assigned would leave the board
-        # contradicting the issue for half an hour, until the next pass.
+    def test_a_task_dispatched_this_pass_reads_as_dispatched_not_ready(self) -> None:
+        # Printing `Ready` for an issue this pass just assigned would have the
+        # report contradicting the repository at the moment it is read.
         plan = plan_tick(state_of(issue("a", 1)), plan=PLAN, config=CONFIG, now=NOW)
-        writes = [op for op in plan.operations if isinstance(op, SetProjectField)]
-        assert writes == [SetProjectField(TaskId("a"), "Status", "Dispatched")]
+        assert plan.statuses[TaskId("a")] is Status.DISPATCHED
 
-    def test_a_deferred_task_stays_ready_on_the_board(self) -> None:
-        # Deferred means "unblocked, not started" — the board should say so,
+    def test_a_deferred_task_still_reads_as_ready(self) -> None:
+        # Deferred means "unblocked, not started" — the report should say so,
         # otherwise a capped lane looks like a blocked plan.
         state = state_of(*(issue(f"t{i}", i) for i in range(1, 6)))
         plan = plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)
-        values = {op.task_id: op.value for op in plan.operations if isinstance(op, SetProjectField)}
-        assert values[TaskId("t4")] == "Ready"
-        assert values[TaskId("t5")] == "Ready"
+        assert plan.statuses[TaskId("t4")] is Status.READY
+        assert plan.statuses[TaskId("t5")] is Status.READY
 
-    def test_the_lock_is_taken_before_the_board_is_updated(self) -> None:
-        # If the pass dies between the two, an assigned issue with a stale
-        # board entry self-heals next pass; the reverse would double-dispatch.
+    def test_the_report_is_the_only_place_a_status_goes(self) -> None:
+        # D14: no operation a pass emits records a status anywhere. If one ever
+        # did, it would be the stored state the whole design excludes.
+        state = state_of(issue("a", 1), issue("b", 2, depends=("a",)))
+        plan = plan_tick(state, plan=PLAN, config=CONFIG, now=NOW)
+        assert all(isinstance(op, AssignAgent) for op in plan.operations)
+
+    def test_the_lock_is_taken_before_anything_else_happens(self) -> None:
+        # Dispatch first: a pass that dies later leaves an assigned issue, and
+        # the next pass derives that unaided.
         ops = plan_tick(state_of(issue("a", 1)), plan=PLAN, config=CONFIG, now=NOW).operations
         assert isinstance(ops[0], AssignAgent)
 
@@ -173,14 +176,14 @@ class TestExecution:
         result = execute_tick(
             plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW), api
         )
-        assert (result.dispatched, result.reconciled) == (2, 2)
+        assert result.dispatched == 2
 
     def test_an_empty_plan_touches_nothing(self) -> None:
         api = FakeGitHub(state=RepoState(()))
         result = execute_tick(
             plan_tick(api.fetch_state(plan=PLAN), plan=PLAN, config=CONFIG, now=NOW), api
         )
-        assert (result.dispatched, result.reconciled) == (0, 0)
+        assert result.dispatched == 0
         assert api.calls == ["fetch_state(demo)"]
 
 
@@ -221,7 +224,7 @@ class TestStalledCi:
         plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG, now=NOW)
         assert [notice.code for notice in plan.notices] == ["ci-approval-required"]
 
-    def test_the_board_is_told_in_review_rather_than_auto_merging(self) -> None:
+    def test_the_report_says_in_review_rather_than_auto_merging(self) -> None:
         plan = plan_tick(self._state(Checks.BLOCKED), plan=PLAN, config=CONFIG, now=NOW)
         assert plan.statuses[TaskId("a")] is Status.IN_REVIEW
 
@@ -284,11 +287,11 @@ class TestTickCommand:
 class TestMarkingAutoPrsReady:
     """A pass clears the draft gate for `verify: auto`, and only then.
 
-    The ordering matters for the same reason dispatch-before-record does: the
-    status the board is told reflects the operations this pass is about to
-    perform, and a draft cleared now is `Auto-merging` on the next pass, not
-    this one. Claiming it early would be the board asserting a merge over a
-    pull request that was still a draft when we looked.
+    The ordering matters for the same reason dispatching first does: the status
+    reported reflects the operations this pass is about to perform, and a draft
+    cleared now is `Auto-merging` on the next pass, not this one. Claiming it
+    early would be the report asserting a merge over a pull request that was
+    still a draft when we looked.
     """
 
     @staticmethod
@@ -315,7 +318,7 @@ class TestMarkingAutoPrsReady:
         plan = self._plan(Verify.HUMAN, Checks.PASSING)
         assert not [op for op in plan.operations if isinstance(op, MarkReady)]
 
-    def test_the_board_is_not_told_auto_merging_in_the_same_pass(self) -> None:
+    def test_the_report_does_not_say_auto_merging_in_the_same_pass(self) -> None:
         plan = self._plan(Verify.AUTO, Checks.PASSING)
         assert plan.statuses[TaskId("a")] is Status.IN_REVIEW
 
@@ -482,42 +485,43 @@ class TestMergingConverges:
 class TestARefusedMergeDoesNotEndThePass:
     """GitHub refusing a merge is a normal event, not a crash.
 
-    Live, a conflicting pull request took the whole pass down with a traceback
-    — and because the merge is planned before the board writes, the pass also
-    lost every reconciliation that came after it. A refusal has to be reported
-    and stepped over, exactly like the CI notices are.
+    Live, a conflicting pull request took the whole pass down with a traceback,
+    and everything planned behind it was lost. A refusal has to be reported and
+    stepped over, exactly like the CI notices are.
+
+    What was lost then was the board writes queued after the merge. There are
+    none since D14, so the invariant is stated against what remains and cannot
+    go away: the *other* tasks in the same pass.
     """
 
     class _Refusing(FakeGitHub):
         def merge_pr(self, *, number: int) -> None:
-            raise RuntimeError("gh pr failed: GraphQL: Pull Request has merge conflicts")
+            if number == 7:
+                raise RuntimeError("gh pr failed: GraphQL: Pull Request has merge conflicts")
+            super().merge_pr(number=number)
+
+    @staticmethod
+    def _mergeable(name: str, number: int, pr: int) -> IssueState:
+        return issue(
+            name,
+            number=number,
+            verify=Verify.AUTO,
+            assignees=("copilot",),
+            touches=("src/**",),
+            open_prs=(
+                PullRequest(pr, Checks.PASSING, draft=False, files=("src/app.py",), mergeable=True),
+            ),
+        )
 
     def _state(self) -> RepoState:
-        return state_of(
-            issue(
-                "a",
-                number=3,
-                verify=Verify.AUTO,
-                assignees=("copilot",),
-                touches=("src/**",),
-                open_prs=(
-                    PullRequest(
-                        7,
-                        Checks.PASSING,
-                        draft=False,
-                        files=("src/app.py",),
-                        mergeable=True,
-                    ),
-                ),
-            )
-        )
+        return state_of(self._mergeable("a", 3, 7), self._mergeable("b", 4, 8))
 
     def test_the_pass_survives(self) -> None:
         api = self._Refusing(state=self._state())
         result = execute_tick(
             plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api
         )
-        assert result.merged == 0
+        assert [notice.code for notice in result.refused] == ["merge-refused"]
 
     def test_the_refusal_is_reported(self) -> None:
         api = self._Refusing(state=self._state())
@@ -526,11 +530,12 @@ class TestARefusedMergeDoesNotEndThePass:
         )
         assert any("conflict" in notice.message for notice in result.refused)
 
-    def test_the_board_is_still_written(self) -> None:
-        # The regression that cost a live pass: operations are ordered merge
-        # first, so an exception there silently dropped every board write.
+    def test_the_operations_behind_it_still_run(self) -> None:
+        # The regression that cost a live pass: one raising operation silently
+        # dropped every operation planned after it.
         api = self._Refusing(state=self._state())
         result = execute_tick(
             plan_tick(api.state, plan=PLAN, config=SchedulerConfig(), now=NOW), api
         )
-        assert result.reconciled > 0
+        assert result.merged == 1
+        assert "merge_pr(8)" in api.calls

@@ -1,9 +1,9 @@
-"""`apply` — reconcile a task graph into GitHub issues and Project items (D3).
+"""`apply` — reconcile a task graph into GitHub issues (D3).
 
 Planning is a pure function of `(graph, RepoState)`; execution is a thin loop
-that performs the planned operations and threads created issue numbers through
-to the Project calls. Splitting them is what makes the idempotency claim
-testable offline: apply, re-read, plan again, assert the plan is empty.
+that performs the planned operations. Splitting them is what makes the
+idempotency claim testable offline: apply, re-read, plan again, assert the plan
+is empty.
 
 `id` is the idempotency key, carried in the issue's machine block rather than
 in a side table, so a re-run updates the existing issue instead of creating a
@@ -14,8 +14,9 @@ twin. Three things `apply` refuses to do:
 - **Delete anything.** An issue whose task has left the graph is reported as an
   orphan for a human to close — the workflow token cannot delete issues, and
   silently closing work is not a decision a reconciler should make.
-- **Write `Status` or `Attempts`.** They are derived scheduling state, owned by
-  the scheduler and recomputed on every pass.
+- **Record status anywhere.** It is derived scheduling state, recomputed from
+  the issues on every pass and printed; the labels below mirror only what the
+  machine block already says, which is a copy that cannot go stale.
 """
 
 from __future__ import annotations
@@ -25,13 +26,8 @@ from collections.abc import Mapping
 from dispatchkit.block import parse_block, render_block
 from dispatchkit.errors import GraphError
 from dispatchkit.github import (
-    APPLIED_FIELDS,
     DISPATCHKIT_LABEL,
-    FIELD_LANE,
-    FIELD_TASK_ID,
-    FIELD_VERIFY,
     MANAGED_LABEL_PREFIXES,
-    AddProjectItem,
     ApplyPlan,
     ApplyResult,
     CreateIssue,
@@ -40,7 +36,6 @@ from dispatchkit.github import (
     Notice,
     Operation,
     RepoState,
-    SetProjectField,
     UpdateIssue,
 )
 from dispatchkit.model import Task, TaskGraph, TaskId
@@ -68,28 +63,12 @@ def build_body(task: Task, *, plan: str, spec: str | None = None) -> str:
     return "\n\n".join(sections) + "\n"
 
 
-def desired_fields(task: Task) -> dict[str, str]:
-    return {
-        FIELD_TASK_ID: str(task.id),
-        FIELD_LANE: task.lane.value,
-        FIELD_VERIFY: task.verify.value,
-    }
-
-
 def plan_apply(
     graph: TaskGraph, state: RepoState, specs: Mapping[TaskId, str] | None = None
 ) -> ApplyPlan:
     """Diff the graph against GitHub. Pure: no I/O, no client, no ordering surprises."""
     specs = specs or {}
     existing, notices = _index(state, plan=graph.plan)
-    # Captured before the loop pops from `existing`. Every board item that
-    # already exists, so a field operation on an issue an earlier run put on
-    # the board has an id to write to.
-    boarded = {
-        task_id: issue.project_item_id
-        for task_id, issue in existing.items()
-        if issue.project_item_id is not None
-    }
     operations: list[Operation] = []
 
     for task in graph.tasks:
@@ -99,8 +78,6 @@ def plan_apply(
 
         if issue is None:
             operations.append(CreateIssue(task.id, task.title, body, labels))
-            operations.append(AddProjectItem(task.id, None))
-            operations.extend(_field_ops(task, current={}))
             continue
 
         if issue.closed:
@@ -120,12 +97,6 @@ def plan_apply(
         if (issue.title, issue.body, set(issue.labels)) != (task.title, body, set(merged)):
             operations.append(UpdateIssue(task.id, issue.number, task.title, body, merged, stale))
 
-        if issue.project_item_id is None:
-            operations.append(AddProjectItem(task.id, issue.number))
-            operations.extend(_field_ops(task, current={}))
-        else:
-            operations.extend(_field_ops(task, current=issue.fields))
-
     for task_id, issue in existing.items():
         if not issue.closed:
             notices.append(
@@ -137,18 +108,17 @@ def plan_apply(
                     "close it by hand — `apply` never deletes",
                 )
             )
-    return ApplyPlan(tuple(operations), tuple(notices), item_ids=boarded)
+    return ApplyPlan(tuple(operations), tuple(notices))
 
 
 def execute_plan(plan: ApplyPlan, api: GitHubApi) -> ApplyResult:
-    """Perform the planned operations, threading created numbers into Project calls."""
+    """Perform the planned operations. Issues only: there is nowhere else to write."""
     labels = sorted({label for op in plan.operations for label in _labels_of(op)})
     if labels:
         api.ensure_labels(labels)
 
     numbers: dict[TaskId, int] = {}
-    items: dict[TaskId, str] = dict(plan.item_ids)
-    created = updated = added = fields_set = 0
+    created = updated = 0
 
     for operation in plan.operations:
         match operation:
@@ -167,21 +137,8 @@ def execute_plan(plan: ApplyPlan, api: GitHubApi) -> ApplyResult:
                 )
                 numbers[operation.task_id] = operation.number
                 updated += 1
-            case AddProjectItem():
-                resolved = (
-                    operation.number if operation.number is not None else numbers[operation.task_id]
-                )
-                items[operation.task_id] = api.add_project_item(issue_number=resolved)
-                added += 1
-            case SetProjectField():
-                api.set_project_field(
-                    item_id=items[operation.task_id],
-                    field_name=operation.field_name,
-                    value=operation.value,
-                )
-                fields_set += 1
 
-    return ApplyResult(created, updated, added, fields_set, tuple(numbers.values()))
+    return ApplyResult(created, updated, tuple(numbers.values()))
 
 
 def _index(state: RepoState, *, plan: str) -> tuple[dict[TaskId, IssueState], list[Notice]]:
@@ -208,15 +165,6 @@ def _index(state: RepoState, *, plan: str) -> tuple[dict[TaskId, IssueState], li
             continue
         indexed[block.id] = issue
     return indexed, notices
-
-
-def _field_ops(task: Task, *, current: Mapping[str, str]) -> list[Operation]:
-    wanted = desired_fields(task)
-    return [
-        SetProjectField(task.id, name, wanted[name])
-        for name in APPLIED_FIELDS
-        if current.get(name) != wanted[name]
-    ]
 
 
 def _merge_labels(

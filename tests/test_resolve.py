@@ -1,9 +1,9 @@
 """D4: readiness resolution and admission as pure functions.
 
 Everything here is a function of the issue snapshot alone — no network, no
-local state, no graph file. That is the design claim being tested: if the
-Project board were deleted, the scheduler could rebuild it from the issues,
-because `Status` is derived rather than stored.
+local state, no graph file. That is the design claim being tested: `Status` is
+derived rather than stored, so there is nothing anywhere that could disagree
+with the issues, and a status is only ever computed and printed.
 
 The rule under test, verbatim from the design: *a task is ready iff it is open,
 unassigned, and every id in `depends` maps to a closed issue.*
@@ -12,7 +12,7 @@ unassigned, and every id in `depends` maps to a closed issue.*
 from __future__ import annotations
 
 from dispatchkit.config import SchedulerConfig
-from dispatchkit.github import MarkReady, MergePr, SetProjectField
+from dispatchkit.github import MarkReady, MergePr
 from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
 from dispatchkit.resolve import (
     Status,
@@ -20,7 +20,6 @@ from dispatchkit.resolve import (
     ci_notices,
     merge_ops,
     ready_ops,
-    reconcile_ops,
     resolve,
 )
 from tests.items import item, items_of
@@ -254,31 +253,32 @@ class TestSyntheticShapes:
         assert statuses[TaskId("b")] is Status.READY
 
 
-class TestReconciliation:
-    def test_status_is_written_for_every_item_not_just_dispatched_ones(self) -> None:
-        nodes = items_of(
-            item("a", closed=True, fields={"Status": "Dispatched"}),
-            item("b", depends=("a",), fields={"Status": "Blocked"}),
-        )
-        ops = reconcile_ops(nodes, resolve(nodes))
-        assert [(op.task_id, op.value) for op in ops] == [
-            (TaskId("a"), "Done"),
-            (TaskId("b"), "Ready"),
-        ]
+class TestStatusIsDerivedAndNotStored:
+    """D14: there is nowhere to record a status, so there is nothing to reconcile.
 
-    def test_an_already_correct_status_is_not_rewritten(self) -> None:
-        nodes = items_of(item("a", fields={"Status": "Ready"}))
-        assert reconcile_ops(nodes, resolve(nodes)) == ()
+    What the board's reconciliation used to prove is now a property of
+    `resolve` itself: it answers for every task on every pass, from the issues
+    alone, having read nothing it wrote earlier.
+    """
 
-    def test_reconciliation_only_ever_writes_status(self) -> None:
-        nodes = items_of(item("a", fields={}))
-        ops = reconcile_ops(nodes, resolve(nodes))
-        assert all(isinstance(op, SetProjectField) and op.field_name == "Status" for op in ops)
+    def test_every_task_gets_a_status_not_just_the_dispatched_ones(self) -> None:
+        # An idle pass has to explain itself, so a task nothing is happening to
+        # is still answered for.
+        nodes = items_of(item("a", closed=True), item("b", depends=("a",)))
+        assert resolve(nodes) == {TaskId("a"): Status.DONE, TaskId("b"): Status.READY}
 
-    def test_an_item_not_on_the_board_is_skipped(self) -> None:
-        # Nothing to write a field on; `apply` adds the item on its next run.
-        nodes = items_of(item("a", project_item_id=None))
-        assert reconcile_ops(nodes, resolve(nodes)) == ()
+    def test_the_same_snapshot_always_derives_the_same_statuses(self) -> None:
+        # Nothing accumulates between passes, so resolving twice is resolving
+        # once. This is what makes killing a pass mid-loop harmless.
+        nodes = items_of(item("a", assignees=("copilot-swe-agent",)), item("b", depends=("a",)))
+        assert resolve(nodes) == resolve(nodes)
+
+    def test_a_stale_label_cannot_contradict_the_derivation(self) -> None:
+        # A `status:*` label is exactly the stored state D14 removed. Should
+        # one ever appear -- hand-written, or from an older version -- it is
+        # not consulted: the issue itself decides.
+        nodes = items_of(item("a", labels=("dispatchkit", "status:Done")))
+        assert resolve(nodes)[TaskId("a")] is Status.READY
 
 
 class TestAdmission:

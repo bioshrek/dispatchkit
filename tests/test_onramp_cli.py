@@ -1,9 +1,9 @@
 """D5.5: the `doctor` and `init` CLI surface.
 
 Both are adoption commands, so both have to be usable before anything is set
-up — including before a token, a board or a network connection exists. That is
-why each has an offline form: `doctor` with no `--repo` checks the working
-tree alone, and `init` without `--push` plans against an empty board.
+up — including before a token or a network connection exists. That is why
+each has an offline form, and since D14 both have the same one: without
+`--repo` each does the whole of the half that needs no credential.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.unit
 
 
 def tree(root: Path) -> None:
-    """A repository as `init` would leave it, minus the board.
+    """A repository as `init` would leave it, minus the labels.
 
     The workflow is the real template rather than a stub: `doctor` now checks
     that whatever the workflow puts on `PYTHONPATH` is actually provided, and
@@ -43,7 +43,7 @@ class TestDoctorOffline:
 
         out = capsys.readouterr().out
         assert "workflow" in out
-        assert "the board was not inspected" in out
+        assert "the repository was not inspected" in out
 
     def test_a_bare_tree_fails_and_names_what_is_missing(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -88,43 +88,46 @@ class TestDoctorOffline:
 
 
 class TestInitOffline:
-    def test_a_dry_run_plans_against_an_empty_board(
+    def test_without_a_repository_it_writes_the_half_that_needs_no_token(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        # Files and directories need no credential. D14 removed the `--local`
+        # flag that used to gate this: the split was really at the `project`
+        # scope, and that scope is gone.
         assert main(["init", "--root", str(tmp_path)]) == 0
-
-        out = capsys.readouterr().out
-        assert "CreateField Status" in out
-        assert "CreateLabel dispatchkit" in out
-        assert "--push" in out
-
-    def test_a_dry_run_writes_nothing(self, tmp_path: Path) -> None:
-        main(["init", "--root", str(tmp_path)])
-        assert not (tmp_path / ".github").exists()
-
-    def test_local_writes_it_can_do_alone(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        # Files and directories need no token, so `--local` is the half of
-        # init that works before `gh auth refresh -s project` has been run.
-        assert main(["init", "--root", str(tmp_path), "--local"]) == 0
 
         assert (tmp_path / ".github" / "dispatchkit.toml").exists()
         assert (tmp_path / ".github" / "workflows" / "dispatchkit.yml").exists()
         assert (tmp_path / "docs" / "plans").is_dir()
-        assert "board" in capsys.readouterr().out
 
-    def test_the_local_half_is_idempotent(self, tmp_path: Path) -> None:
-        main(["init", "--root", str(tmp_path), "--local"])
+        out = capsys.readouterr().out
+        assert "CreateLabel dispatchkit" in out
+        assert "no --repo, so the labels were not created" in out
+
+    def test_it_plans_no_board_field(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        main(["init", "--root", str(tmp_path)])
+        out = capsys.readouterr().out
+        assert "CreateField" not in out
+        assert "SetFieldOptions" not in out
+
+    def test_it_is_idempotent(self, tmp_path: Path) -> None:
+        main(["init", "--root", str(tmp_path)])
         written = (tmp_path / ".github" / "dispatchkit.toml").read_text(encoding="utf-8")
 
-        assert main(["init", "--root", str(tmp_path), "--local"]) == 0
+        assert main(["init", "--root", str(tmp_path)]) == 0
         assert (tmp_path / ".github" / "dispatchkit.toml").read_text(encoding="utf-8") == written
 
     def test_what_it_writes_satisfies_doctor(self, tmp_path: Path) -> None:
         """The on-ramp's whole promise, as one assertion."""
-        main(["init", "--root", str(tmp_path), "--local"])
+        main(["init", "--root", str(tmp_path)])
         assert main(["doctor", "--root", str(tmp_path)]) == 0
+
+    def test_it_never_reaches_the_network_without_a_repository(self, tmp_path: Path) -> None:
+        # The `unit` tier blocks sockets outright, so this passing at all is
+        # the assertion: no client is constructed.
+        assert main(["init", "--root", str(tmp_path)]) == 0
 
     def test_a_relative_root_writes_where_it_says_it_does(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -134,7 +137,7 @@ class TestInitOffline:
         # landed everything under `<root>/<root>/` while the summary named
         # `<root>/`. Absolute roots hid it, and every other test uses one.
         monkeypatch.chdir(tmp_path)
-        assert main(["init", "--root", "sub", "--local"]) == 0
+        assert main(["init", "--root", "sub"]) == 0
 
         assert (tmp_path / "sub" / ".github" / "dispatchkit.toml").exists()
         assert not (tmp_path / "sub" / "sub").exists()
@@ -143,28 +146,21 @@ class TestInitOffline:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        main(["init", "--root", "sub", "--local"])
+        main(["init", "--root", "sub"])
         capsys.readouterr()
 
-        assert main(["init", "--root", "sub", "--local"]) == 0
+        assert main(["init", "--root", "sub"]) == 0
         assert main(["doctor", "--root", "sub"]) == 0
         assert "init: 0 file(s), 0 directory(ies)" in capsys.readouterr().out
 
-    def test_pushing_requires_a_repository_and_a_project(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        assert main(["init", "--root", str(tmp_path), "--push"]) == 2
-        assert "--repo" in capsys.readouterr().err
 
-
-class TestBoardUnreachable:
+class TestRepositoryUnreachable:
     """`gh` failing is the diagnosis, not a crash.
 
-    Every first-adopter failure `doctor` exists to name — `project` scope not
-    granted, wrong project number, board not created yet, not logged in —
-    reaches the adapter as a non-zero `gh` exit. That must come back as a
-    reported failure and exit 2 ("could not be carried out"), never a
-    traceback.
+    Every first-adopter failure `doctor` exists to name — a repository that
+    does not exist, a name typed wrong, no credential at all — reaches the
+    adapter as a non-zero `gh` exit. That must come back as a reported failure
+    and exit 2 ("could not be carried out"), never a traceback.
     """
 
     class Unreachable:
@@ -175,13 +171,13 @@ class TestBoardUnreachable:
             return None
 
         def workflow_inputs(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
-            raise RuntimeError("gh api failed: project not found")
+            raise RuntimeError("gh api failed: repository not found")
 
         def agent_available(self) -> bool:
-            raise RuntimeError("gh api failed: project not found")
+            raise RuntimeError("gh api failed: repository not found")
 
-        def fetch_board(self) -> object:
-            raise RuntimeError("gh api failed: project not found")
+        def fetch_labels(self) -> tuple[str, ...]:
+            raise RuntimeError("gh api failed: repository not found")
 
     def test_doctor_reports_it_and_exits_two(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
@@ -189,24 +185,24 @@ class TestBoardUnreachable:
         tree(tmp_path)
         monkeypatch.setattr("dispatchkit.cli.GhCli", self.Unreachable)
 
-        code = main(["doctor", "--root", str(tmp_path), "--repo", "o/n", "--project", "1"])
+        code = main(["doctor", "--root", str(tmp_path), "--repo", "o/n"])
 
         assert code == 2
         out = capsys.readouterr().out
-        assert "FAIL board" in out
-        assert "project not found" in out
+        assert "FAIL repository" in out
+        assert "repository not found" in out
         assert "ok   workflow" in out  # the local half still reported
 
-    def test_init_push_reports_it_and_exits_two(
+    def test_init_reports_it_and_exits_two(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         tree(tmp_path)
         monkeypatch.setattr("dispatchkit.cli.GhCli", self.Unreachable)
 
-        code = main(["init", "--root", str(tmp_path), "--push", "--repo", "o/n", "--project", "1"])
+        code = main(["init", "--root", str(tmp_path), "--repo", "o/n"])
 
         assert code == 2
-        assert "project not found" in capsys.readouterr().err
+        assert "repository not found" in capsys.readouterr().err
 
 
 class TestTickCannotReachGitHub:
@@ -221,8 +217,8 @@ class TestTickCannotReachGitHub:
     """
 
     class Unreachable:
-        def __init__(self, *, repo: str, project: int) -> None:
-            self.repo, self.project = repo, project
+        def __init__(self, *, repo: str) -> None:
+            self.repo = repo
 
         def fetch_state(self, *, plan: str) -> object:
             raise RuntimeError(
@@ -244,8 +240,6 @@ class TestTickCannotReachGitHub:
                 "--push",
                 "--repo",
                 "o/n",
-                "--project",
-                "1",
                 "--config",
                 str(tmp_path / ".github" / "dispatchkit.toml"),
             ]
@@ -271,8 +265,6 @@ class TestTickCannotReachGitHub:
                 "--push",
                 "--repo",
                 "o/n",
-                "--project",
-                "1",
                 "--config",
                 str(tmp_path / ".github" / "dispatchkit.toml"),
             ]

@@ -76,11 +76,11 @@ keep it that way. The process that holds a token which can assign work runs no t
 ## Status
 
 Early, and honest about it. Applying a graph, dispatching to the cloud agent, the retry budget and
-`verify: auto` auto-merge are built and have run live against a real repository. Being built now,
-in this order: retiring the Project board so `repo` scope is all you need (D14), `watch` itself
-(D13), and the local lane executor (D6) — until they land, the commands above still take
-`--project`, the scheduler is `dispatchkit tick`, and `lane = "local"` parks a task rather than
-running it.
+`verify: auto` auto-merge are built and have run live against a real repository. The Project
+board is retired, so `repo` scope is all any command needs (D14). Being built now, in this order:
+`watch` itself (D13) and the local lane executor (D6) — until they land, the scheduler is
+`dispatchkit tick` run from a GitHub Actions workflow, and `lane = "local"` parks a task rather
+than running it.
 [docs/design.md](docs/design.md) carries the reasoning and a decision record per deliverable;
 [docs/RESUME.md](docs/RESUME.md) has the next actions.
 

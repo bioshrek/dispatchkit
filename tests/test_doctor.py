@@ -1,9 +1,8 @@
 """D5.5: `dispatchkit doctor` — the adoption on-ramp, and the live tier's assertions.
 
 Everything the pipeline needs but does not create for itself is a way for a
-first run to fail confusingly: a token without the `project` scope, a
-repository with no coding agent seat, a board carrying GitHub's built-in
-`Status` options, a missing `dispatchkit` label that turns every pass into a
+first run to fail confusingly: no credential at all, a repository with no
+coding agent seat, a missing `dispatchkit` label that turns every pass into a
 silent no-op.
 
 `doctor` is the pure function that turns those facts into a verdict, so the
@@ -17,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from dispatchkit.board import REQUIRED_FIELDS, REQUIRED_LABELS, BoardSnapshot, ExistingField
 from dispatchkit.doctor import (
     REQUIRED_SCOPES,
     Check,
@@ -28,23 +26,12 @@ from dispatchkit.doctor import (
     check_local,
     check_remote,
     parse_labels,
-    parse_project,
     parse_token_scopes,
     summarise,
 )
-from dispatchkit.resolve import FIELD_STATUS
+from dispatchkit.github import REQUIRED_LABELS
 
 pytestmark = pytest.mark.unit
-
-
-def healthy_board() -> BoardSnapshot:
-    return BoardSnapshot(
-        fields=tuple(
-            ExistingField(spec.name, f"PVTF_{spec.name}", spec.options) for spec in REQUIRED_FIELDS
-        ),
-        labels=REQUIRED_LABELS,
-        items=0,
-    )
 
 
 #: A workflow that brings its own copy of dispatchkit, as `init` writes it.
@@ -74,10 +61,10 @@ VENDORED_WORKFLOW = """jobs:
 
 def healthy(**overrides: object) -> Diagnostics:
     base: dict[str, object] = {
-        "scopes": ("repo", "project", "read:org"),
+        "scopes": ("repo", "read:org"),
         "agent_available": True,
-        "board": healthy_board(),
-        "variables": ("DISPATCHKIT_PLAN", "DISPATCHKIT_PROJECT"),
+        "labels": REQUIRED_LABELS,
+        "variables": ("DISPATCHKIT_PLAN",),
         "secrets": ("DISPATCHKIT_TOKEN",),
         "protected_branch": True,
     }
@@ -112,31 +99,32 @@ class TestHealthy:
         # `doctor` is also documentation of the contract, so it prints the
         # passing checks rather than only the failures.
         lines = summarise(check(healthy(), local()))
-        assert any(FIELD_STATUS in line for line in lines)
+        assert any(line.startswith("ok   labels") for line in lines)
+        assert not any(line.startswith("FAIL") for line in lines)
 
 
 class TestToken:
-    def test_the_project_scope_is_required_because_nothing_board_related_works_without_it(
-        self,
-    ) -> None:
-        assert by_name(healthy(scopes=("repo",)))["token-scopes"] is False
+    def test_the_project_scope_is_no_longer_asked_for(self) -> None:
+        # D14: `gh auth refresh -s project` was the wall every new adopter hit
+        # first, and the board it was for is gone.
+        assert "project" not in REQUIRED_SCOPES
+        assert by_name(healthy(scopes=("repo",)))["token-scopes"] is True
 
     def test_the_missing_scope_is_named_with_the_command_that_grants_it(self) -> None:
-        failure = next(
-            c for c in check(healthy(scopes=("repo",)), local()) if c.name == "token-scopes"
-        )
-        assert "project" in failure.detail
+        failure = next(c for c in check(healthy(scopes=()), local()) if c.name == "token-scopes")
+        assert "repo" in failure.detail
         assert "gh auth refresh" in failure.remedy
 
-    def test_scopes_that_cannot_be_determined_are_reported_rather_than_assumed(self) -> None:
-        # A workflow token has no `gh auth status` scope line at all. Claiming
-        # it passed would be a lie; claiming it failed would be a false alarm.
+    def test_a_token_that_reports_no_scopes_is_a_failure_not_a_shrug(self) -> None:
+        # This branch used to pass, because a workflow token reports no scope
+        # line. It also covered "not logged in at all", which is the case that
+        # actually happens to the human running `doctor` at a terminal.
         unknown = next(c for c in check(healthy(scopes=None), local()) if c.name == "token-scopes")
-        assert unknown.ok is True
-        assert "could not" in unknown.detail.lower()
+        assert unknown.ok is False
+        assert "gh auth login" in unknown.remedy
 
     def test_every_required_scope_is_one_a_human_can_grant(self) -> None:
-        assert set(REQUIRED_SCOPES) == {"repo", "project"}
+        assert set(REQUIRED_SCOPES) == {"repo"}
 
 
 class TestAgent:
@@ -150,42 +138,26 @@ class TestAgent:
         assert "local" in failure.remedy
 
 
-class TestBoard:
-    def test_a_missing_field_fails_and_is_named(self) -> None:
-        board = healthy_board()
-        without = BoardSnapshot(
-            fields=tuple(f for f in board.fields if f.name != FIELD_STATUS),
-            labels=board.labels,
-        )
-        failure = next(
-            c for c in check(healthy(board=without), local()) if c.name == "board-fields"
-        )
-        assert failure.ok is False
-        assert FIELD_STATUS in failure.detail
-
-    def test_the_built_in_status_options_fail_with_the_options_it_should_have(self) -> None:
-        board = healthy_board()
-        built_in = BoardSnapshot(
-            fields=tuple(
-                ExistingField(f.name, f.id, ("Todo", "In Progress", "Done"))
-                if f.name == FIELD_STATUS
-                else f
-                for f in board.fields
-            ),
-            labels=board.labels,
-        )
-        failure = next(
-            c for c in check(healthy(board=built_in), local()) if c.name == "board-fields"
-        )
-        assert failure.ok is False
-        assert "Auto-merging" in failure.detail
-
+class TestLabels:
     def test_a_missing_label_fails_and_is_named(self) -> None:
-        board = healthy_board()
-        without = BoardSnapshot(fields=board.fields, labels=("dispatchkit",))
-        failure = next(c for c in check(healthy(board=without), local()) if c.name == "labels")
+        failure = next(
+            c for c in check(healthy(labels=("dispatchkit",)), local()) if c.name == "labels"
+        )
         assert failure.ok is False
         assert "lane:cloud" in failure.detail
+
+    def test_the_label_the_state_query_filters_on_is_required(self) -> None:
+        # Without it the query matches nothing and a pass is a silent no-op,
+        # which reads exactly like an empty backlog.
+        failure = next(c for c in check(healthy(labels=()), local()) if c.name == "labels")
+        assert "dispatchkit" in failure.detail
+
+    def test_the_remedy_needs_no_project_number(self) -> None:
+        failure = next(c for c in check(healthy(labels=()), local()) if c.name == "labels")
+        assert "--project" not in failure.remedy
+
+    def test_nothing_about_a_board_is_checked_any_more(self) -> None:
+        assert not any(c.name == "board-fields" for c in check(healthy(), local()))
 
 
 class TestLocalFacts:
@@ -217,7 +189,7 @@ class TestVerdict:
 
 
 class TestPayloadParsing:
-    """The three `gh` payloads `doctor` reads, parsed offline."""
+    """The `gh` payloads `doctor` reads, parsed offline."""
 
     def test_token_scopes_are_read_from_gh_auth_status(self) -> None:
         text = (
@@ -241,28 +213,6 @@ class TestPayloadParsing:
             "dispatchkit",
             "bug",
         )
-
-    def test_the_project_view_yields_fields_options_and_the_item_count(self) -> None:
-        snapshot = parse_project(
-            {
-                "fields": [
-                    {"id": "PVTF_1", "name": "Task ID"},
-                    {
-                        "id": "PVTF_2",
-                        "name": "Lane",
-                        "options": [
-                            {"id": "o1", "name": "cloud"},
-                            {"id": "o2", "name": "local"},
-                        ],
-                    },
-                ]
-            },
-            items=4,
-            labels=("dispatchkit",),
-        )
-        assert snapshot.field("Lane") == ExistingField("Lane", "PVTF_2", ("cloud", "local"))
-        assert snapshot.field("Task ID") == ExistingField("Task ID", "PVTF_1", ())
-        assert snapshot.items == 4
 
 
 class TestWorkflowCanImportDispatchkit:
@@ -324,19 +274,18 @@ class TestWorkflowCanImportDispatchkit:
 
 
 class TestWorkflowInputs:
-    """The unattended pass needs a token and two variables, or it does nothing.
+    """The unattended pass needs a token and a plan name, or it does nothing.
 
     Observed live: with none of them set, the scheduler ran on its cron and
-    exited 1 with empty `--plan` and `--project`. That is a configuration
-    mistake a first-time adopter cannot see without opening the Actions log.
+    exited 1 with an empty `--plan`. That is a configuration mistake a
+    first-time adopter cannot see without opening the Actions log.
     """
 
     def test_all_present_passes(self) -> None:
         assert by_name(healthy())["workflow-inputs"]
 
     def test_a_missing_variable_is_reported(self) -> None:
-        diagnostics = healthy(variables=("DISPATCHKIT_PLAN",))
-        assert not by_name(diagnostics)["workflow-inputs"]
+        assert not by_name(healthy(variables=()))["workflow-inputs"]
 
     def test_a_missing_secret_is_reported(self) -> None:
         assert not by_name(healthy(secrets=()))["workflow-inputs"]
@@ -345,8 +294,8 @@ class TestWorkflowInputs:
         diagnostics = healthy(variables=(), secrets=())
         failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
         assert "DISPATCHKIT_PLAN" in failed.detail
-        assert "DISPATCHKIT_PROJECT" in failed.detail
         assert "DISPATCHKIT_TOKEN" in failed.detail
+        assert "DISPATCHKIT_PROJECT" not in failed.detail
         assert "gh variable set" in failed.remedy
 
     def test_the_token_is_never_read_only_its_presence(self) -> None:
@@ -366,7 +315,7 @@ class TestWorkflowInputs:
     def test_several_missing_inputs_read_as_a_list(self) -> None:
         diagnostics = healthy(variables=(), secrets=())
         failed = next(c for c in check_remote(diagnostics) if c.name == "workflow-inputs")
-        assert failed.detail.endswith("no plan, no board and no token")
+        assert failed.detail.endswith("no plan and no token")
 
 
 class TestTheSecretIsOnlyKnownByName:
@@ -407,9 +356,9 @@ class TestTheMergeGate:
     def _check(*, protected: bool) -> Check:
         return _merge_gate(
             Diagnostics(
-                scopes=("repo", "project"),
+                scopes=("repo",),
                 agent_available=True,
-                board=healthy_board(),
+                labels=REQUIRED_LABELS,
                 protected_branch=protected,
             )
         )
@@ -431,9 +380,9 @@ class TestTheMergeGate:
             item.name
             for item in check_remote(
                 Diagnostics(
-                    scopes=("repo", "project"),
+                    scopes=("repo",),
                     agent_available=True,
-                    board=healthy_board(),
+                    labels=REQUIRED_LABELS,
                     protected_branch=False,
                 )
             )

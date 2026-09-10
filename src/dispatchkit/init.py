@@ -1,11 +1,16 @@
 """D5.5: `dispatchkit init` — make a repository able to run a pass.
 
-`doctor` names what is missing; this creates it: the board's fields and
-options, the labels the state query filters on, the plans directory, the
-config file and the scheduler workflow.
+`doctor` names what is missing; this creates it: the labels the state query
+filters on, the plans directory, the config file and the scheduler workflow.
+
+One command, not two. The `--local` split was made at the token boundary
+rather than the dry-run boundary, and that boundary *was* the `project` scope
+the board needed (D14). What is left needs `gh`'s ordinary credential and only
+creates labels, so `--repo` alone decides whether the remote half happens —
+the same shape as `doctor`.
 
 Held to the same standard as `apply`, for the same reason — it runs against a
-board somebody may already be using:
+repository somebody may already be using:
 
 - **The plan is data.** `plan_init` is pure; `execute_init` is the only half
   that touches anything.
@@ -13,14 +18,6 @@ board somebody may already be using:
   second plan must be empty.
 - **Nothing that exists is overwritten.** A file that is already there is left
   exactly as it is, because somebody else's config is not ours to rewrite.
-
-One case earns its own rule. A new Project ships a built-in `Status` field
-carrying `Todo`/`In Progress`/`Done`: the right name, the wrong options, and
-no way to add options to an existing single select through the CLI. Fixing it
-means deleting the field, which deletes its values — free on an empty board,
-destructive on a populated one. So the board's item count decides, and a
-populated board gets a notice naming the command rather than an operation
-someone did not ask for.
 
 The templates below are this repository's own config and workflow, pinned by a
 test. What `init` writes into an adopter's tree is therefore the same file
@@ -32,43 +29,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
-from dispatchkit.board import (
-    BoardApi,
-    BoardSnapshot,
-    FieldSpec,
-    mismatched_fields,
-    missing_fields,
-    missing_labels,
-)
 from dispatchkit.doctor import LocalFacts
-from dispatchkit.github import Notice
+from dispatchkit.github import Notice, missing_labels
 
 #: Where the scheduler workflow lives. A path, not a convention: the file has
 #: to be under `.github/workflows/` for GitHub to run it at all.
 WORKFLOW_PATH = Path(".github/workflows/dispatchkit.yml")
 
 
-@dataclass(frozen=True, slots=True)
-class CreateField:
-    spec: FieldSpec
+class LabelApi(Protocol):
+    """The only remote capability `init` needs, and deliberately the whole of it.
 
-
-@dataclass(frozen=True, slots=True)
-class SetFieldOptions:
-    """Replace a single select's options, in place.
-
-    Not delete-and-recreate: the board's built-in `Status` refuses deletion
-    outright ("Only custom fields can be deleted"), and that is precisely the
-    field that always needs fixing. Updating works on built-in and custom
-    fields alike and keeps the id the board's views are built on.
-
-    Still only ever planned for an empty board: replacing the options drops
-    every value held under an option that goes away.
+    Kept separate from `GitHubApi` rather than reusing it: setting a repository
+    up and running a scheduler pass are different jobs with different blast
+    radii, and setup should not be handed a client that can assign work.
     """
 
-    spec: FieldSpec
-    field_id: str
+    def ensure_labels(self, labels: Sequence[str]) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +66,7 @@ class MakeDirectory:
     path: Path
 
 
-InitOperation = CreateField | SetFieldOptions | CreateLabel | WriteFile | MakeDirectory
+InitOperation = CreateLabel | WriteFile | MakeDirectory
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,34 +80,22 @@ class InitPlan:
 
 @dataclass(frozen=True, slots=True)
 class InitResult:
-    fields: int
     labels: int
     files: int
     directories: int
 
 
-def plan_init(board: BoardSnapshot, facts: LocalFacts) -> InitPlan:
-    """What this repository still needs. Pure: no board, no filesystem."""
+def plan_init(labels: Sequence[str], facts: LocalFacts) -> InitPlan:
+    """What this repository still needs. Pure: no network, no filesystem.
+
+    `labels` is what the repository already defines. Without a credential it is
+    empty, which plans every label — and creating one that exists is a no-op,
+    so the offline plan is a superset of the online one rather than a wrong one.
+    """
     operations: list[InitOperation] = []
     notices: list[Notice] = []
 
-    for spec, existing in mismatched_fields(board):
-        wanted = [option for option in spec.options if option not in existing.options]
-        if board.items == 0:
-            operations.append(SetFieldOptions(spec, existing.id))
-            continue
-        notices.append(
-            Notice(
-                "field-options",
-                spec.name,
-                f"`{spec.name}` cannot hold {_quoted(wanted)}, and the board has "
-                f"{board.items} item(s) whose values replacing the options would delete. "
-                f"Add them by hand in the project's settings, then re-run init",
-            )
-        )
-
-    operations += [CreateField(spec) for spec in missing_fields(board)]
-    operations += [CreateLabel(name) for name in missing_labels(board)]
+    operations += [CreateLabel(name) for name in missing_labels(labels)]
 
     if not facts.plans_exists:
         operations.append(MakeDirectory(facts.plans))
@@ -140,34 +107,21 @@ def plan_init(board: BoardSnapshot, facts: LocalFacts) -> InitPlan:
     return InitPlan(tuple(operations), tuple(notices))
 
 
-def execute_init(plan: InitPlan, api: BoardApi) -> InitResult:
-    """Carry out the whole plan."""
-    fields, labels = execute_board(plan, api)
+def execute_init(plan: InitPlan, api: LabelApi | None) -> InitResult:
+    """Carry out the whole plan. `api` is `None` when there is no credential."""
+    labels = execute_labels(plan, api) if api is not None else 0
     files, directories = execute_tree(plan)
-    return InitResult(fields=fields, labels=labels, files=files, directories=directories)
+    return InitResult(labels=labels, files=files, directories=directories)
 
 
-def execute_board(plan: InitPlan, api: BoardApi) -> tuple[int, int]:
-    """The half that needs a token. Ordering matters here exactly once.
-
-    A recreated field is deleted before it is created, because two fields
-    cannot share a name.
-    """
-    fields = 0
-    for operation in plan.operations:
-        if isinstance(operation, SetFieldOptions):
-            api.set_field_options(field_id=operation.field_id, spec=operation.spec)
-            fields += 1
-        elif isinstance(operation, CreateField):
-            api.create_field(operation.spec)
-            fields += 1
-
+def execute_labels(plan: InitPlan, api: LabelApi) -> int:
+    """The half that needs a credential."""
     # One call, not one per label: the adapter batches them, and
     # `gh label create --force` is idempotent.
     labels = [op.name for op in plan.operations if isinstance(op, CreateLabel)]
     if labels:
         api.ensure_labels(labels)
-    return fields, len(labels)
+    return len(labels)
 
 
 def execute_tree(plan: InitPlan) -> tuple[int, int]:
@@ -205,10 +159,9 @@ def summarise(plan: InitPlan) -> list[str]:
 #: three stay manual — and an unattended pass with any of them unset runs on
 #: its cron and fails with empty arguments.
 NEXT_STEPS = (
-    "gh secret set DISPATCHKIT_TOKEN  (a classic PAT with `repo` and `project`; "
-    "user-owned Projects do not accept fine-grained tokens)",
+    "gh secret set DISPATCHKIT_TOKEN  (a token with `repo`; the board is gone, so "
+    "`project` scope is no longer needed by anything)",
     "gh variable set DISPATCHKIT_PLAN --body <plan-name>",
-    "gh variable set DISPATCHKIT_PROJECT --body <project-number>",
     "gh api -X PUT repos/<owner>/<repo>/branches/main/protection ...  (require the "
     "status check your `acceptance` command runs; without it dispatchkit's own "
     "reading of CI is the only gate on a `verify: auto` merge)",
@@ -228,15 +181,9 @@ MANUAL_STEPS = (
 
 
 def _subject(operation: InitOperation) -> str:
-    if isinstance(operation, CreateField | SetFieldOptions):
-        return operation.spec.name
     if isinstance(operation, CreateLabel):
         return operation.name
     return str(operation.path)
-
-
-def _quoted(values: Sequence[str]) -> str:
-    return ", ".join(f"`{value}`" for value in values)
 
 
 #: This repository's own config, and what `init` writes. Pinned by a test.
@@ -280,9 +227,9 @@ plans = "docs/plans"
 WORKFLOW_TEMPLATE = r"""name: dispatchkit scheduler
 
 # One idempotent scheduler pass: resolve every task's status from the issues,
-# tell the board, and hand out whatever the caps allow. Event-driven for
-# latency; cron as the self-healing safety net, offset off :00/:30 because the
-# alert platform throttles hardest on the hour and the half hour.
+# print them, and hand out whatever the caps allow. Event-driven for latency;
+# cron as the self-healing safety net, offset off :00/:30 because the alert
+# platform throttles hardest on the hour and the half hour.
 on:
   issues:
     types: [closed, reopened, labeled]
@@ -293,10 +240,10 @@ on:
   workflow_dispatch:
 
 # Least privilege. Never `contents: write` — only pull requests mutate the
-# tree, so a compromised pass cannot commit.
+# tree, so a compromised pass cannot commit. No `repository-projects` either:
+# since D14 a pass writes nothing outside the issues themselves.
 permissions:
   issues: write
-  repository-projects: write
   contents: read
 
 # One pass at a time. Not cancel-in-progress: interrupting between assigning an
@@ -309,10 +256,10 @@ concurrency:
 jobs:
   tick:
     # Skip until this repository has actually been set up. `init` writes the
-    # workflow but cannot supply a plan name or a project number, so a fresh
-    # install would otherwise fail on its cron twice an hour forever, which is
-    # how a scheduler teaches people to ignore it.
-    if: vars.DISPATCHKIT_PLAN != '' && vars.DISPATCHKIT_PROJECT != ''
+    # workflow but cannot supply a plan name, so a fresh install would
+    # otherwise fail on its cron twice an hour forever, which is how a
+    # scheduler teaches people to ignore it.
+    if: vars.DISPATCHKIT_PLAN != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -345,11 +292,9 @@ jobs:
           GH_TOKEN: ${{ secrets.DISPATCHKIT_TOKEN }}
           REPO: ${{ github.repository }}
           PLAN: ${{ vars.DISPATCHKIT_PLAN }}
-          PROJECT: ${{ vars.DISPATCHKIT_PROJECT }}
         run: |
           python -m dispatchkit tick \
             --plan "$PLAN" \
             --repo "$REPO" \
-            --project "$PROJECT" \
             --push
 """

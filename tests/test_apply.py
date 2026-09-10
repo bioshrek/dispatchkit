@@ -1,4 +1,4 @@
-"""D3: `apply` — graph → GitHub issues + Project items, idempotently.
+"""D3: `apply` — graph → GitHub issues, idempotently.
 
 Run against a recorded API fixture (`tests/fixtures/dispatch/`) and an
 in-memory double, never the network. The central claim is convergence: apply
@@ -6,9 +6,9 @@ the plan, re-read the state, plan again, and the second plan must be empty.
 `id` is the idempotency key — a second run updates the existing issue rather
 than creating a twin.
 
-`Status` and `Attempts` are deliberately *not* written here. The Project is a
-derived view that the scheduler reconciles on every pass, so writing a
-readiness guess at apply time would just be a value to go stale.
+Since D14 an issue is the *only* thing `apply` writes. Status is derived on
+every pass and printed, so there is nothing here that could record a readiness
+guess and then go stale.
 """
 
 from __future__ import annotations
@@ -20,14 +20,7 @@ import pytest
 
 from dispatchkit.apply import build_body, desired_labels, execute_plan, plan_apply
 from dispatchkit.block import parse_block
-from dispatchkit.github import (
-    AddProjectItem,
-    CreateIssue,
-    IssueState,
-    RepoState,
-    SetProjectField,
-    UpdateIssue,
-)
+from dispatchkit.github import CreateIssue, IssueState, RepoState, UpdateIssue
 from dispatchkit.model import Lane, TaskGraph, TaskId, Verify
 from tests.fake_github import FakeGitHub
 from tests.graphs import graph, task
@@ -55,31 +48,21 @@ def recorded_state() -> RepoState:
 
 
 class TestPlanningFromEmpty:
-    def test_every_task_becomes_an_issue_a_project_item_and_its_fields(self) -> None:
+    def test_every_task_becomes_one_issue_and_nothing_else(self) -> None:
         plan = plan_apply(two_task_graph(), RepoState(()))
 
-        assert [type(op) for op in plan.operations] == [
-            CreateIssue,
-            AddProjectItem,
-            SetProjectField,
-            SetProjectField,
-            SetProjectField,
-            CreateIssue,
-            AddProjectItem,
-            SetProjectField,
-            SetProjectField,
-            SetProjectField,
-        ]
+        assert [type(op) for op in plan.operations] == [CreateIssue, CreateIssue]
         assert plan.notices == ()
 
-    def test_project_fields_are_task_id_lane_and_verify_only(self) -> None:
+    def test_a_tasks_routing_travels_as_labels_not_as_stored_state(self) -> None:
+        # Lane and verify are in the machine block already; the labels mirror
+        # them so an issue-list URL can filter on them. Nothing else is
+        # recorded, and `Status` in particular is derived every pass.
         plan = plan_apply(two_task_graph(), RepoState(()))
-        fields = {
-            op.field_name: op.value for op in plan.operations if isinstance(op, SetProjectField)
-        }
-        assert fields == {"Task ID": "adapter", "Lane": "local", "Verify": "human"}
-        assert "Status" not in fields
-        assert "Attempts" not in fields
+        adapter = plan.operations[1]
+        assert isinstance(adapter, CreateIssue)
+        assert set(adapter.labels) == {"dispatchkit", "plan:demo", "lane:local", "verify:human"}
+        assert not any(label.startswith("status:") for label in adapter.labels)
 
     def test_issue_carries_the_documented_labels(self) -> None:
         plan = plan_apply(two_task_graph(), RepoState(()))
@@ -198,32 +181,6 @@ class TestDriftAgainstTheRecordedFixture:
         assert "lane:local" not in update.labels
         assert "verify:auto" in update.labels
 
-    def test_a_missing_project_item_is_added_without_touching_the_issue(self) -> None:
-        state = RepoState((_issue(number=7, task_id="ports", project_item_id=None),))
-        plan = plan_apply(graph(task("ports"), plan=PLAN), state)
-        assert [type(op) for op in plan.operations] == [
-            AddProjectItem,
-            SetProjectField,
-            SetProjectField,
-            SetProjectField,
-        ]
-
-    def test_only_mismatched_project_fields_are_written(self) -> None:
-        state = RepoState(
-            (
-                _issue(
-                    number=7,
-                    task_id="ports",
-                    project_item_id="PVTI_1",
-                    fields={"Task ID": "ports", "Lane": "local", "Verify": "human"},
-                ),
-            )
-        )
-        plan = plan_apply(graph(task("ports"), plan=PLAN), state)
-        assert [op.field_name for op in plan.operations if isinstance(op, SetProjectField)] == [
-            "Lane"
-        ]
-
 
 class TestNotices:
     def test_a_closed_issue_is_never_mutated(self) -> None:
@@ -267,8 +224,6 @@ class TestNotices:
                     body="someone deleted the block",
                     labels=("dispatchkit", "plan:demo"),
                     closed=False,
-                    project_item_id=None,
-                    fields={},
                 ),
             )
         )
@@ -291,8 +246,6 @@ def _issue(
     labels: tuple[str, ...] | None = None,
     closed: bool = False,
     plan: str = PLAN,
-    project_item_id: str | None = "PVTI_1",
-    fields: dict[str, str] | None = None,
 ) -> IssueState:
     the_task = task(task_id)
     return IssueState(
@@ -301,54 +254,46 @@ def _issue(
         body=body if body is not None else build_body(the_task, plan=plan, spec=None),
         labels=labels if labels is not None else tuple(desired_labels(the_task, plan=plan)),
         closed=closed,
-        project_item_id=project_item_id,
-        fields=fields
-        if fields is not None
-        else {"Task ID": task_id, "Lane": "cloud", "Verify": "human"},
     )
 
 
-class TestFieldsOnAnAlreadyBoardedIssue:
-    """Changing a field on an issue the board already holds.
+class TestEditingATaskInPlace:
+    """Changing a task's routing on an issue an earlier run created.
 
-    Latent since D3 and only reachable here: `apply` learns board item ids
-    from the `AddProjectItem` operations it performs in the same run, so a
-    `SetProjectField` for an item added by an *earlier* run had no id to write
-    to. Every prior live run either created the issue (id in hand) or changed
-    only the body (no field op), so the path was never taken until a task's
-    `verify` was edited in place — which then died with `KeyError`.
+    This was the D5.6 latent bug: `apply` learned board item ids only from the
+    `AddProjectItem` operations it performed in the same run, so a field write
+    for an item added by an *earlier* run had no id and died with `KeyError`.
+    D14 deleted the board, and with it the whole failure mode — but the
+    behaviour it was hiding still has to work, so the case is kept and asked
+    the question that outlives the board: does an edited task converge?
     """
 
-    def _boarded(self) -> tuple[FakeGitHub, TaskGraph]:
+    def _applied(self) -> tuple[FakeGitHub, TaskGraph]:
         api = FakeGitHub()
         first = graph(task("ports", verify=Verify.HUMAN), plan=PLAN)
         execute_plan(plan_apply(first, api.fetch_state(plan=PLAN)), api)
         return api, graph(task("ports", verify=Verify.AUTO), plan=PLAN)
 
-    def test_the_field_change_is_planned(self) -> None:
-        api, changed = self._boarded()
+    def test_the_change_is_planned_as_a_single_issue_update(self) -> None:
+        api, changed = self._applied()
         plan = plan_apply(changed, api.fetch_state(plan=PLAN))
-        assert any(
-            isinstance(op, SetProjectField) and op.field_name == "Verify" for op in plan.operations
-        )
+        assert [type(op) for op in plan.operations] == [UpdateIssue]
 
-    def test_the_field_change_can_actually_be_executed(self) -> None:
-        api, changed = self._boarded()
-        plan = plan_apply(changed, api.fetch_state(plan=PLAN))
-        result = execute_plan(plan, api)
-        assert result.fields_set == 1
-
-    def test_it_writes_to_the_item_the_board_already_had(self) -> None:
-        # Not a new item: `apply` must never add a second board entry for an
-        # issue that is already on it.
-        api, changed = self._boarded()
-        before = len(api.state.issues)
+    def test_the_verify_label_is_swapped_rather_than_accumulated(self) -> None:
+        api, changed = self._applied()
         execute_plan(plan_apply(changed, api.fetch_state(plan=PLAN)), api)
-        assert len(api.state.issues) == before
-        assert api.state.issues[0].fields["Verify"] == "auto"
-        assert api.calls.count("add_project_item(100)") == 1
+        labels = api.state.issues[0].labels
+        assert "verify:auto" in labels
+        assert "verify:human" not in labels
+
+    def test_the_machine_block_is_rewritten_too(self) -> None:
+        # The labels are a mirror; the block is what the scheduler reads, so
+        # the two must never be allowed to disagree.
+        api, changed = self._applied()
+        execute_plan(plan_apply(changed, api.fetch_state(plan=PLAN)), api)
+        assert parse_block(api.state.issues[0].body).verify is Verify.AUTO
 
     def test_it_converges(self) -> None:
-        api, changed = self._boarded()
+        api, changed = self._applied()
         execute_plan(plan_apply(changed, api.fetch_state(plan=PLAN)), api)
         assert plan_apply(changed, api.fetch_state(plan=PLAN)).operations == ()

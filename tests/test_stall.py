@@ -5,8 +5,9 @@ counter nothing ever wrote, so `attempts` was always zero and the budget never
 fired. These tests fix the counter first and the timeout second.
 
 `attempts` is derived from the issue's own assignment history rather than
-stored on the board, because the board is a derived view and storing it there
-would make it the only record of how many times work had been handed out.
+recorded anywhere of ours, which would make our copy the only record of how
+many times work had been handed out — and the one thing GitHub could not
+rebuild.
 """
 
 from __future__ import annotations
@@ -105,7 +106,7 @@ class TestTheBudget:
         assert LabelIssue(TaskId("a"), 7, add=(LABEL_STUCK,)) in ops
 
 
-class TestTheBoardTellsTheTruthAboutIt:
+class TestTheReportTellsTheTruthAboutIt:
     def test_a_stuck_task_does_not_read_as_dispatched(self) -> None:
         task = item(
             "a",

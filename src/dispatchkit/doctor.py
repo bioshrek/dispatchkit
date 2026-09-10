@@ -2,15 +2,14 @@
 
 Everything the pipeline needs but does not create for itself is a way for a
 first run to fail confusingly, usually deep inside a pass and after a partial
-write. The failures are always the same five:
+write. The failures are always the same four:
 
-| Check          | What goes wrong without it                                  |
-| -------------- | ----------------------------------------------------------- |
-| `token-scopes` | Every board write fails; issues still get assigned          |
-| `coding-agent` | Cloud tasks are dispatched to nobody                        |
-| `board-fields` | A status write fails on an option the board does not have   |
+| Check          | What goes wrong without it                                   |
+| -------------- | ------------------------------------------------------------ |
+| `token-scopes` | Nothing can be read or written at all                        |
+| `coding-agent` | Cloud tasks are dispatched to nobody                         |
 | `labels`       | The state query matches nothing, so a pass is a silent no-op |
-| `workflow`     | Nothing ever runs unattended                                |
+| `workflow`     | Nothing ever runs unattended                                 |
 
 The verdict is a pure function of a snapshot, which is what makes the whole
 check set testable offline — and makes the same function usable as the `live`
@@ -27,21 +26,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dispatchkit.board import (
-    BoardSnapshot,
-    ExistingField,
-    mismatched_fields,
-    missing_fields,
-    missing_labels,
-)
+from dispatchkit.github import missing_labels
 
-#: Scopes a human must grant. `project` is the one that is never there by
-#: default and without which nothing board-related works at all.
-REQUIRED_SCOPES = ("repo", "project")
+#: Scopes a human must grant. Just the one since D14: issues, labels, pull
+#: requests and the assignment mutation are all `repo`, and there is no board
+#: to need `project` for.
+REQUIRED_SCOPES = ("repo",)
 
 #: Actions configuration the unattended pass reads. Without them the scheduler
 #: runs on its cron and exits non-zero with empty arguments.
-REQUIRED_VARIABLES = ("DISPATCHKIT_PLAN", "DISPATCHKIT_PROJECT")
+REQUIRED_VARIABLES = ("DISPATCHKIT_PLAN",)
 REQUIRED_SECRETS = ("DISPATCHKIT_TOKEN",)
 
 _SCOPES = re.compile(r"Token scopes:\s*(?P<scopes>.*)$", re.MULTILINE)
@@ -51,14 +45,16 @@ _CHECKOUT_PATH = re.compile(r"^\s*path:\s*(\S+)\s*$", re.MULTILINE)
 
 @dataclass(frozen=True, slots=True)
 class Diagnostics:
-    """What the remote side reports. `scopes` is `None` when unknowable."""
+    """What the remote side reports. `scopes` is `None` when the token is silent."""
 
     scopes: tuple[str, ...] | None
     agent_available: bool
-    board: BoardSnapshot
+    #: Every label the repository defines. The state query filters on
+    #: `dispatchkit`, so a repository missing it answers nothing at all.
+    labels: tuple[str, ...] = ()
     #: Actions variables and secret *names* configured on the repository. The
-    #: unattended pass reads its plan, project and token from these, so an
-    #: empty one is a scheduler that runs on a cron and does nothing.
+    #: unattended pass reads its plan and its token from these, so an empty
+    #: one is a scheduler that runs on a cron and does nothing.
     variables: tuple[str, ...] = ()
     secrets: tuple[str, ...] = ()
     #: Is the default branch protected by required status checks? Not a
@@ -99,12 +95,11 @@ def check(diagnostics: Diagnostics, facts: LocalFacts) -> tuple[Check, ...]:
 
 
 def check_remote(diagnostics: Diagnostics) -> tuple[Check, ...]:
-    """The checks that need a repository and a board to answer."""
+    """The checks that need a repository, and so a credential, to answer."""
     return (
         _scopes(diagnostics.scopes),
         _agent(diagnostics.agent_available),
-        _fields(diagnostics.board),
-        _labels(diagnostics.board),
+        _labels(diagnostics.labels),
         _inputs(diagnostics),
         _merge_gate(diagnostics),
     )
@@ -131,12 +126,17 @@ def summarise(checks: Sequence[Check]) -> list[str]:
 
 def _scopes(scopes: tuple[str, ...] | None) -> Check:
     if scopes is None:
-        # A workflow token has no scope line at all. Claiming this passed
-        # would be a lie; failing it would be a false alarm on every CI run.
+        # This branch used to pass, because a workflow token reports no scope
+        # line and failing every CI run would have been a false alarm. It also
+        # quietly covered "not logged in at all", which is the case that
+        # actually happens: `doctor` is run by a human at a terminal, and the
+        # unattended pass runs `tick`. So it says what it saw.
         return Check(
             "token-scopes",
-            True,
-            "could not determine token scopes (a workflow token does not report them)",
+            False,
+            "`gh auth status` reported no token scopes, so there is probably no "
+            "credential here at all",
+            "gh auth login",
         )
     missing = [scope for scope in REQUIRED_SCOPES if scope not in scopes]
     if missing:
@@ -161,36 +161,14 @@ def _agent(available: bool) -> Check:
     return Check("coding-agent", True, "the coding agent can be assigned")
 
 
-def _fields(board: BoardSnapshot) -> Check:
-    missing = missing_fields(board)
-    mismatched = mismatched_fields(board)
-    if not missing and not mismatched:
-        return Check(
-            "board-fields",
-            True,
-            f"the project has {_quoted(field.name for field in board.fields)}",
-        )
-    problems = [f"`{spec.name}` is missing" for spec in missing]
-    problems += [
-        f"`{spec.name}` cannot hold {_quoted(sorted(set(spec.options) - set(existing.options)))}"
-        for spec, existing in mismatched
-    ]
-    return Check(
-        "board-fields",
-        False,
-        "; ".join(problems),
-        "dispatchkit init --repo owner/name --project N",
-    )
-
-
-def _labels(board: BoardSnapshot) -> Check:
-    missing = missing_labels(board)
+def _labels(labels: Sequence[str]) -> Check:
+    missing = missing_labels(labels)
     if missing:
         return Check(
             "labels",
             False,
             f"the repository is missing {_quoted(missing)}",
-            "dispatchkit init --repo owner/name --project N",
+            "dispatchkit init --repo owner/name",
         )
     return Check("labels", True, "every label the pipeline filters on exists")
 
@@ -224,7 +202,7 @@ def _workflow(facts: LocalFacts) -> Check:
         "workflow",
         False,
         f"{facts.workflow_path} does not exist, so no pass ever runs unattended",
-        "dispatchkit init --repo owner/name --project N",
+        "dispatchkit init",
     )
 
 
@@ -248,7 +226,7 @@ def _workflow_source(facts: LocalFacts) -> Check:
             "workflow-source",
             False,
             f"{facts.workflow_path} sets no PYTHONPATH, so the pass cannot import dispatchkit",
-            "dispatchkit init --repo owner/name --project N",
+            "dispatchkit init",
         )
 
     source = match.group("path")
@@ -302,7 +280,6 @@ def _inputs(diagnostics: Diagnostics) -> Check:
 #: What the absence of each input costs, so the message says only what is true.
 _CONSEQUENCES = {
     "DISPATCHKIT_PLAN": "no plan",
-    "DISPATCHKIT_PROJECT": "no board",
     "DISPATCHKIT_TOKEN": "no token",
 }
 
@@ -361,22 +338,6 @@ def parse_token_scopes(text: str) -> tuple[str, ...] | None:
 
 def parse_labels(payload: Sequence[dict[str, Any]]) -> tuple[str, ...]:
     return tuple(str(entry["name"]) for entry in payload)
-
-
-def parse_project(fields: dict[str, Any], *, items: int, labels: Sequence[str]) -> BoardSnapshot:
-    """`gh project field-list` plus the item count and the repository's labels."""
-    return BoardSnapshot(
-        fields=tuple(
-            ExistingField(
-                name=str(entry["name"]),
-                id=str(entry["id"]),
-                options=tuple(str(option["name"]) for option in entry.get("options") or ()),
-            )
-            for entry in fields.get("fields", [])
-        ),
-        labels=tuple(labels),
-        items=items,
-    )
 
 
 def _quoted(values: Iterable[str]) -> str:

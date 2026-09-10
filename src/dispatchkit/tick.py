@@ -1,4 +1,4 @@
-"""D5: one scheduler pass — load, resolve, reconcile, admit, dispatch.
+"""D5: one scheduler pass — load, resolve, report, admit, dispatch.
 
 `plan_tick` is pure: snapshot in, operations out. `execute_tick` is the only
 thing that mutates, and the only mutation that matters is assignment, because
@@ -8,14 +8,14 @@ repository converge instead of double-dispatching, without a lease or a
 lockfile — and a `replaceActorsForAssignable` that loses the race is a no-op
 rather than a second assignee.
 
-That is also why the operation order is load-bearing: dispatch first, record
-second. Dying between the two leaves an assigned issue whose board entry is a
-pass stale, which the next pass fixes; the reverse — a board claiming
-`Dispatched` with nobody assigned — would let the next pass dispatch again.
+Nothing here is recorded anywhere afterwards (D14). The pass derives every
+status, prints them, and hands out what the caps allow; dying part-way through
+costs at most the operations it had not reached yet, because there is no second
+artifact that could be left disagreeing with the issues.
 
 A pass never creates, edits, or closes an issue. `apply` owns the graph's
 shape, and only a merged PR closes work; the scheduler only ever hands work
-out and tells the board what it sees.
+out and says what it sees.
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from dispatchkit.github import (
     MergePr,
     Notice,
     RepoState,
-    SetProjectField,
     UnassignAgent,
 )
 from dispatchkit.model import Lane, TaskId
@@ -48,7 +47,6 @@ from dispatchkit.resolve import (
     ci_notices,
     merge_ops,
     ready_ops,
-    reconcile_ops,
     resolve,
     stall_ops,
 )
@@ -57,9 +55,9 @@ from dispatchkit.resolve import (
 @dataclass(frozen=True, slots=True)
 class TickPlan:
     operations: tuple[DispatchOperation, ...]
-    #: Project item id per task, so the executor can write a field without
-    #: re-reading the board it was just told about.
-    item_ids: Mapping[TaskId, str]
+    #: What this pass will have made true by the time it ends, for the report.
+    #: Held for rendering only — every decision above is taken from the state
+    #: as read, and the next pass derives all of this again from scratch.
     statuses: Mapping[TaskId, Status]
     admitted: tuple[TaskId, ...]
     deferred: tuple[Deferral, ...]
@@ -72,15 +70,14 @@ class TickPlan:
 @dataclass(frozen=True, slots=True)
 class TickResult:
     dispatched: int
-    reconciled: int
     #: Pull requests taken out of draft. Kept apart from `dispatched` because
     #: no work was handed to an agent: an existing PR was merely un-drafted.
     readied: int = 0
     #: Pull requests squash-merged. The only count here that changed `main`.
     merged: int = 0
     #: Merges GitHub refused. A conflict, a protection rule or a race are all
-    #: ordinary outcomes, so they are reported rather than raised — and the
-    #: pass carries on, because the board writes are queued behind them.
+    #: ordinary outcomes, so they are reported rather than raised, and the pass
+    #: carries on with the tasks behind them.
     refused: tuple[Notice, ...] = ()
     #: Dispatches reclaimed after producing no pull request (D7).
     reclaimed: int = 0
@@ -104,16 +101,16 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig, now: date
         dispatch_ops.append(operation)
         dispatched.append(task_id)
 
-    # The board must not say `Ready` for an issue this pass just assigned, so
-    # the projection is advanced for exactly the tasks that were handed out.
-    # The next pass derives the same value from the assignee, so this converges
-    # rather than needing a second write.
+    # The report must not say `Ready` for an issue this pass just assigned, so
+    # the statuses are advanced for exactly the tasks that were handed out. The
+    # next pass derives the same value from the assignee, so the printed line
+    # and the repository agree.
     projected = {**statuses, **dict.fromkeys(dispatched, Status.DISPATCHED)}
 
-    # A reclaimed task is unassigned by the time this pass ends, so the board
-    # is told what will be true rather than what was: `Ready` for one going
-    # back into the queue, `Stuck` for one that has spent its budget. Both are
-    # what the next pass derives unaided, so neither needs a second write.
+    # A reclaimed task is unassigned by the time this pass ends, so the report
+    # says what will be true rather than what was: `Ready` for one going back
+    # into the queue, `Stuck` for one that has spent its budget. Both are what
+    # the next pass derives unaided.
     stalls = stall_ops(items, config, now)
     for stall in stalls:
         match stall:
@@ -122,20 +119,16 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig, now: date
             case LabelIssue():
                 projected[stall.task_id] = Status.STUCK
 
-    # Planned from the state as read, so the board is told what was true when
-    # we looked. A draft cleared by this pass becomes `Auto-merging` on the
-    # next one, which is the same convergence the whole resolver relies on.
+    # Planned from the state as read. A draft cleared by this pass becomes
+    # `Auto-merging` on the next one, which is the same convergence the whole
+    # resolver relies on.
     return TickPlan(
         operations=(
             *stalls,
             *dispatch_ops,
             *ready_ops(items),
             *merge_ops(items, config),
-            *reconcile_ops(items, projected),
         ),
-        item_ids={
-            task.id: task.project_item_id for task in items if task.project_item_id is not None
-        },
         statuses=projected,
         admitted=tuple(dispatched),
         deferred=admission.deferred,
@@ -144,7 +137,7 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig, now: date
 
 
 def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
-    dispatched = reconciled = readied = merged = reclaimed = 0
+    dispatched = readied = merged = reclaimed = 0
     refused: list[Notice] = []
     for operation in plan.operations:
         match operation:
@@ -167,10 +160,7 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
                     refused.append(Notice("merge-refused", f"#{operation.number}", str(exc)))
                     continue
                 merged += 1
-            case SetProjectField():
-                _set_field(api, plan, operation)
-                reconciled += 1
-    return TickResult(dispatched, reconciled, readied, merged, tuple(refused), reclaimed)
+    return TickResult(dispatched, readied, merged, tuple(refused), reclaimed)
 
 
 def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:
@@ -189,15 +179,13 @@ def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:
     return AssignAgent(task.id, task.number, task.node_id)
 
 
-def _set_field(api: GitHubApi, plan: TickPlan, operation: SetProjectField) -> None:
-    item_id = plan.item_ids.get(operation.task_id)
-    if item_id is None:  # pragma: no cover - reconcile_ops only emits for known items
-        return
-    api.set_project_field(item_id=item_id, field_name=operation.field_name, value=operation.value)
-
-
 def summarise(plan: TickPlan) -> Sequence[str]:
-    """Human-readable lines for the CLI and the workflow log."""
+    """The pass's report: every task's status, then what it did about them.
+
+    Every task, not only the ones being dispatched, because an idle pass has to
+    explain itself — this is the whole of what a reader gets, so a pass that
+    prints nothing has to be a pass that saw nothing.
+    """
     lines = [f"  {task_id}: {status.value}" for task_id, status in plan.statuses.items()]
     lines.append("dispatch: " + (" ".join(plan.admitted) if plan.admitted else "(nothing)"))
     lines += [f"  defer {deferral}" for deferral in plan.deferred]

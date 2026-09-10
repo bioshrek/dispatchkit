@@ -13,8 +13,10 @@ The three properties everything else serves:
 
 1. **Assignment is the lock.** Ready ⇒ open, unassigned, all dependencies closed. Dispatching a
    task removes it from the ready set, so concurrent passes converge with no lease or lockfile.
-2. **There is no stored state.** `Status` is recomputed from the issues every pass; the Project
-   board is a derived view. Never introduce a side table, a cache, or a state file.
+2. **There is no stored state.** `Status` is recomputed from the issues every pass and printed,
+   never written back. The Project board that used to hold it was retired at D14 precisely
+   because it was the only artifact here that could go stale. Never introduce a side table, a
+   cache, a state file, or a `status:*` label.
 3. **Zero runtime dependencies.** `src/dispatchkit` is pure standard library, enforced by
    `tests/test_workflow.py`. The scheduler runs in a job holding a token that can assign work; no
    third-party code belongs in it. `pyyaml` is dev-only, for asserting on the workflow YAML.

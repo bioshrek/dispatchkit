@@ -7,7 +7,7 @@ here, before a single issue exists.
 ```sh
 uv run dispatchkit validate docs/plans/<plan>.tasks.toml --strict
 uv run dispatchkit apply    docs/plans/<plan>.tasks.toml            # dry run
-uv run dispatchkit apply    docs/plans/<plan>.tasks.toml --push --repo owner/name --project N
+uv run dispatchkit apply    docs/plans/<plan>.tasks.toml --push --repo owner/name
 ```
 
 The directory is configurable — `paths.plans` in `.github/dispatchkit.toml` — and whatever it

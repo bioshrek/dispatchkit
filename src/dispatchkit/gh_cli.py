@@ -1,9 +1,9 @@
 """`gh`-CLI adapter for the `GitHubApi` port (D3).
 
 Split into pure parts and a thin subprocess shim so most of it is testable
-offline: `parse_state` and `parse_field_catalog` turn recorded API payloads
-into value objects, the `*_command` helpers build argv lists, and `_run` is the
-only function that actually shells out.
+offline: `parse_state` turns a recorded API payload into value objects, the
+`*_command` helpers build argv lists, and `_run` is the only function that
+actually shells out.
 
 Two rules the shim enforces:
 
@@ -25,8 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from dispatchkit.board import SINGLE_SELECT, BoardSnapshot, FieldSpec
-from dispatchkit.doctor import parse_labels, parse_project, parse_token_scopes
+from dispatchkit.doctor import parse_labels, parse_token_scopes
 from dispatchkit.github import IssueState, RepoState
 from dispatchkit.model import Checks, PullRequest
 
@@ -99,28 +98,6 @@ query($owner: String!, $repo: String!, $first: Int!) {
             }
           }
         }
-        projectItems(first: 5) {
-          nodes {
-            id
-            fieldValues(first: 20) {
-              nodes {
-                __typename
-                ... on ProjectV2ItemFieldTextValue {
-                  text
-                  field { ... on ProjectV2FieldCommon { name } }
-                }
-                ... on ProjectV2ItemFieldNumberValue {
-                  number
-                  field { ... on ProjectV2FieldCommon { name } }
-                }
-                ... on ProjectV2ItemFieldSingleSelectValue {
-                  name
-                  field { ... on ProjectV2FieldCommon { name } }
-                }
-              }
-            }
-          }
-        }
       }
     }
   }
@@ -135,16 +112,12 @@ def parse_state(payload: dict[str, Any]) -> RepoState:
 
 
 def _parse_issue(node: dict[str, Any]) -> IssueState:
-    items = node.get("projectItems", {}).get("nodes") or []
-    item = items[0] if items else None
     return IssueState(
         number=int(node["number"]),
         title=node["title"],
         body=node["body"] or "",
         labels=tuple(label["name"] for label in node["labels"]["nodes"]),
         closed=node["state"] == "CLOSED",
-        project_item_id=item["id"] if item else None,
-        fields=_parse_fields(item) if item else {},
         assignees=tuple(user["login"] for user in (node.get("assignees", {}).get("nodes") or [])),
         open_prs=_parse_open_prs(node),
         node_id=node.get("id"),
@@ -230,77 +203,6 @@ def _suite_checks(suite: dict[str, Any]) -> Checks:
 
 #: Suite conclusions that do not stand in the way of a merge.
 _BENIGN_CONCLUSIONS = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
-
-
-def _parse_fields(item: dict[str, Any]) -> dict[str, str]:
-    fields: dict[str, str] = {}
-    for value in item.get("fieldValues", {}).get("nodes") or []:
-        name = (value.get("field") or {}).get("name")
-        if not name:
-            continue  # a field type we do not model; ignore rather than guess
-        for key in ("text", "name", "number", "date"):
-            if key in value and value[key] is not None:
-                raw = value[key]
-                fields[name] = str(int(raw)) if key == "number" else str(raw)
-                break
-    return fields
-
-
-class ProjectFieldError(RuntimeError):
-    """A board field or single-select option the project does not have.
-
-    Its own type because it is a *configuration* failure, not an API failure:
-    the fix is to run `dispatchkit init`, not to retry.
-    """
-
-
-@dataclass(frozen=True, slots=True)
-class FieldCatalog:
-    """Project (v2) field ids, and option ids for single-select fields."""
-
-    ids: dict[str, str]
-    options: dict[str, dict[str, str]]
-
-    def option_id(self, field_name: str, value: str) -> str | None:
-        return self.options.get(field_name, {}).get(value)
-
-    def resolve(self, field_name: str, value: str) -> tuple[str, str | None]:
-        """`(field id, option id or None)`, or raise naming what is missing.
-
-        The silent version of this returned `None` for the option id and let
-        the caller send `--text`, which `gh` rejects with a message about
-        neither the field nor the value.
-        """
-        if field_name not in self.ids:
-            raise ProjectFieldError(
-                f"the project has no `{field_name}` field "
-                f"(it has: {_names(self.ids)}); run `dispatchkit init` to create it"
-            )
-        if field_name not in self.options:
-            return self.ids[field_name], None  # a text or number field
-        option = self.options[field_name].get(value)
-        if option is None:
-            raise ProjectFieldError(
-                f"the `{field_name}` field has no `{value}` option "
-                f"(it has: {_names(self.options[field_name])}); "
-                "run `dispatchkit init` to see what the board is missing"
-            )
-        return self.ids[field_name], option
-
-
-def _names(mapping: dict[str, str]) -> str:
-    return ", ".join(f"`{name}`" for name in sorted(mapping)) or "nothing"
-
-
-def parse_field_catalog(payload: dict[str, Any]) -> FieldCatalog:
-    ids: dict[str, str] = {}
-    options: dict[str, dict[str, str]] = {}
-    for entry in payload.get("fields", []):
-        name = entry["name"]
-        ids[name] = entry["id"]
-        if entry.get("options"):
-            options[name] = {option["name"]: option["id"] for option in entry["options"]}
-    return FieldCatalog(ids, options)
 
 
 def parse_agent_actor(payload: dict[str, Any]) -> str | None:
@@ -458,128 +360,6 @@ def label_command(repo: str, label: str) -> list[str]:
     return ["gh", "label", "create", label, "--repo", repo, "--force"]
 
 
-def item_add_command(project: int, owner: str, issue_url: str) -> list[str]:
-    return [
-        "gh",
-        "project",
-        "item-add",
-        str(project),
-        "--owner",
-        owner,
-        "--url",
-        issue_url,
-        "--format",
-        "json",
-    ]
-
-
-def item_edit_command(
-    *, project_id: str, item_id: str, field_id: str, value: str, option_id: str | None
-) -> list[str]:
-    command = [
-        "gh",
-        "project",
-        "item-edit",
-        "--id",
-        item_id,
-        "--project-id",
-        project_id,
-        "--field-id",
-        field_id,
-    ]
-    if option_id is not None:
-        return command + ["--single-select-option-id", option_id]
-    return command + ["--text", value]
-
-
-def field_list_command(project: int, owner: str) -> list[str]:
-    return [
-        "gh",
-        "project",
-        "field-list",
-        str(project),
-        "--owner",
-        owner,
-        # `gh` fetches 30 by default, and truncation is indistinguishable from
-        # a missing field: `doctor` would report a field the board has, and
-        # `init` would try to create it a second time.
-        "--limit",
-        "200",
-        "--format",
-        "json",
-    ]
-
-
-def project_view_command(project: int, owner: str) -> list[str]:
-    return ["gh", "project", "view", str(project), "--owner", owner, "--format", "json"]
-
-
-def field_create_command(project: int, owner: str, spec: FieldSpec) -> list[str]:
-    command = [
-        "gh",
-        "project",
-        "field-create",
-        str(project),
-        "--owner",
-        owner,
-        "--name",
-        spec.name,
-        "--data-type",
-        spec.data_type,
-    ]
-    if spec.data_type == SINGLE_SELECT:
-        # One argument, comma-joined: options carry spaces and hyphens, and
-        # `gh` rejects the flag entirely on a field that is not a single select.
-        command += ["--single-select-options", ",".join(spec.options)]
-    return command
-
-
-def field_delete_command(field_id: str) -> list[str]:
-    return ["gh", "project", "field-delete", "--id", field_id]
-
-
-#: Built-in fields refuse `deleteProjectV2Field` ("Only custom fields can be
-#: deleted"), which is exactly the case that matters: every board arrives with
-#: a `Status` holding Todo/In Progress/Done. Updating the options works on
-#: built-in and custom fields alike, and keeps the id the board's views use.
-FIELD_UPDATE_MUTATION = """
-mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
-  updateProjectV2Field(input: {fieldId: $field, singleSelectOptions: $options}) {
-    projectV2Field {
-      ... on ProjectV2SingleSelectField { id name options { name } }
-    }
-  }
-}
-"""
-
-
-def field_update_command() -> list[str]:
-    """The argv. The variables travel in the body, because `-F` cannot carry
-    a list of objects."""
-    return ["gh", "api", "graphql", "--input", "-"]
-
-
-def field_update_body(field_id: str, spec: FieldSpec) -> str:
-    """The request body, built as data and serialised once.
-
-    Replacing the options drops any value an item held under an option that
-    goes away, which is why `init` only ever plans this for an empty board.
-    """
-    if spec.data_type != SINGLE_SELECT:
-        raise ValueError(f"{spec.name} is not a single select, so it has no options to set")
-    body = {
-        "query": FIELD_UPDATE_MUTATION,
-        "variables": {
-            "field": field_id,
-            # `color` and `description` are not optional on the input type.
-            "options": [
-                {"name": option, "color": "GRAY", "description": ""} for option in spec.options
-            ],
-        },
-    }
-    return json.dumps(body)
-
-
 def label_list_command(repo: str) -> list[str]:
     return ["gh", "label", "list", "--repo", repo, "--json", "name", "--limit", "200"]
 
@@ -601,31 +381,12 @@ def parse_names(payload: Sequence[dict[str, Any]]) -> tuple[str, ...]:
     return tuple(str(entry["name"]) for entry in payload)
 
 
-def parse_item_count(payload: dict[str, Any]) -> int:
-    """How many items the board holds; unknown reads as populated.
-
-    The count is what licenses deleting and recreating a mis-optioned field,
-    so an absent count must never read as "empty and therefore safe".
-    """
-    items = payload.get("items")
-    if isinstance(items, dict) and isinstance(items.get("totalCount"), int):
-        return int(items["totalCount"])
-    return 1
-
-
 @dataclass
 class GhCli:
-    """Production adapter. Unverified until D5 runs it against a scratch repo."""
+    """Production adapter. One repository, one `gh` credential, no board."""
 
     repo: str  # "owner/name"
-    project: int
-    _catalog: FieldCatalog | None = field(default=None, init=False)
-    _project_id: str | None = field(default=None, init=False)
     _actor: str | None = field(default=None, init=False)
-
-    @property
-    def owner(self) -> str:
-        return self.repo.split("/", 1)[0]
 
     def fetch_state(self, *, plan: str) -> RepoState:
         owner, name = self.repo.split("/", 1)
@@ -653,23 +414,6 @@ class GhCli:
             stdin=body,
         )
 
-    def add_project_item(self, *, issue_number: int) -> str:
-        url = f"https://github.com/{self.repo}/issues/{issue_number}"
-        payload = json.loads(_run(item_add_command(self.project, self.owner, url)))
-        return str(payload["id"])
-
-    def set_project_field(self, *, item_id: str, field_name: str, value: str) -> None:
-        field_id, option_id = self._field_catalog().resolve(field_name, value)
-        _run(
-            item_edit_command(
-                project_id=self._project_node_id(),
-                item_id=item_id,
-                field_id=field_id,
-                value=value,
-                option_id=option_id,
-            )
-        )
-
     def assign_agent(self, *, number: int, node_id: str) -> None:
         actor = self._agent_actor()
         if actor is None:
@@ -695,26 +439,11 @@ class GhCli:
             return
         _run(edit_labels_command(self.repo, number, add, remove))
 
-    # --- the board and diagnostics ports (D5.5) ----------------------------
+    # --- the diagnostics port (D5.5) ---------------------------------------
 
-    def fetch_board(self) -> BoardSnapshot:
-        """The project's fields and item count, plus the repository's labels."""
-        fields = json.loads(_run(field_list_command(self.project, self.owner)))
-        view = json.loads(_run(project_view_command(self.project, self.owner)))
-        labels = parse_labels(json.loads(_run(label_list_command(self.repo))))
-        return parse_project(fields, items=parse_item_count(view), labels=labels)
-
-    def create_field(self, spec: FieldSpec) -> None:
-        _run(field_create_command(self.project, self.owner, spec))
-        self._catalog = None  # the cached ids are now a pass out of date
-
-    def delete_field(self, *, field_id: str) -> None:
-        _run(field_delete_command(field_id))
-        self._catalog = None
-
-    def set_field_options(self, *, field_id: str, spec: FieldSpec) -> None:
-        _run(field_update_command(), stdin=field_update_body(field_id, spec))
-        self._catalog = None
+    def fetch_labels(self) -> tuple[str, ...]:
+        """Every label the repository defines, for `doctor` and `init`."""
+        return parse_labels(json.loads(_run(label_list_command(self.repo))))
 
     def token_scopes(self) -> tuple[str, ...] | None:
         """`None` when the token does not report them, as a workflow token does not."""
@@ -755,18 +484,6 @@ class GhCli:
             owner, name = self.repo.split("/", 1)
             self._actor = parse_agent_actor(json.loads(_run(actor_command(owner, name))))
         return self._actor
-
-    def _field_catalog(self) -> FieldCatalog:
-        if self._catalog is None:
-            payload = json.loads(_run(field_list_command(self.project, self.owner)))
-            self._catalog = parse_field_catalog(payload)
-        return self._catalog
-
-    def _project_node_id(self) -> str:
-        if self._project_id is None:
-            payload = json.loads(_run(project_view_command(self.project, self.owner)))
-            self._project_id = str(payload["id"])
-        return self._project_id
 
 
 def _run(command: Sequence[str], *, stdin: str | None = None) -> str:

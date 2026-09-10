@@ -19,7 +19,9 @@ clean via `make check`.
 | D5.5 | Block version key, configurable paths/fence, `doctor`, `init` | **done and proven live**; board bootstrap converges |
 | D5.6 | CI-aware status, workflow template fix, `doctor` inputs | **done and proven live**; `verify: auto` now means something |
 | D5.7 | Draft-aware status, `MarkReady` for `verify: auto` | **done and proven live**; `Auto-merging` implies a merge is possible |
-| D6–D9 | Local daemon, retry/reclaim, alerting, auto-merge | designed, unbuilt |
+| D7, D9, D9.1 | Retry budget, `verify: auto` merge, the two guardrails | **done and proven live** |
+| D14 | Retire the Project board | done offline; `repo` scope is the whole requirement |
+| D13, D6 | `watch`, local lane executor | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
 `tools/dispatch/`) on 2026-09-08. `art_strategy` is intended to become adopter #1.
@@ -33,8 +35,11 @@ D9 will auto-merge, and none of that argv had ever been executed — a sandbox a
 that misbehaves. Its payload is `wordfreq`, a deliberately unfinished CLI with real tests and real
 CI (green in 13s), so the backlog is genuine chores rather than the no-ops the design forbids.
 
-**The board bootstrap is done and proven live.** Sandbox project is
-[number 2](https://github.com/users/bioshrek/projects/2); the token now holds `project`. In order:
+**The board bootstrap is done and proven live — and then deleted.** D14 retired the Project
+board entirely, so nothing below is reachable any more; it is kept because the live corrections it
+produced are the evidence for that decision. Sandbox project was
+[number 2](https://github.com/users/bioshrek/projects/2), and deleting it is the one privileged
+act D14 still leaves to a human. In order:
 
 - The sandbox exists, is pushed, and its CI passes (13s).
 - `init --local` wrote the config, workflow and plans directory where its summary said.
@@ -49,7 +54,7 @@ CI (green in 13s), so the backlog is genuine chores rather than the no-ops the d
 The shorthand the remaining steps use:
 
 ```sh
-S="--root ../dispatchkit-sandbox --repo bioshrek/dispatchkit-sandbox --project 2"
+S="--root ../dispatchkit-sandbox --repo bioshrek/dispatchkit-sandbox"
 ```
 
 The plan graph is written and applied: `wordfreq`, five tasks, issues #1–#5 on the board. The

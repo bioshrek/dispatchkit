@@ -36,8 +36,6 @@ def item(
     open_prs: tuple[int | PullRequest, ...] = (),
     attempts: int = 0,
     dispatches: tuple[datetime, ...] | None = None,
-    fields: dict[str, str] | None = None,
-    project_item_id: str | None = "PVTI_1",
 ) -> TaskItem:
     return TaskItem(
         block=MachineBlock(
@@ -56,11 +54,7 @@ def item(
         assignees=assignees,
         labels=labels,
         open_prs=_prs(open_prs),
-        dispatches=(
-            dispatches if dispatches is not None else (_LONG_AGO,) * attempts
-        ),
-        project_item_id=project_item_id,
-        fields=fields if fields is not None else {},
+        dispatches=(dispatches if dispatches is not None else (_LONG_AGO,) * attempts),
     )
 
 
@@ -81,7 +75,6 @@ def issue(
     assignees: tuple[str, ...] = (),
     labels: tuple[str, ...] = ("dispatchkit",),
     open_prs: tuple[int | PullRequest, ...] = (),
-    fields: dict[str, str] | None = None,
     node_id: str | None = None,
 ) -> IssueState:
     """The same synthetic task, but as GitHub would hand it back."""
@@ -102,10 +95,6 @@ def issue(
         body=f"prose\n\n{render_raw_block(block)}\n",
         labels=labels,
         closed=closed,
-        # One board item per issue: sharing an id across fixtures would let a
-        # write for one task silently land on another.
-        project_item_id=f"PVTI_{number}",
-        fields=fields if fields is not None else {},
         assignees=assignees,
         open_prs=_prs(open_prs),
         node_id=node_id if node_id is not None else f"I_{number}",

@@ -20,7 +20,6 @@ from dispatchkit.github import IssueState, RepoState
 class FakeGitHub:
     state: RepoState = field(default_factory=lambda: RepoState(()))
     next_number: int = 100
-    next_item: int = 1
     calls: list[str] = field(default_factory=list)
     ensured_labels: set[str] = field(default_factory=set)
     #: What the double stamps on an assignment. A test that cares about the
@@ -48,8 +47,6 @@ class FakeGitHub:
                     body=body,
                     labels=tuple(labels),
                     closed=False,
-                    project_item_id=None,
-                    fields={},
                 ),
             )
         )
@@ -66,21 +63,6 @@ class FakeGitHub:
     ) -> None:
         self.calls.append(f"update_issue({number})")
         self._replace(number, title=title, body=body, labels=tuple(labels))
-
-    def add_project_item(self, *, issue_number: int) -> str:
-        self.calls.append(f"add_project_item({issue_number})")
-        item_id = f"PVTI_{self.next_item}"
-        self.next_item += 1
-        self._replace(issue_number, project_item_id=item_id)
-        return item_id
-
-    def set_project_field(self, *, item_id: str, field_name: str, value: str) -> None:
-        self.calls.append(f"set_project_field({item_id}, {field_name})")
-        for issue in self.state.issues:
-            if issue.project_item_id == item_id:
-                self._replace(issue.number, fields={**issue.fields, field_name: value})
-                return
-        raise AssertionError(f"no issue holds project item {item_id}")
 
     def assign_agent(self, *, number: int, node_id: str) -> None:
         self.calls.append(f"assign_agent({number})")

@@ -1,9 +1,9 @@
 name: dispatchkit scheduler
 
 # One idempotent scheduler pass: resolve every task's status from the issues,
-# tell the board, and hand out whatever the caps allow. Event-driven for
-# latency; cron as the self-healing safety net, offset off :00/:30 because the
-# alert platform throttles hardest on the hour and the half hour.
+# print them, and hand out whatever the caps allow. Event-driven for latency;
+# cron as the self-healing safety net, offset off :00/:30 because the alert
+# platform throttles hardest on the hour and the half hour.
 on:
   issues:
     types: [closed, reopened, labeled]
@@ -14,10 +14,10 @@ on:
   workflow_dispatch:
 
 # Least privilege. Never `contents: write` — only pull requests mutate the
-# tree, so a compromised pass cannot commit.
+# tree, so a compromised pass cannot commit. No `repository-projects` either:
+# since D14 a pass writes nothing outside the issues themselves.
 permissions:
   issues: write
-  repository-projects: write
   contents: read
 
 # One pass at a time. Not cancel-in-progress: interrupting between assigning an
@@ -30,10 +30,10 @@ concurrency:
 jobs:
   tick:
     # Skip until this repository has actually been set up. `init` writes the
-    # workflow but cannot supply a plan name or a project number, so a fresh
-    # install would otherwise fail on its cron twice an hour forever, which is
-    # how a scheduler teaches people to ignore it.
-    if: vars.DISPATCHKIT_PLAN != '' && vars.DISPATCHKIT_PROJECT != ''
+    # workflow but cannot supply a plan name, so a fresh install would
+    # otherwise fail on its cron twice an hour forever, which is how a
+    # scheduler teaches people to ignore it.
+    if: vars.DISPATCHKIT_PLAN != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,10 +56,8 @@ jobs:
           GH_TOKEN: ${{ secrets.DISPATCHKIT_TOKEN }}
           REPO: ${{ github.repository }}
           PLAN: ${{ vars.DISPATCHKIT_PLAN }}
-          PROJECT: ${{ vars.DISPATCHKIT_PROJECT }}
         run: |
           python -m dispatchkit tick \
             --plan "$PLAN" \
             --repo "$REPO" \
-            --project "$PROJECT" \
             --push

@@ -3,10 +3,10 @@
 Two claims are being made here, and both are the reason this module contains no
 I/O at all:
 
-1. **Status is derived, never stored.** `Status` on the Project board is a
-   projection of the issues, recomputed from scratch on every pass. Delete the
-   board and it rebuilds; disagree with it and the next pass overwrites it.
-   There is no state machine to get wedged, because there is no state.
+1. **Status is derived, never stored.** `Status` is recomputed from the issues
+   on every pass and printed; it is written nowhere, so there is nothing that
+   could be stale and nothing to reconcile. There is no state machine to get
+   wedged, because there is no state.
 2. **Assignment is the lock.** A task is ready only while it is unassigned, so
    dispatching it (assigning it) removes it from the ready set. Two schedulers
    racing on the same repo therefore converge instead of double-dispatching,
@@ -18,9 +18,9 @@ it ever opens, but the resolver still terminates.
 
 Admission is kept separate from status. A task waiting on spend approval or
 sitting at its retry budget is still `Ready` — the work is unblocked, we are
-just choosing not to start it. Folding those into `Status` would invent board
-values the plan does not define and would lose the distinction between "cannot
-run" and "will not run yet".
+just choosing not to start it. Folding those into `Status` would invent
+statuses the plan does not define and would lose the distinction between
+"cannot run" and "will not run yet".
 """
 
 from __future__ import annotations
@@ -41,13 +41,9 @@ from dispatchkit.github import (
     MergePr,
     Notice,
     RepoState,
-    SetProjectField,
     UnassignAgent,
 )
 from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
-
-FIELD_STATUS = "Status"
-FIELD_ATTEMPTS = "Attempts"
 
 #: The cloud agent's own login. GitHub records a second AssignedEvent for the
 #: human who triggered the dispatch, so both the count of attempts and the
@@ -64,7 +60,13 @@ _WILDCARD = "*?["
 
 
 class Status(Enum):
-    """The Project board's `Status` column. Values are the board's labels."""
+    """What the issues say a task is doing. Derived every pass, stored nowhere.
+
+    Six of the seven are a restatement of something GitHub already shows —
+    dependencies open or closed, an assignee, an open pull request, a label, a
+    closed issue. `Auto-merging` is the only synthesized one, and it is the
+    reason the report is worth printing at all.
+    """
 
     BLOCKED = "Blocked"
     READY = "Ready"
@@ -90,8 +92,6 @@ class TaskItem:
     labels: tuple[str, ...]
     open_prs: tuple[PullRequest, ...]
     dispatches: tuple[datetime, ...]
-    project_item_id: str | None
-    fields: Mapping[str, str]
     node_id: str | None = None
 
     @property
@@ -114,9 +114,9 @@ class TaskItem:
     def attempts(self) -> int:
         """How many times this task has been handed to an agent.
 
-        Counted from the issue's own assignment history, not from the board:
-        the board is a derived view, and a number only it remembers would be
-        the one piece of scheduler state GitHub could not rebuild.
+        Counted from the issue's own assignment history, which GitHub keeps
+        whatever happens to the assignment: a number only we remembered would
+        be the one piece of scheduler state GitHub could not rebuild.
         """
         return len(self.dispatches)
 
@@ -201,8 +201,6 @@ def build_items(state: RepoState, *, plan: str) -> tuple[tuple[TaskItem, ...], t
                 labels=issue.labels,
                 open_prs=issue.open_prs,
                 dispatches=issue.dispatches,
-                project_item_id=issue.project_item_id,
-                fields=issue.fields,
                 node_id=issue.node_id,
             )
         )
@@ -221,7 +219,7 @@ def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Statu
     if task.stuck:
         # Read before `Ready`, because a stuck task is unassigned and would
         # otherwise satisfy every readiness test while never being dispatched
-        # again -- the board claiming work is queued that never moves.
+        # again -- the report claiming work is queued that never moves.
         return Status.STUCK
     if task.open_prs:
         # A PR exists, so the work happened regardless of how it was claimed;
@@ -229,7 +227,7 @@ def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Statu
         # CI is going to decide, so it is only made while CI is in a position
         # to: a run held for approval, or a red one, needs a human, which is
         # exactly what `In Review` means. Saying `Auto-merging` over a pipeline
-        # that will never start would be the board asserting something false.
+        # that will never start would be the report asserting something false.
         # A draft is the same lie by a different route — green CI merges
         # nothing while the PR cannot be merged at all.
         # A conflicting pull request is the same lie by a third route: green,
@@ -377,7 +375,7 @@ def ci_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
     """Report `verify: auto` tasks whose CI cannot run without a human.
 
     Absorbing this into `In Review` alone would be quietly misleading: the
-    board would invite someone to review a pull request that cannot merge, and
+    report would invite someone to review a pull request that cannot merge, and
     the reason would be a checkbox two pages deep in the Actions tab. Only
     `BLOCKED` is reported — a failing run is somebody's bug, not a gate that
     can be clicked away, and suggesting otherwise would waste the reader's
@@ -402,20 +400,6 @@ def ci_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
             )
         )
     return tuple(notices)
-
-
-def reconcile_ops(
-    items: Sequence[TaskItem], statuses: Mapping[TaskId, Status]
-) -> tuple[SetProjectField, ...]:
-    """Write back only the statuses the board disagrees with."""
-    ops = []
-    for task in items:
-        if task.project_item_id is None:
-            continue  # not on the board yet; `apply` adds it
-        wanted = statuses[task.id]
-        if task.fields.get(FIELD_STATUS) != wanted.value:
-            ops.append(SetProjectField(task.id, FIELD_STATUS, wanted.value))
-    return tuple(ops)
 
 
 def admit(
@@ -508,10 +492,3 @@ def _prefix(pattern: str) -> tuple[str, bool]:
     head = pattern[:cut]
     head, _, _ = head.rpartition("/")
     return f"{head}/" if head else "", True
-
-
-def _attempts(fields: Mapping[str, str]) -> int:
-    try:
-        return int(fields.get(FIELD_ATTEMPTS, "0"))
-    except ValueError:
-        return 0

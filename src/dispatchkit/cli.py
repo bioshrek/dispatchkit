@@ -1,11 +1,11 @@
 """`dispatchkit` — validate, apply and run task graphs (D1–D5.5).
 
-    uv run dispatchkit doctor   [--repo o/n --project N]
-    uv run dispatchkit init     [--local | --push --repo o/n --project N]
+    uv run dispatchkit doctor   [--repo o/n]
+    uv run dispatchkit init     [--repo o/n]
     uv run dispatchkit validate docs/plans/<plan>.tasks.toml
-    uv run dispatchkit apply    docs/plans/<plan>.tasks.toml [--push]
+    uv run dispatchkit apply    docs/plans/<plan>.tasks.toml [--push --repo o/n]
     uv run dispatchkit resolve  --state state.json --plan <plan>
-    uv run dispatchkit tick     --plan <plan> [--repo o/n --project N --push]
+    uv run dispatchkit tick     --plan <plan> [--repo o/n --push]
 
 Exit codes: 0 success, 1 the graph is invalid (or `--strict` lints tripped, or
 `doctor` found something wrong), 2 the command could not be carried out
@@ -13,10 +13,11 @@ Exit codes: 0 success, 1 the graph is invalid (or `--strict` lints tripped, or
 from "ran it and the answer is no" matters once this is called from a
 workflow, where the two want different responses.
 
-`apply`, `tick` and `init` are dry runs unless `--push` is given, and on a dry
-run no client is constructed at all — reconciling a graph into a real tracker
-is not something to do by accident. `resolve` and `doctor` are read-only in
-every mode.
+`apply` and `tick` are dry runs unless `--push` is given, and on a dry run no
+client is constructed at all — reconciling a graph into a real tracker is not
+something to do by accident. `init` needs no such gate since D14: it writes
+files that do not exist and creates labels, both idempotent and neither
+notifying anyone. `resolve` and `doctor` are read-only in every mode.
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from dispatchkit.apply import execute_plan, plan_apply
-from dispatchkit.board import BoardSnapshot
 from dispatchkit.config import SchedulerConfig, find_config, load_config
 from dispatchkit.doctor import (
     Check,
@@ -43,13 +43,13 @@ from dispatchkit.doctor import (
 from dispatchkit.errors import GraphError, GraphIssue
 from dispatchkit.gh_cli import GhCli, parse_state
 from dispatchkit.github import RepoState
-from dispatchkit.init import WORKFLOW_PATH, execute_init, execute_tree, plan_init
+from dispatchkit.init import WORKFLOW_PATH, execute_init, plan_init
 from dispatchkit.init import summarise as summarise_init
 from dispatchkit.lints import lint_graph
 from dispatchkit.metrics import plan_shape
 from dispatchkit.model import TaskGraph, TaskId
 from dispatchkit.parse import parse_graph
-from dispatchkit.resolve import admit, build_items, reconcile_ops, resolve
+from dispatchkit.resolve import admit, build_items, resolve
 from dispatchkit.tick import execute_tick, plan_tick
 from dispatchkit.tick import summarise as summarise_tick
 from dispatchkit.validate import (
@@ -81,7 +81,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="fail on structural lints, not just on invalid graphs",
     )
 
-    apply_cmd = sub.add_parser("apply", help="reconcile a task graph into issues and a project")
+    apply_cmd = sub.add_parser("apply", help="reconcile a task graph into GitHub issues")
     apply_cmd.add_argument("graph", type=Path)
     apply_cmd.add_argument(
         "--push", action="store_true", help="perform the operations (default: dry run)"
@@ -90,7 +90,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--verbose", action="store_true", help="print the full issue body for each operation"
     )
     apply_cmd.add_argument("--repo", help="owner/name; required with --push")
-    apply_cmd.add_argument("--project", type=int, help="Project (v2) number; required with --push")
 
     resolve_cmd = sub.add_parser(
         "resolve", help="derive task status from a recorded issue snapshot (read-only)"
@@ -110,7 +109,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     tick_cmd.add_argument("--plan", required=True, help="plan name to run")
     tick_cmd.add_argument("--state", type=Path, help="dry run against a recorded snapshot")
     tick_cmd.add_argument("--repo", help="owner/name; required with --push")
-    tick_cmd.add_argument("--project", type=int, help="Project (v2) number; required with --push")
     tick_cmd.add_argument(
         "--push", action="store_true", help="perform the operations (default: dry run)"
     )
@@ -125,22 +123,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "doctor", help="check whether this repository can run a scheduler pass"
     )
     doctor_cmd.add_argument("--root", type=Path, default=Path(), help="repository root")
-    doctor_cmd.add_argument("--repo", help="owner/name; also checks the board when given")
-    doctor_cmd.add_argument("--project", type=int, help="Project (v2) number")
+    doctor_cmd.add_argument(
+        "--repo", help="owner/name; also checks the repository itself when given"
+    )
     doctor_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
 
-    init_cmd = sub.add_parser("init", help="create the board, labels, config and workflow")
+    init_cmd = sub.add_parser("init", help="create the labels, config, workflow and plans dir")
     init_cmd.add_argument("--root", type=Path, default=Path(), help="repository root")
-    init_cmd.add_argument("--repo", help="owner/name; required with --push")
-    init_cmd.add_argument("--project", type=int, help="Project (v2) number; required with --push")
-    init_cmd.add_argument(
-        "--push", action="store_true", help="create the board and labels too (needs a token)"
-    )
-    init_cmd.add_argument(
-        "--local",
-        action="store_true",
-        help="write the config, workflow and plans directory only — no token needed",
-    )
+    init_cmd.add_argument("--repo", help="owner/name; creates the labels too when given")
     init_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
 
     args = parser.parse_args(argv)
@@ -201,20 +191,17 @@ def _apply(args: argparse.Namespace) -> int:
                 print("".join(f"    | {line}\n" for line in body.splitlines()), end="")
         for notice in plan.notices:
             print(f"NOTE {notice}")
-        print("re-run with --push --repo owner/name --project N to apply")
+        print("re-run with --push --repo owner/name to apply")
         return EXIT_OK
 
-    if not args.repo or args.project is None:
-        print("dispatchkit: --push requires --repo owner/name and --project N", file=sys.stderr)
+    if not args.repo:
+        print("dispatchkit: --push requires --repo owner/name", file=sys.stderr)
         return EXIT_UNREADABLE
 
-    api = GhCli(repo=args.repo, project=args.project)
+    api = GhCli(repo=args.repo)
     plan = plan_apply(graph, api.fetch_state(plan=graph.plan), specs)
     result = execute_plan(plan, api)
-    print(
-        f"applied plan `{graph.plan}`: {result.created} created, {result.updated} updated, "
-        f"{result.project_items} project items, {result.fields_set} fields set"
-    )
+    print(f"applied plan `{graph.plan}`: {result.created} created, {result.updated} updated")
     for notice in plan.notices:
         print(f"NOTE {notice}")
     return EXIT_OK
@@ -247,11 +234,6 @@ def _resolve(args: argparse.Namespace) -> int:
     for deferral in plan.deferred:
         print(f"  defer {deferral}")
 
-    ops = reconcile_ops(items, statuses)
-    if not ops:
-        print("board is up to date")
-    for op in ops:
-        print(f"  write {op.task_id} {op.field_name}={op.value}")
     return EXIT_OK
 
 
@@ -261,10 +243,10 @@ def _tick(args: argparse.Namespace) -> int:
         return config
 
     if args.push:
-        if not args.repo or args.project is None:
-            print("dispatchkit: --push requires --repo owner/name and --project N", file=sys.stderr)
+        if not args.repo:
+            print("dispatchkit: --push requires --repo owner/name", file=sys.stderr)
             return EXIT_UNREADABLE
-        api = GhCli(repo=args.repo, project=args.project)
+        api = GhCli(repo=args.repo)
         try:
             state = api.fetch_state(plan=args.plan)
         except RuntimeError as exc:
@@ -288,7 +270,7 @@ def _tick(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     result = execute_tick(plan, api)
-    line = f"pass complete: {result.dispatched} dispatched, {result.reconciled} board write(s)"
+    line = f"pass complete: {result.dispatched} dispatched"
     if result.readied:
         line += f", {result.readied} PR(s) marked ready"
     if result.merged:
@@ -343,23 +325,23 @@ def _doctor(args: argparse.Namespace) -> int:
         return facts
 
     checks = check_local(facts)
-    if args.repo and args.project is not None:
-        api = GhCli(repo=args.repo, project=args.project)
+    if args.repo:
+        api = GhCli(repo=args.repo)
         try:
             variables, secrets = api.workflow_inputs()
             diagnostics = Diagnostics(
                 scopes=api.token_scopes(),
                 agent_available=api.agent_available(),
-                board=api.fetch_board(),
+                labels=api.fetch_labels(),
                 variables=variables,
                 secrets=secrets,
                 protected_branch=api.branch_protected(),
             )
         except RuntimeError as exc:
             # Every failure `doctor` exists to name arrives as a non-zero `gh`
-            # exit: no `project` scope, wrong number, no board yet, logged
-            # out. Reporting it is the answer, so it is a failed check and
-            # not a traceback — but the board is unread, so the verdict is
+            # exit: a repository that does not exist, or no credential at all.
+            # Reporting it is the answer, so it is a failed check and not a
+            # traceback — but the repository went unread, so the verdict is
             # "could not be carried out" rather than "unhealthy".
             checks = (_unreachable(exc),) + checks
             for line in summarise(checks):
@@ -367,7 +349,7 @@ def _doctor(args: argparse.Namespace) -> int:
             return EXIT_UNREADABLE
         checks = check_remote(diagnostics) + checks
     else:
-        print("NOTE the board was not inspected; pass --repo owner/name --project N to check it")
+        print("NOTE the repository was not inspected; pass --repo owner/name to check it")
 
     for line in summarise(checks):
         print(line)
@@ -376,12 +358,12 @@ def _doctor(args: argparse.Namespace) -> int:
 
 def _unreachable(exc: RuntimeError) -> Check:
     return Check(
-        name="board",
+        name="repository",
         ok=False,
         detail=str(exc),
         remedy=(
-            "check --repo and --project name a board that exists, and that the token "
-            "carries the `project` scope: `gh auth refresh -s project`"
+            "check --repo names a repository you can read, and that you are logged "
+            "in: `gh auth status`, then `gh auth login`"
         ),
     )
 
@@ -391,17 +373,13 @@ def _init(args: argparse.Namespace) -> int:
     if isinstance(facts, int):
         return facts
 
-    if args.push and (not args.repo or args.project is None):
-        print("dispatchkit: --push requires --repo owner/name and --project N", file=sys.stderr)
-        return EXIT_UNREADABLE
-
-    api = GhCli(repo=args.repo, project=args.project) if args.push else None
+    api = GhCli(repo=args.repo) if args.repo else None
     try:
-        board = api.fetch_board() if api is not None else BoardSnapshot()
+        labels = api.fetch_labels() if api is not None else ()
     except RuntimeError as exc:
-        print(f"dispatchkit: cannot read the board: {exc}", file=sys.stderr)
+        print(f"dispatchkit: cannot read {args.repo}: {exc}", file=sys.stderr)
         return EXIT_UNREADABLE
-    plan = plan_init(board, facts)
+    plan = plan_init(labels, facts)
 
     for line in summarise_init(plan):
         print(line)
@@ -409,29 +387,20 @@ def _init(args: argparse.Namespace) -> int:
     # it failed on, and the output reads back to front.
     sys.stdout.flush()
 
-    if api is not None:
-        try:
-            result = execute_init(plan, api)
-        except RuntimeError as exc:
-            # Stopping part-way is safe to report plainly: every operation is
-            # idempotent, so the remedy is always to re-run.
-            print(f"dispatchkit: init stopped: {exc}; re-run once fixed", file=sys.stderr)
-            return EXIT_UNREADABLE
-        print(
-            f"init: {result.fields} field(s), {result.labels} label(s), "
-            f"{result.files} file(s), {result.directories} directory(ies)"
-        )
-        return EXIT_OK
+    try:
+        result = execute_init(plan, api)
+    except RuntimeError as exc:
+        # Stopping part-way is safe to report plainly: every operation is
+        # idempotent, so the remedy is always to re-run.
+        print(f"dispatchkit: init stopped: {exc}; re-run once fixed", file=sys.stderr)
+        return EXIT_UNREADABLE
 
-    if args.local:
-        files, directories = execute_tree(plan)
-        print(f"init: {files} file(s), {directories} directory(ies); the board was not touched")
-        return EXIT_OK
-
-    print(
-        f"dry run against an empty board: {len(plan.operations)} operation(s). "
-        "Re-run with --push --repo owner/name --project N, or --local for the files alone"
-    )
+    line = f"init: {result.files} file(s), {result.directories} directory(ies)"
+    if api is None:
+        line += "; no --repo, so the labels were not created"
+    else:
+        line += f", {result.labels} label(s)"
+    print(line)
     return EXIT_OK
 
 

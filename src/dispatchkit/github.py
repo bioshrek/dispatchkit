@@ -14,22 +14,30 @@ local database that could disagree with it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from dispatchkit.model import PullRequest, TaskId
-
-# Project (v2) fields `apply` owns. `Status` and `Attempts` are excluded on
-# purpose: they are derived scheduling state, recomputed on every pass.
-FIELD_TASK_ID = "Task ID"
-FIELD_LANE = "Lane"
-FIELD_VERIFY = "Verify"
-APPLIED_FIELDS = (FIELD_TASK_ID, FIELD_LANE, FIELD_VERIFY)
+from dispatchkit.model import Lane, PullRequest, TaskId, Verify
 
 MANAGED_LABEL_PREFIXES = ("plan:", "lane:", "verify:")
 DISPATCHKIT_LABEL = "dispatchkit"
+
+#: Labels the pipeline filters on, and the only thing `init` has to create on
+#: the repository itself. `dispatchkit` is the important one: the state query
+#: selects by it, so a repository without it returns nothing and a pass is a
+#: silent no-op. The lane and verify labels mirror the machine block, which is
+#: what makes a saved issue-list URL a live view of a plan.
+REQUIRED_LABELS: tuple[str, ...] = (
+    DISPATCHKIT_LABEL,
+    *(f"lane:{lane.value}" for lane in Lane),
+    *(f"verify:{verify.value}" for verify in Verify),
+)
+
+
+def missing_labels(labels: Sequence[str]) -> tuple[str, ...]:
+    return tuple(label for label in REQUIRED_LABELS if label not in labels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,8 +47,6 @@ class IssueState:
     body: str
     labels: tuple[str, ...]
     closed: bool
-    project_item_id: str | None
-    fields: Mapping[str, str]
     # The scheduler's inputs (D4): assignment is the dispatch lock, and an open
     # linked PR is how "work is under way" is observed without a side table.
     assignees: tuple[str, ...] = ()
@@ -50,7 +56,7 @@ class IssueState:
     # round trip.
     node_id: str | None = None
     # When the agent was assigned, once per dispatch (D7). Read from the issue
-    # timeline rather than a board field, so the count of attempts stays
+    # timeline rather than anywhere of our own, so the count of attempts stays
     # derived from the repository like every other part of `Status`.
     dispatches: tuple[datetime, ...] = ()
 
@@ -80,20 +86,7 @@ class UpdateIssue:
     remove_labels: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class AddProjectItem:
-    task_id: TaskId
-    number: int | None  # None until the issue it belongs to has been created
-
-
-@dataclass(frozen=True, slots=True)
-class SetProjectField:
-    task_id: TaskId
-    field_name: str
-    value: str
-
-
-Operation = CreateIssue | UpdateIssue | AddProjectItem | SetProjectField
+Operation = CreateIssue | UpdateIssue
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,9 +159,10 @@ class MergePr:
 
 #: What a scheduler pass may do. Deliberately narrower than `Operation`: a pass
 #: never creates, edits or closes an issue — `apply` owns the graph's shape and
-#: only a merged PR closes work. `MarkReady` is the one write that lands on a
-#: pull request rather than an issue, and it changes no content.
-DispatchOperation = AssignAgent | UnassignAgent | LabelIssue | MarkReady | MergePr | SetProjectField
+#: only a merged PR closes work. Every member acts on the repository itself,
+#: because since D14 there is nowhere else to write: status is derived and
+#: printed, never stored.
+DispatchOperation = AssignAgent | UnassignAgent | LabelIssue | MarkReady | MergePr
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,10 +181,6 @@ class Notice:
 class ApplyPlan:
     operations: tuple[Operation, ...]
     notices: tuple[Notice, ...]
-    #: Board item id per task, for items the board *already* held. Without it
-    #: a field change on an issue added by an earlier run has nowhere to be
-    #: written: the executor only learns ids from the items it adds itself.
-    item_ids: Mapping[TaskId, str] = field(default_factory=dict)
 
     def __bool__(self) -> bool:
         return bool(self.operations)
@@ -200,8 +190,6 @@ class ApplyPlan:
 class ApplyResult:
     created: int
     updated: int
-    project_items: int
-    fields_set: int
     issue_numbers: tuple[int, ...]
 
 
@@ -223,10 +211,6 @@ class GitHubApi(Protocol):
         labels: Sequence[str],
         remove_labels: Sequence[str] = (),
     ) -> None: ...
-
-    def add_project_item(self, *, issue_number: int) -> str: ...
-
-    def set_project_field(self, *, item_id: str, field_name: str, value: str) -> None: ...
 
     def assign_agent(self, *, number: int, node_id: str) -> None: ...
 

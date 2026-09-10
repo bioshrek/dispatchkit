@@ -12,9 +12,11 @@ test. Compared on the day: the two payloads have **identical shape**, so the
 renderer's guess was right, and every offline test built on it was testing the
 right document.
 
-The board fields are the interesting part. `apply` writes `Task ID`, `Lane`
-and `Verify` and deliberately leaves `Status` alone, because `Status` is a
-derived view that a scheduler pass owns; that asymmetry is visible here.
+The payload was recorded while the Project board still existed, and it is kept
+exactly as GitHub returned it — including the `projectItems` the query no
+longer asks for. That makes it a second regression test for free: the adapter
+must read a response carrying fields it has stopped caring about without
+noticing them (D14).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import pytest
 
 from dispatchkit.block import BLOCK_VERSION, parse_block
 from dispatchkit.gh_cli import parse_state
+from dispatchkit.github import IssueState
 
 pytestmark = pytest.mark.replay
 
@@ -37,6 +40,16 @@ FIXTURE = Path(__file__).parent / "fixtures" / "live_state.json"
 def payload() -> dict[str, Any]:
     loaded: dict[str, Any] = json.loads(FIXTURE.read_text(encoding="utf-8"))
     return loaded
+
+
+def by_task_id(payload: dict[str, Any]) -> dict[str, IssueState]:
+    """Keyed the way the scheduler keys them: by the id in the machine block.
+
+    Not by a board field. The block is the idempotency key and always was; the
+    `Task ID` column was a copy of it that a human could read, and it went with
+    the board.
+    """
+    return {str(parse_block(issue.body).id): issue for issue in parse_state(payload).issues}
 
 
 class TestRecordedResponse:
@@ -50,29 +63,41 @@ class TestRecordedResponse:
     ) -> None:
         # Without `Task ID` an issue is invisible to a pass, so a silent
         # failure here would look exactly like an empty backlog.
-        ids = {issue.fields.get("Task ID") for issue in parse_state(payload).issues}
-        assert ids == {"top-n", "stopwords", "encoding-fallback", "json-output", "document-flags"}
+        assert set(by_task_id(payload)) == {
+            "top-n",
+            "stopwords",
+            "encoding-fallback",
+            "json-output",
+            "document-flags",
+        }
 
-    def test_project_item_ids_survive_the_round_trip(self, payload: dict[str, Any]) -> None:
-        # `SetProjectField` addresses items by this id; a `None` here would
-        # make every board write a no-op.
-        for issue in parse_state(payload).issues:
-            assert issue.project_item_id is not None
-            assert issue.project_item_id.startswith("PVTI_")
+    def test_the_retired_project_selection_is_read_straight_past(
+        self, payload: dict[str, Any]
+    ) -> None:
+        # The recording still carries `projectItems`, because GitHub returned
+        # them. Nothing may come of that: an adapter that still had somewhere
+        # to put them would be one that had not finished retiring the board.
+        raw = payload["data"]["repository"]["issues"]["nodes"]
+        assert all(node.get("projectItems") for node in raw)
+        assert not any(hasattr(issue, "fields") for issue in parse_state(payload).issues)
 
     def test_node_ids_are_present_for_assignment(self, payload: dict[str, Any]) -> None:
         for issue in parse_state(payload).issues:
             assert issue.node_id is not None
 
     def test_routing_labels_round_trip(self, payload: dict[str, Any]) -> None:
-        issues = {i.fields["Task ID"]: i for i in parse_state(payload).issues}
+        # The labels are what survives the board: they mirror the block, and a
+        # saved issue-list URL filtering on them is the replacement view.
+        issues = by_task_id(payload)
         assert "lane:cloud" in issues["top-n"].labels
         assert "verify:auto" in issues["document-flags"].labels
         assert "verify:human" in issues["top-n"].labels
 
-    def test_apply_leaves_status_to_the_scheduler(self, payload: dict[str, Any]) -> None:
-        for issue in parse_state(payload).issues:
-            assert "Status" not in issue.fields
+    def test_no_issue_carries_a_recorded_status(self, payload: dict[str, Any]) -> None:
+        # Status is derived on every pass, so nothing GitHub hands back should
+        # ever be a status this tool wrote down earlier.
+        for issue in by_task_id(payload).values():
+            assert not any(label.startswith("status:") for label in issue.labels)
 
     def test_nothing_is_dispatched_in_this_snapshot(self, payload: dict[str, Any]) -> None:
         # Recorded before the first `tick`, which is what makes it the useful
@@ -93,12 +118,11 @@ class TestTheMachineBlockSurvivedGitHub:
     """
 
     def test_the_block_comes_back_parseable(self, payload: dict[str, Any]) -> None:
-        issues = {i.fields["Task ID"]: i for i in parse_state(payload).issues}
+        issues = by_task_id(payload)
         block = parse_block(issues["json-output"].body)
         assert block.id == "json-output"
         assert block.plan == "wordfreq"
         assert [str(d) for d in block.depends] == ["top-n"]
 
     def test_the_version_key_round_tripped(self, payload: dict[str, Any]) -> None:
-        issues = {i.fields["Task ID"]: i for i in parse_state(payload).issues}
-        assert parse_block(issues["top-n"].body).version == BLOCK_VERSION
+        assert parse_block(by_task_id(payload)["top-n"].body).version == BLOCK_VERSION

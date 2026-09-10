@@ -582,21 +582,21 @@ Shipped, each with a decision record below:
 | D7   | Timeout, retry budget, `Stuck`                                | Attempts derived from the timeline; the budget terminates                |
 | D9   | `verify: auto` merge                                          | Live: `stopwords` merged and closed with no human                        |
 | D9.1 | Acceptance-subset-of-CI and scope-drift guardrails            | Both failed against the live graph first, which is the point             |
+| D14  | Retire the Project board                                      | `doctor` green on `repo` alone; no module names a project                |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D14  | Retire the Project board                                             | A full pass on a token holding `repo` alone; `doctor` green without it     |
 | D13  | `watch`: graph watcher, poll loop, repo-wide admission, `--once`     | Save → re-plan → converge; restart mid-loop and the next pass is identical |
 | D6   | Local lane executor: worktree, runner invocation, push, PR, recovery | One real capability-gated task end-to-end                                  |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |
 
-D14 comes first because D13 should not be built against something that is being deleted: the
+D14 came first because D13 should not be built against something that is being deleted: the
 terminal view is what replaces the board, and writing one to feed the other would be work done
-twice. D13 then replaces the workflow, so D5's `.github/workflows/dispatch.yml`, the `init`
+twice. D13 now replaces the workflow, so D5's `.github/workflows/dispatch.yml`, the `init`
 template that writes it and the `doctor` check that looks for it retire with it; `tick` goes with
 them, returning as `watch --once` so a terminating pass is a flag rather than a second command.
 D13 also pools admission across every plan in the repository, which is where the caps stop being
@@ -626,15 +626,14 @@ is least able to help itself.
 
 | Step | Human act                                                                            | Kind                   |
 | ---- | ------------------------------------------------------------------------------------ | ---------------------- |
-| D14  | `gh auth login` without `project`; delete the sandbox board                          | Privileged             |
 | D13  | Decide what the terminal report looks like; delete the workflow and its secret       | Taste + privileged     |
 | D6   | Name the runner CLI, its argv template and model allowlist; ratify the env allowlist | Environment + security |
 | D10  | Write the body contract; choose which existing plans are the known-good fixtures     | Judgement              |
 | D11  | Configure branch protection and the merge queue; decide what gated `init` asks       | Privileged + UX        |
 | D15  | Supply a finished plan to measure, and fold the result back into the skill           | Prerequisite           |
 
-The privileged acts are unavoidable and trivial — narrowing a token, deleting a board, setting
-branch protection so `doctor`'s merge-gate check can pass. They need no thought, only an account,
+The privileged acts are unavoidable and trivial — narrowing a token, setting branch protection so
+`doctor`'s merge-gate check can pass. They need no thought, only an account,
 and they are best batched rather than hit one at a time. The judgement is concentrated in three
 places: the runner config, the report format and the body contract. Everything else is execution
 against a decision already argued to a conclusion here. Of the three, only the **report** resists
@@ -1652,6 +1651,43 @@ exists, so this is the cheapest it will ever be.
 fifty issues at once that GitHub's own issue list does not already provide. If that turns out to
 matter, the board can come back as a projection written by a pass that already knows everything it
 would contain — but it comes back as an optional output, never as an input.
+
+### D14 decision record — the board is gone (shipped)
+
+Carried out exactly as argued above; three things are worth recording because they were decided
+while doing it rather than before.
+
+**`doctor`'s `token-scopes` check fails on `None` now, not at D13.** The argument above conditions
+that on "no workflow and no `project` scope", and the workflow only retires at D13 — so the
+conservative reading was to leave the branch passing for one more deliverable. It is flipped now
+anyway, because the workflow runs `tick`, never `doctor`. The only caller that can reach the
+branch is a human at a terminal, and there `None` means "not logged in", which is the failure the
+check exists to name. Waiting would have kept a check that passes on the answer it does not have,
+in the one context where the answer is knowable.
+
+**`init` is one command, with `--repo` deciding.** The `--local` flag is gone rather than renamed:
+`plan_init` takes the labels the repository already defines, and with no credential that is the
+empty tuple — so the offline plan is a *superset* of the online one, not a different one. Creating
+a label that exists is a no-op (`gh label create --force`), so the two forms converge on the same
+repository. `init` also keeps its own one-method `LabelApi` port instead of taking `GitHubApi`:
+setting a repository up and running a pass are different jobs with different blast radii, and
+setup should not hold a client that can assign work.
+
+**`REQUIRED_LABELS` moved to `github.py` rather than dying with `board.py`.** Labels were never
+board state — they are what the state query filters on — and `github.py` already owned
+`DISPATCHKIT_LABEL` and the prefixes. The layer contract keeps them below `doctor` and `init`,
+which are the two callers.
+
+**The D5.6 latent bug is removed, not fixed.** `apply` no longer has item-id plumbing to get
+wrong, so the test that covered it was rewritten to ask the question that outlives the board: does
+an edited task converge? Every convergence test in `test_apply.py`, `test_tick.py` and
+`test_init.py` survived the deletion unchanged in shape, which is the evidence that nothing
+scheduling-related was load-bearing on the board.
+
+The live half of the proof — a full pass on a token holding `repo` alone, and deleting the sandbox
+board — is a privileged act and is the one thing here a human still has to do. Nothing in the code
+reads a project any more, so the board's continued existence cannot affect a pass; deleting it is
+tidying, not a step.
 
 ### One local task, and one dispatcher
 

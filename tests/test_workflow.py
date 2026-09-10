@@ -66,9 +66,13 @@ class TestPermissions:
     ) -> None:
         assert workflow["permissions"] == {
             "issues": "write",
-            "repository-projects": "write",
             "contents": "read",
         }
+
+    def test_it_no_longer_asks_to_write_a_project(self, workflow: dict[Any, Any]) -> None:
+        # D14: the board is gone, so a pass writes nothing outside the issues.
+        # A permission nothing uses is one an attacker gets for free.
+        assert "repository-projects" not in workflow["permissions"]
 
 
 class TestTriggers:
@@ -210,14 +214,15 @@ def test_the_pass_is_skipped_until_the_repository_is_configured(
 ) -> None:
     """An unconfigured repository must not fail every half hour.
 
-    Found on dispatchkit's own repository, which carries the workflow but has
-    never been given a plan or a project: the cron fired on schedule and died
-    on `--project: invalid int value: ''`, twice an hour, for as long as it had
-    been installed. A repository that has not been set up yet is not a failure
-    to alert on, and a scheduler that cries wolf every thirty minutes is one
-    nobody reads.
+    Found on dispatchkit's own repository, which carries the workflow but had
+    never been given a plan: the cron fired on schedule and died on empty
+    arguments, twice an hour, for as long as it had been installed. A
+    repository that has not been set up yet is not a failure to alert on, and
+    a scheduler that cries wolf every thirty minutes is one nobody reads.
     """
     job = workflow["jobs"]["tick"]
     condition = job.get("if", "")
     assert "DISPATCHKIT_PLAN" in condition
-    assert "DISPATCHKIT_PROJECT" in condition
+    # The plan name is now the whole of the setup a pass cannot infer, so
+    # guarding on anything else would skip a repository that is ready.
+    assert "DISPATCHKIT_PROJECT" not in condition
