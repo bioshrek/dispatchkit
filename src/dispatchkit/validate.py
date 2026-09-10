@@ -65,15 +65,6 @@ def _validate_task(task: Task) -> list[GraphIssue]:
             )
         )
 
-    if task.estimate_minutes is not None and task.estimate_minutes <= 0:
-        issues.append(
-            GraphIssue(
-                "invalid-estimate",
-                where,
-                f"`estimate_minutes` must be positive, got {task.estimate_minutes}",
-            )
-        )
-
     unknown = [tag for tag in task.requires if tag not in CAPABILITIES]
     if unknown:
         issues.append(

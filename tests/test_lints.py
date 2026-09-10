@@ -80,23 +80,6 @@ class TestMergeCandidates:
         assert "merge-candidate" not in codes(diamond())
 
 
-class TestEconomicFloor:
-    def test_estimate_below_three_times_overhead_is_flagged(self) -> None:
-        g = graph(task("a", estimate_minutes=20), task("b", estimate_minutes=90))
-        issues = [i for i in lint_graph(g) if i.code == "under-economic-floor"]
-        assert [i.where for i in issues] == ["a"]
-
-    def test_threshold_follows_the_configured_overhead(self) -> None:
-        g = graph(task("a", estimate_minutes=20), task("b", estimate_minutes=90))
-        config = LintConfig(overhead_minutes=30)  # floor becomes 90 minutes
-        assert [i.where for i in lint_graph(g, config) if i.code == "under-economic-floor"] == ["a"]
-
-    def test_missing_estimates_are_silent(self) -> None:
-        # Where estimates come from is an open question; absent one, the lint
-        # says nothing rather than guessing.
-        assert "under-economic-floor" not in codes(graph(task("a"), task("b")))
-
-
 class TestLintsNeverBlock:
     def test_lints_are_reported_for_a_cyclic_graph_without_raising(self) -> None:
         g = graph(task("a", depends=("b",)), task("b", depends=("a",)))

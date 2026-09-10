@@ -182,9 +182,6 @@ class Task:
     touches: tuple[str, ...] = ()
     depends: tuple[Dependency, ...] = ()
     body_file: str | None = None
-    # Optional: where per-task estimates come from is an open question, so the
-    # economic-floor lint (D2) stays silent rather than guessing when absent.
-    estimate_minutes: int | None = None
 
     @property
     def cloud_eligible(self) -> bool:

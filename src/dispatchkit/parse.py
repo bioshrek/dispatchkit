@@ -26,7 +26,6 @@ OPTIONAL_TASK_KEYS = (
     "touches",
     "depends",
     "body_file",
-    "estimate_minutes",
 )
 TASK_KEYS = frozenset(REQUIRED_TASK_KEYS) | frozenset(OPTIONAL_TASK_KEYS)
 EDGE_KEYS = frozenset({"on", "for"})
@@ -104,11 +103,6 @@ def _parse_task(raw: dict[str, Any], index: int, collector: _Collector) -> Task:
         collector.add("invalid-type", where, "`body_file` must be a string")
         body_file = None
 
-    estimate = raw.get("estimate_minutes")
-    if estimate is not None and (isinstance(estimate, bool) or not isinstance(estimate, int)):
-        collector.add("invalid-type", where, "`estimate_minutes` must be an integer")
-        estimate = None
-
     spend = raw.get("spend", False)
     if not isinstance(spend, bool):
         collector.add("invalid-type", where, f"`spend` must be a boolean, got {type_name(spend)}")
@@ -126,7 +120,6 @@ def _parse_task(raw: dict[str, Any], index: int, collector: _Collector) -> Task:
         touches=collector.string_list(raw, "touches", where),
         depends=_parse_depends(raw, where, collector),
         body_file=body_file,
-        estimate_minutes=estimate,
     )
 
 

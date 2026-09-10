@@ -10,13 +10,18 @@ ratification of the decomposition informed:
 | `width == 1`                                   | `chain-graph`          |
 | `depth` close to `count`                       | `mostly-serial`        |
 | Serial pair, no other dependents, same routing | `merge-candidate`      |
-| Estimated work below ~3x overhead              | `under-economic-floor` |
 | Acceptance runs tests, `touches` names none    | `scope-omits-tests`    |
 
-The cost model behind the last three: makespan is roughly critical-path length
+The cost model behind the shape lints: makespan is roughly critical-path length
 x (work + overhead), and overhead is fixed and far from free. Splitting a node
 into two parallel nodes shortens the schedule; splitting it into two serial
 nodes lengthens it by exactly one overhead and buys nothing.
+
+There was a fifth, `under-economic-floor`, comparing a task's declared
+`estimate_minutes` against a multiple of that overhead. It went with the key in
+D10: the estimate was an unreviewed guess, so the lint was arithmetic over a
+number the author had invented. D15 measures the same quantity from the
+timeline, where it is a fact.
 """
 
 from __future__ import annotations
@@ -34,14 +39,6 @@ from dispatchkit.model import TaskGraph
 class LintConfig:
     # `depth / count` at or above this reads as "mostly serial".
     serial_ratio: float = 0.8
-    # Issue, agent boot, clone, install, CI, merge queue — per dispatched task.
-    overhead_minutes: int = 10
-    # A task should be worth several times the overhead it pays.
-    floor_multiple: int = 3
-
-    @property
-    def economic_floor_minutes(self) -> int:
-        return self.overhead_minutes * self.floor_multiple
 
 
 DEFAULT_LINTS = LintConfig()
@@ -85,7 +82,6 @@ def lint_graph(graph: TaskGraph, config: LintConfig = DEFAULT_LINTS) -> list[Gra
 
     if not is_chain:  # on a chain, `chain-graph` already says it, once
         issues.extend(_merge_candidates(graph))
-    issues.extend(_economic_floor(graph, config))
     issues.extend(_scope_omits_tests(graph))
     return issues
 
@@ -195,15 +191,3 @@ def _merge_candidates(graph: TaskGraph) -> list[GraphIssue]:
     return issues
 
 
-def _economic_floor(graph: TaskGraph, config: LintConfig) -> list[GraphIssue]:
-    floor = config.economic_floor_minutes
-    return [
-        GraphIssue(
-            "under-economic-floor",
-            task.id,
-            f"estimated {task.estimate_minutes}m is below the ~{floor}m floor "
-            f"({config.floor_multiple}x the {config.overhead_minutes}m dispatch overhead)",
-        )
-        for task in graph.tasks
-        if task.estimate_minutes is not None and task.estimate_minutes < floor
-    ]

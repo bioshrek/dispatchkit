@@ -89,17 +89,17 @@ class TestParsing:
         assert second.depends[0].reason == "CassetteStore.get() signature"
         assert validate_graph(graph) == []
 
-    def test_parses_an_optional_effort_estimate(self) -> None:
-        graph = parse_graph(MINIMAL + "\nestimate_minutes = 45\n", plan="demo")
-        assert graph.tasks[0].estimate_minutes == 45
-        assert validate_graph(graph) == []
+    def test_the_estimate_key_is_gone(self) -> None:
+        """D10: `estimate_minutes` left the schema rather than being ignored.
 
-    def test_rejects_a_non_integer_estimate(self) -> None:
-        assert codes(MINIMAL + '\nestimate_minutes = "45"\n') == ["invalid-type"]
-        assert codes(MINIMAL + "\nestimate_minutes = true\n") == ["invalid-type"]
-
-    def test_rejects_a_non_positive_estimate(self) -> None:
-        assert codes(MINIMAL + "\nestimate_minutes = 0\n") == ["invalid-estimate"]
+        An unreviewed guess at a duration is the one number in the graph
+        nobody could check, and the D2 economic-floor lint it fed was
+        therefore reasoning from a number the author had made up. D15 measures
+        the same thing from the timeline instead. Rejecting the key rather
+        than tolerating it means a plan carrying one is told, once, rather
+        than quietly having its estimates ignored for ever.
+        """
+        assert codes(MINIMAL + "\nestimate_minutes = 45\n") == ["unknown-key"]
 
     def test_optional_top_level_plan_key_overrides_the_filename_stem(self) -> None:
         graph = parse_graph('plan = "refactor"\n' + MINIMAL, plan="demo")

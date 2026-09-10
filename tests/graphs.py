@@ -18,7 +18,6 @@ def task(
     verify: Verify = Verify.HUMAN,
     spend: bool = False,
     requires: tuple[str, ...] = (),
-    estimate_minutes: int | None = None,
     acceptance: str = "true",
     touches: tuple[str, ...] = (),
 ) -> Task:
@@ -33,7 +32,6 @@ def task(
         spend=spend,
         requires=requires,
         depends=tuple(Dependency(TaskId(on), "artifact") for on in depends),
-        estimate_minutes=estimate_minutes,
     )
 
 
