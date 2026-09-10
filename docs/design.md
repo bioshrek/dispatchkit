@@ -769,12 +769,12 @@ Shipped, each with a decision record below:
 | D13.1e | The graph watcher: a save cuts the wait short and re-plans      | A saved graph re-plans in place; nothing is written, and a typo is not fatal |
 | D9.2 | Scope drift advises rather than vetoes; the fence keeps the authority | A drifting green pull request merges and is reported; a fenced one still refuses |
 | D10  | Plan-authoring contract: schema page, body lints, authoring guide | An agent given only the two docs produces a graph `validate --strict` accepts |
+| D11  | The checks close over the fence and a missing `gh`; `init` gated on them | A fence that omits the config is red; `init` over one exits non-zero |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |
 
 D14 came first because D13 should not be built against something that is being deleted: the
@@ -819,7 +819,7 @@ is least able to help itself.
 | D13.1 | Decide what the terminal report looks like, and what a save is allowed to redraw    | Taste                  |
 | D6   | Name the runner CLI, its argv template and model allowlist; ratify the env allowlist | Environment + security |
 | D10  | Write the body contract; choose which existing plans are the known-good fixtures     | Judgement              |
-| D11  | Configure branch protection and the merge queue; decide what gated `init` asks       | Privileged + UX        |
+| D11  | Configure branch protection; ratify what a failing check is allowed to stop          | Privileged + UX        |
 | D15  | Supply a finished plan to measure, and fold the result back into the skill           | Prerequisite           |
 
 The privileged acts are unavoidable and trivial — narrowing a token, setting branch protection so
@@ -2746,6 +2746,93 @@ The evaluation plan used `docs/**/*.md`. So the trap is one an author walks into
 documentation that would have warned them stated the opposite, and only running the function
 caught it. That claim is now pinned by a test asserting both the behaviour and the sentence, which
 is the general remedy: a documented semantic should be executable wherever it can be.
+
+### D11 decision record — the checks close, and `init` stops declaring victory (shipped)
+
+D11 was written down as two table rows and no argument: "`doctor` completeness, then interactive
+gated `init`". That is the right amount of specification for a deliverable whose content is
+*whatever is still missing* — the work was to go and find out, not to build a design already made.
+So it began by asking what `doctor` stays green on. Three answers, in descending order of how badly
+they mattered.
+
+**The fence did not cover itself, and that is the whole permission model.** `default_fence` is
+careful: it fences `.github/workflows/**`, both config discovery locations, the config actually in
+use, and `{plans}/*.tasks.toml`. But `_read_fence` returns an explicit `fence.paths` verbatim, so
+writing the key at all discards every one of those protections in silence — a safe default with an
+unguarded override, which is the shape that reliably surprises people. `fence.paths = []` parses
+and yields an empty tuple. Since D9.2 demoted `touches` from a veto to advice, the fence is the
+*only* permission boundary left, so this is not a hardening nicety; it is the boundary being
+optional.
+
+The escalation is short enough to be worth stating in full, because it is what makes this a
+security finding rather than a lint. Under `fence.paths = ["src/**"]`, `.github/dispatchkit.toml`
+is unfenced. A `verify: auto` pull request may therefore edit it and merge itself on green CI. The
+next pass loads that file. `runner.argv` is in it, and `watch --local` executes `runner.argv` on the
+maintainer's own machine. The pipeline can rewrite the command it runs as you, unattended, and
+every individual step is behaving exactly as designed.
+
+`check_fence` therefore tests *representative paths* rather than pattern spelling: it asks whether
+a concrete `.github/dispatchkit.toml`, a concrete `.github/workflows/ci.yml` and a concrete
+`docs/plans/example.tasks.toml` are matched, so `.github/**` is accepted as covering the first two
+without anybody enumerating equivalent spellings. It also requires cover for any discovery location
+with *higher* precedence than the one in use — with a root `dispatchkit.toml` in effect, an agent
+that merely **creates** `.github/dispatchkit.toml` takes over the settings without modifying a
+fenced file at all.
+
+**A missing `gh` crashed the one command whose job is a broken setup.** `doctor` raised an uncaught
+`FileNotFoundError` — a traceback, from the command somebody runs precisely because nothing works.
+The fix is in two places on purpose. `gh_cli._spawn` translates it to `RuntimeError`, which is the
+adapter's existing contract with every caller, so no command anywhere tracebacks on it again. And
+`check_cli` names the remedy separately, because the translated error alone reads as "cannot read
+the repository" and sends somebody to investigate a repository that is perfectly fine. `_doctor`
+gates on `shutil.which` *before* constructing the client and still runs the local half: somebody
+with no `gh` still deserves to be told their fence is open.
+
+**An idea investigated and rejected: an empty plans directory should fail.** It should not.
+`watch` does not read graphs to decide admission, so zero graphs does not stop a pass, and a check
+that goes red the instant `init` finishes is the "red for everybody" antipattern this file already
+warns about — the cost is not a wrong answer, it is teaching people that red is the normal colour.
+
+**Then `init`, whose gate turned out to be the interesting half.** Two of its rules combine into a
+hole: it creates what is missing, and it never overwrites what is there. Over an existing config
+with a fence gap it steps over the file, prints `init: 0 file(s)` and exits 0 — while `doctor`, on
+the same tree, exits 1 on the check above. Setting a repository up is the moment somebody decides
+they are finished, which makes it the worst moment to be quiet.
+
+"Interactive gated" resolved to a **postcondition**, not a prompt and not a precondition. A
+precondition would withhold the labels and the plans directory over an unrelated config defect,
+and those are a gain whatever else is wrong; withholding them only adds a second failing check to
+read through. A prompt would be untestable and would ask a question at the one moment the user has
+the least context to answer it. So `init` does its idempotent work, re-reads the tree it leaves
+behind, and runs the local checks against *that*. The re-read is the substance rather than a
+detail — checked against the facts the plan was made from, the directory just created still reads
+as missing and the config just written is never opened. Gathering facts once is the obvious way to
+write this and it is wrong, so a test pins it.
+
+The gate reports; it does not seize the file. Rewriting somebody's config to turn a check green is
+the one thing worse than the check being red, and a test asserts the bytes are untouched. Only the
+local checks are gated: every local failure is either `init`'s own work being wrong or a file it
+stepped over, both fixable from the same terminal in the next minute, whereas the remote gaps are
+privileged acts already named in NEXT/MANUAL and no credential should turn setting up into a
+failure. And the whole thing is pinned green on a repository `init` just set up — including the
+second run, where the config being checked is the one `init` wrote.
+
+**A third drift, found while checking the gate.** `make doctor REPO=...` — the documented way to
+run the health check — passed `--project`, deleted by D14. `make tick` named a subcommand D13
+replaced with `watch --once`. Both had been broken for two deliverables and exit 2 without running
+anything, because `make check` runs the four gates and never the convenience targets. This is the
+same failure as D10's schema page: a second place stating what the CLI accepts, drifting from the
+CLI in silence, and it takes the same remedy, because resolving to be more careful is not one.
+`build_parser` splits the command surface from running it, each recipe is expanded the way make
+would expand it and handed to `parse_args`, and two further tests point the check at the *original*
+lines and require it to fail — so the alarm is known to work rather than assumed to. `tick` was
+renamed `pass` rather than repaired in place: keeping the old name is how a reader goes looking for
+a subcommand D13 deliberately turned into a flag.
+
+The through-line of all four: every one is a check that was never asked to hold, not a check that
+broke. A safe default nobody verified stayed safe, a happy path nobody left, a document nobody
+re-read, a convenience target nobody ran. The tests added here are cheap and boring, and each one
+would have caught its defect the day it landed.
 
 ## First real plan
 

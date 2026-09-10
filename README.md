@@ -63,6 +63,12 @@ withholds a merge. A file list written before the work is a prediction, and pred
 the scheduler rather than in a gate. What guards an unattended merge is green CI on a rebased
 branch, plus the fence.
 
+Setting `fence.paths` **replaces** that default rather than adding to it, so a narrow list can
+quietly leave the config itself unfenced — at which point an unattended merge may edit the file
+that names the command `watch --local` runs on your machine. `doctor` checks for exactly that and
+`init` will not report success over it, but the shortest safe answer is to omit the key and take
+the derived default.
+
 ## What it actually does
 
 One idempotent pass, safe to run as often as you like:

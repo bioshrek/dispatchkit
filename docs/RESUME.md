@@ -6,13 +6,19 @@ and the exact next actions.
 
 ## Where things stand
 
-D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.5 and D10 are implemented and green
-offline. 822 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
+D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.5, D10 and D11 are implemented and green
+offline. 866 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
 
-**Only D11 and D15 remain.** D11 is `doctor` completeness and a gated interactive `init`; D15 is
-the plan retrospective, which measures dispatch overhead and work from the timeline rather than
-from a schema key. D15 is unblocked — the sandbox's `wordfreq` plan is finished, so there is a
-real timeline to measure.
+**Only D15 remains** — the plan retrospective, which measures dispatch overhead and work from the
+timeline rather than from a schema key. It is unblocked: the sandbox's `wordfreq` plan is
+finished, so there is a real timeline to measure.
+
+D11 found three things `doctor` stayed green on, and the first is the one to know about: an
+explicit `fence.paths` **replaces** the derived default rather than adding to it, so a narrow list
+leaves the config itself unfenced — and a `verify: auto` merge may then rewrite `runner.argv`,
+which `watch --local` executes on your machine. `check_fence` now tests representative paths
+against the patterns, and `init` will not exit 0 over a failing local check. See the D11 record in
+`docs/design.md`.
 
 | Step | What | State |
 |------|------|-------|
@@ -36,7 +42,8 @@ real timeline to measure.
 | D6.2–D6.5 | The `Workstation` port, the executor, recovery, `watch --local` | done |
 | D9.2 | Scope drift advises; the repo fence keeps the merge authority | done |
 | D10 | Plan-authoring contract: `docs/schema.md`, body lints, `docs/authoring.md` | done; an agent given only the two docs produced a `--strict`-clean plan |
-| D11, D15 | `doctor` completeness + gated `init`; plan retrospective | designed, unbuilt |
+| D11 | `doctor` closes over the fence and a missing `gh`; `init` gated on the local checks | done; the fence override discarded every self-protection |
+| D15 | Plan retrospective: overhead and work from the timeline | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
 `tools/dispatch/`) on 2026-09-08. `art_strategy` is intended to become adopter #1.
@@ -319,7 +326,7 @@ were both wrong.
 | # | Milestone | Why here |
 |---|---|---|
 | **D10** | Plan-authoring contract (skill + doc) | Cheapest real leverage, no new machinery. There is currently *no* document teaching the format — only examples and `validate`'s error messages — yet the intended workflow is that an agent writes the graph. |
-| **D11** | `doctor` completeness, then an interactive gated `init` | Two steps; step one ships value alone. `doctor` becomes the single source of truth for "is this repo set up", and `init` refuses to advance past a failing check. The Copilot workflow-approval toggle can never be gated — it has no API — so it stays asserted by a human. |
+| **D11** | `doctor` completeness, then a gated `init` | *Shipped.* Step one shipped value alone, as expected. "Interactive" resolved to a postcondition rather than a prompt: `init` does its idempotent work, re-reads the tree it leaves behind, and gates on the local checks — a prompt would be untestable and would ask at the moment the user has least context. The Copilot workflow-approval toggle still cannot be gated; it has no API, so it stays asserted by a human. |
 | **D12** | Org + GitHub App auth | Opens with a probe: can an App installation token assign Copilot? If it cannot, the milestone buys nothing. Org-first, not org-only: the sandbox is a user repo. |
 | **D8** | Alerting, transition-only | Now has something true to say: D7 produces `Stuck`, the first state worth waking someone for. |
 | **D6** | Local runner daemon | Deferred by choice. Largest new surface, the only place per-task `model`/`effort` could live, and the consumer of the `dispatch:local` label that nothing reads today. It also completes D7, whose stale-heartbeat reclaim has no daemon to reclaim from. |
