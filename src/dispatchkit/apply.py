@@ -38,7 +38,7 @@ from dispatchkit.github import (
     RepoState,
     UpdateIssue,
 )
-from dispatchkit.model import Task, TaskGraph, TaskId
+from dispatchkit.model import DEFAULT_BASE, Task, TaskGraph, TaskId
 
 
 def desired_labels(task: Task, *, plan: str) -> tuple[str, ...]:
@@ -122,11 +122,20 @@ def plan_apply(
                     "close it by hand — `apply` never deletes",
                 )
             )
-    return ApplyPlan(tuple(operations), tuple(notices))
+    return ApplyPlan(tuple(operations), tuple(notices), graph.base)
 
 
 def execute_plan(plan: ApplyPlan, api: GitHubApi) -> ApplyResult:
-    """Perform the planned operations. Issues only: there is nowhere else to write."""
+    """Perform the planned operations. Issues and the branch they integrate on.
+
+    The branch is ensured before any issue is written, because an issue is a
+    dispatchable instruction the moment it exists: a pass running concurrently
+    could pick one up and try to cut a worktree from a branch that is not there
+    yet. Nothing else here writes outside the issue list (D16).
+    """
+    if plan.base != DEFAULT_BASE:
+        api.ensure_branch(base=plan.base)
+
     labels = sorted({label for op in plan.operations for label in _labels_of(op)})
     if labels:
         api.ensure_labels(labels)

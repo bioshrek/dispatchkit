@@ -7,7 +7,7 @@ rather than re-spelled in every test.
 
 from __future__ import annotations
 
-from dispatchkit.model import Dependency, Lane, Task, TaskGraph, TaskId, Verify
+from dispatchkit.model import DEFAULT_BASE, Base, Dependency, Lane, Task, TaskGraph, TaskId, Verify
 
 
 def task(
@@ -35,8 +35,8 @@ def task(
     )
 
 
-def graph(*tasks: Task, plan: str = "demo") -> TaskGraph:
-    return TaskGraph(plan=plan, tasks=tasks)
+def graph(*tasks: Task, plan: str = "demo", base: Base = DEFAULT_BASE) -> TaskGraph:
+    return TaskGraph(plan=plan, tasks=tasks, base=base)
 
 
 def singleton() -> TaskGraph:

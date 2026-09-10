@@ -33,6 +33,8 @@ class FakeGitHub:
     #: The local lane's two writes (D6), kept for assertion rather than replay.
     opened: list[dict[str, str]] = field(default_factory=list)
     comments: list[dict[str, str]] = field(default_factory=list)
+    #: Plan branches `apply` asked for (D16).
+    ensured_branches: list[str] = field(default_factory=list)
     #: The base each cloud dispatch was told to start from (D16).
     assigned_base: dict[int, Base] = field(default_factory=dict)
     next_pr: int = 900
@@ -42,6 +44,10 @@ class FakeGitHub:
         self.opened.append({"head": head, "title": title, "body": body, "base": str(base)})
         self.next_pr += 1
         return self.next_pr
+
+    def ensure_branch(self, *, base: Base) -> None:
+        self.calls.append(f"ensure_branch({base})")
+        self.ensured_branches.append(str(base))
 
     def close_issue(self, *, number: int) -> None:
         self.calls.append(f"close_issue({number})")

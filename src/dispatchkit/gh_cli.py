@@ -392,6 +392,37 @@ def merge_command(number: int, repo: str) -> list[str]:
     return ["gh", "pr", "merge", str(number), "--squash", "--repo", repo]
 
 
+def branch_ref_command(repo: str, base: Base) -> list[str]:
+    """Read one ref. The existence check, asked before anything is created."""
+    return ["gh", "api", f"repos/{repo}/git/ref/heads/{base}"]
+
+
+def default_branch_command(repo: str) -> list[str]:
+    """The repository's default branch, asked rather than assumed.
+
+    `DEFAULT_BASE` is dispatchkit's word for "this plan has no branch of its
+    own", not a claim about the repository. A repository whose default branch
+    is `trunk` would otherwise have its plan branches cut from a `main` that
+    does not exist.
+    """
+    return ["gh", "api", f"repos/{repo}", "--jq", ".default_branch"]
+
+
+def create_branch_command(repo: str, base: Base, sha: str) -> list[str]:
+    """Create the plan branch at a given commit."""
+    return [
+        "gh",
+        "api",
+        f"repos/{repo}/git/refs",
+        "--method",
+        "POST",
+        "-f",
+        f"ref=refs/heads/{base}",
+        "-f",
+        f"sha={sha}",
+    ]
+
+
 def close_command(number: int, repo: str) -> list[str]:
     """Close a task issue whose work has landed on a plan branch (D16).
 
@@ -550,6 +581,22 @@ class GhCli:
 
     def close_issue(self, *, number: int) -> None:
         _run(close_command(number, self.repo))
+
+    def ensure_branch(self, *, base: Base) -> None:
+        """Make the plan branch, or leave the one that is there (D16).
+
+        Checked before created, rather than created and the 422 absorbed. The
+        shorter version would work, but it would mean the ordinary case --
+        a plan branch that already exists and has moved on -- is reasoned about
+        through an error string, and this is a plan's integration branch: the
+        one place where getting "already there" wrong would rewind other
+        people's merged work.
+        """
+        if _spawn(branch_ref_command(self.repo, base)).returncode == 0:
+            return
+        default = _run(default_branch_command(self.repo)).strip()
+        sha = _run(branch_ref_command(self.repo, Base(default)) + ["--jq", ".object.sha"]).strip()
+        _run(create_branch_command(self.repo, base, sha))
 
     def edit_labels(
         self, *, number: int, add: Sequence[str] = (), remove: Sequence[str] = ()

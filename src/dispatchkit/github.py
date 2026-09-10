@@ -260,6 +260,10 @@ class Notice:
 class ApplyPlan:
     operations: tuple[Operation, ...]
     notices: tuple[Notice, ...]
+    #: The branch this plan integrates on (D16). Carried on the plan rather
+    #: than passed beside it because execution is handed the plan and nothing
+    #: else, and the branch has to exist before any task can be cut from it.
+    base: Base = DEFAULT_BASE
 
     def __bool__(self) -> bool:
         return bool(self.operations)
@@ -278,6 +282,15 @@ class GitHubApi(Protocol):
     def fetch_state(self) -> RepoState: ...
 
     def ensure_labels(self, labels: Sequence[str]) -> None: ...
+
+    def ensure_branch(self, *, base: Base) -> None:
+        """Make the plan branch if it is not already there (D16).
+
+        `ensure`, like labels, rather than a diffed operation: the API answers
+        this idempotently, so teaching `RepoState` about refs would buy nothing
+        but a way for the operation list -- which is what the convergence test
+        reads -- to be non-empty for ever.
+        """
 
     def create_issue(self, *, title: str, body: str, labels: Sequence[str]) -> int: ...
 
