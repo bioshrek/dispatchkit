@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from dispatchkit.metrics import max_antichain
-from dispatchkit.model import MergedPr, TaskGraph, TaskRef
+from dispatchkit.model import Lane, MergedPr, TaskGraph, TaskRef
 from dispatchkit.resolve import TaskItem
 
 #: How many times its own overhead a task must have worked for the split to
@@ -50,6 +50,9 @@ class TaskOutcome:
     """One task, as the timeline remembers it."""
 
     ref: TaskRef
+    #: Printed beside every figure, because `overhead` is only comparable
+    #: within a lane. See `_CAVEAT`.
+    lane: Lane
     attempts: int
     #: The dispatch the work actually came from: the last one at or before
     #: the first commit. A retry pays the overhead again rather than making
@@ -256,6 +259,7 @@ def _outcome(item: TaskItem) -> TaskOutcome:
     first_commit = landed.first_commit_at if landed else None
     return TaskOutcome(
         ref=item.ref,
+        lane=item.lane,
         attempts=item.attempts,
         dispatched_at=_producing_dispatch(item.dispatches, first_commit),
         first_commit_at=first_commit,
@@ -321,7 +325,24 @@ def summarise(report: Retrospective) -> tuple[str, ...]:
     lines += _task_lines(report)
     lines.append("")
     lines += _summary_lines(report)
+    lines.append("")
+    lines += _CAVEAT
     return tuple(lines)
+
+
+#: The most important thing this report has to say, and the one thing a
+#: reader cannot recover from the numbers. `overhead` runs from the dispatch
+#: to the first commit, and the first commit means the opposite thing in each
+#: lane: a cloud agent creates its branch and pushes within seconds of being
+#: assigned, so its overhead reads as near zero however long the task then
+#: takes; a local run commits once, at the end, so the same span is nearly the
+#: whole task. Found live -- a forty-hour task reported three seconds of
+#: overhead. Both numbers are real. Neither can be compared with the other.
+_CAVEAT = (
+    "  overhead is dispatch to first commit, plus CI. The first commit is",
+    "  lane-shaped -- a cloud agent commits at once, a local run commits when",
+    "  it finishes -- so compare within a lane, never across.",
+)
 
 
 def _task_lines(report: Retrospective) -> list[str]:
@@ -333,6 +354,7 @@ def _task_lines(report: Retrospective) -> list[str]:
         earned = outcome.earned_its_dispatch(report.floor_multiple)
         lines.append(
             f"  {str(outcome.ref.id):<{width}}  "
+            f"{str(outcome.lane):<5}  "
             f"overhead {_duration(outcome.overhead):>7}  "
             f"work {_duration(outcome.work):>7}"
             + (f"  x{_ratio(outcome)}" if earned is not None else "  unmeasured")

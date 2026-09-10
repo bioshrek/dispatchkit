@@ -255,3 +255,31 @@ class TestItRefusesToGuess:
 
         assert code != 0
         assert "not found" in capsys.readouterr().err
+
+
+class TestItDoesNotLetTheNumbersMislead:
+    def test_it_names_the_lane_on_every_task(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Because the overhead figure is only comparable within a lane."""
+        run(tmp_path, finished("one", 1, start=9, end=11))
+
+        assert "cloud" in capsys.readouterr().out
+
+    def test_it_says_what_makes_the_overhead_lane_shaped(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Found live, and the most important thing this report has to say.
+
+        A cloud agent creates its branch and commits within seconds of being
+        assigned, so dispatch-to-first-commit is near zero however long the
+        task then takes. A local run commits once, when it finishes, so the
+        same span is nearly the whole task. The number is real in both cases
+        and means the opposite thing, and a reader given it without that
+        warning will conclude the cloud lane has no overhead.
+        """
+        run(tmp_path, finished("one", 1, start=9, end=11))
+        out = capsys.readouterr().out
+
+        assert "lane" in out
+        assert "compare within a lane" in out
