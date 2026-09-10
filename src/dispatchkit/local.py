@@ -41,7 +41,7 @@ from pathlib import Path
 
 from dispatchkit.config import SchedulerConfig
 from dispatchkit.errors import GraphError
-from dispatchkit.github import LABEL_HOLD, LABEL_LOCAL_CLAIM, GitHubApi
+from dispatchkit.github import LABEL_LOCAL_CLAIM, GitHubApi
 from dispatchkit.resolve import TaskItem
 from dispatchkit.workstation import (
     RunResult,
@@ -174,21 +174,19 @@ def _finish(
 ) -> LocalRun:
     """Report, preserve, release — in that order, and always.
 
-    The mark comes off whatever happened. Leaving it on is the D6.0 bug from
-    the other end: the task would read `Dispatched` for ever with nothing
-    running it. Releasing is also the retry, since the next pass re-marks it
-    and the mark is the event `attempts` derives from.
-
-    A hold is respected here too. The human interrupted mid-run, and putting
-    the task straight back in the ready set would restart it immediately —
-    which is exactly the loop `stash` died of.
+    The mark comes off whatever happened, including when a human held the task
+    mid-run. Leaving it on is the D6.0 bug from the other end: the task would
+    read `Dispatched` for ever with nothing running it. Releasing is also the
+    retry, since the next pass re-marks it and the mark is the event `attempts`
+    derives from — and a hold needs no help here, because it already gates
+    `ready_ops`, so releasing a held task returns it to the queue without
+    returning it to the ready set.
     """
     if machine is not None and path is not None and not run.ok and machine.commits(path=path) > 0:
         machine.push(path=path, branch=run.branch)
 
     api.comment(number=task.number, body=_report(run))
-    if LABEL_HOLD not in task.labels:
-        api.edit_labels(number=task.number, remove=(LABEL_LOCAL_CLAIM,))
+    api.edit_labels(number=task.number, remove=(LABEL_LOCAL_CLAIM,))
     return run
 
 

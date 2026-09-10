@@ -68,6 +68,7 @@ layers = [
     "dispatchkit.doctor",
     "dispatchkit.tick",
     "dispatchkit.local",
+    "dispatchkit.recover",
     "dispatchkit.apply",
     "dispatchkit.resolve",
     "dispatchkit.lints",
