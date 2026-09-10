@@ -1944,6 +1944,20 @@ does, and building it before then would be describing a hazard that cannot occur
 which counted passes only while a wait *was* one sleep. It is now many, so the read that begins a
 pass is the only thing left that happens exactly once per pass, and that is where stopping went.
 
+**And then they ran on two clocks, which was a time bomb rather than a flake.** `FakeGitHub`
+stamps a dispatch with its own fixed instant, while `_pass` reads `datetime.now`. Every loop test
+therefore compared a frozen fixture against a moving system clock, and passed only while the two
+were within `stall_after` of each other. The day wall-clock time drifted past the double's instant
+by more than the timeout, every dispatch in every fixture began to look abandoned, and
+`test_a_restart_mid_loop_changes_nothing` started failing on a suite that had not been touched.
+
+The tell is worth keeping: a test that fails on a *date* rather than on a change is a test reading
+a clock it did not mean to. The stall timeout is a subtraction between two times, so whatever
+records a dispatch and whatever judges it must be the same clock — `_fake_clock` now pins
+`cli.datetime` to the instant the double stamps with, and a test asserting that the loop does not
+reclaim the dispatch it just made states the property in domain terms, so the next divergence is
+caught by something that says what is wrong.
+
 **The rule a long-running process most needs.** "There is no stored state" was easy to hold when
 every pass was a fresh job. A loop will want to remember what it saw, and the moment it does, the
 board and the issues can disagree with it. The rule is therefore explicit: the process may hold a

@@ -42,6 +42,18 @@ CONFIG = SchedulerConfig()
 NOW = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
 
 
+class _FrozenDatetime(datetime):
+    """`datetime`, with `now()` pinned to the instant the double stamps with.
+
+    Substituted for the whole class rather than for `datetime.now`, because
+    `datetime` is immutable and its method cannot be patched in place.
+    """
+
+    @classmethod
+    def now(cls, tz: object = None) -> datetime:  # type: ignore[override]
+        return NOW
+
+
 def dispatches(plan: TickPlan) -> list[AssignAgent | LabelIssue]:
     return [op for op in plan.operations if isinstance(op, AssignAgent | LabelIssue)]
 
@@ -725,14 +737,22 @@ class TestTheLoop:
     """
 
     def _fake_clock(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
-        """A sleep that never sleeps, and never decides when to stop.
+        """A sleep that never sleeps, and a date that does not move.
 
         Since D13.1e the wait is *polled* — it looks for a saved graph a few
         times a second — so counting sleeps no longer counts passes. Stopping
         is `_api(stop_after=)`, which counts the reads that are the pass.
+
+        The date is pinned to `FakeGitHub.clock` because otherwise these tests
+        run on *two* clocks: the double stamps a dispatch at its own fixed
+        instant while `_pass` reads the system one. That is a time bomb rather
+        than a flake — it passes until wall-clock time drifts past the fake's
+        instant by `stall_after`, and then every dispatch in the fixture looks
+        abandoned and is reclaimed. It went off, on a Thursday.
         """
         waits: list[float] = []
         monkeypatch.setattr("dispatchkit.cli.time.sleep", waits.append)
+        monkeypatch.setattr("dispatchkit.cli.datetime", _FrozenDatetime)
         return waits
 
     def _api(self, monkeypatch: pytest.MonkeyPatch, *, stop_after: int = 1) -> FakeGitHub:
@@ -832,6 +852,29 @@ class TestTheLoop:
         restarted = plan_tick(api.fetch_state(), config=CONFIG, now=NOW)
 
         assert killed.operations == restarted.operations == ()
+
+    def test_the_loop_does_not_reclaim_the_dispatch_it_just_made(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One clock, not two.
+
+        The stall timeout asks how long ago a dispatch happened, so the pass
+        and whatever records the dispatch have to agree on the time. When they
+        did not, a fixture dispatched in one pass looked abandoned in the next
+        and was handed back — silently, and only once the calendar had moved
+        far enough past the double's fixed instant for the difference to
+        exceed `stall_after`.
+        """
+        api = FakeGitHub(state=state_of(issue("a", 1)))
+        monkeypatch.setattr("dispatchkit.cli.GhCli", lambda **_: api)
+        config = str(tmp_path / "absent.toml")
+
+        self._fake_clock(monkeypatch)
+        _stop_after(monkeypatch, api, 2)
+        main(["watch", "--push", "--repo", "o/n", "--config", config])
+
+        assert "assign_agent(1)" in api.calls
+        assert not [call for call in api.calls if call.startswith("unassign_agent")]
 
 
 class TestWhatTheLoopPrints:
