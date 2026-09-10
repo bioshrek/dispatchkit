@@ -27,9 +27,10 @@ from typing import Any
 
 import pytest
 
-from dispatchkit.block import BLOCK_VERSION, parse_block
+from dispatchkit.block import parse_block
 from dispatchkit.gh_cli import parse_state
 from dispatchkit.github import IssueState
+from dispatchkit.model import DEFAULT_BASE
 
 pytestmark = pytest.mark.replay
 
@@ -125,4 +126,15 @@ class TestTheMachineBlockSurvivedGitHub:
         assert [str(d) for d in block.depends] == ["top-n"]
 
     def test_the_version_key_round_tripped(self, payload: dict[str, Any]) -> None:
-        assert parse_block(by_task_id(payload)["top-n"].body).version == BLOCK_VERSION
+        # Pinned to 1, not to `BLOCK_VERSION`. This payload was recorded from
+        # GitHub when the wire format was v1 and it stays v1 for ever, which
+        # makes it the only evidence in the suite that a block written by an
+        # older dispatchkit is still readable by this one — real bytes rather
+        # than a hand-built fixture. Following the constant would throw that
+        # away at every bump (D16).
+        assert parse_block(by_task_id(payload)["top-n"].body).version == 1
+
+    def test_an_older_block_still_reads(self, payload: dict[str, Any]) -> None:
+        # And what it means: a plan written before plan branches existed
+        # integrates on `main`.
+        assert parse_block(by_task_id(payload)["top-n"].body).base == DEFAULT_BASE

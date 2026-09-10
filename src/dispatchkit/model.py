@@ -131,6 +131,62 @@ CAPABILITIES: frozenset[str] = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class Base:
+    """The branch a plan integrates on (D16).
+
+    A value object rather than a `str` because of where the value ends up: in
+    an argv (`git fetch <remote> <base>`) and in a GraphQL variable handed to
+    the coding agent. Validating once here is what lets every later use treat
+    it as a name rather than as input.
+
+    `check` is separate from construction so a parser can collect the reason
+    alongside its other issues instead of catching an exception per key.
+    """
+
+    name: str
+
+    def __post_init__(self) -> None:
+        problem = self.check(self.name)
+        if problem is not None:
+            raise ValueError(problem)
+
+    @staticmethod
+    def check(name: str) -> str | None:
+        """The reason this is not a branch name, or `None`.
+
+        git's own `check-ref-format` rules, plus one of our own: a leading `-`
+        is refused because it stops being a ref and starts being an option.
+        """
+        if not name or not name.strip():
+            return "must not be empty"
+        if name.startswith("-"):
+            return f"must not start with `-`, which reads as an option: `{name}`"
+        if any(character in name for character in _BAD_REF_CHARACTERS):
+            return f"must not contain a space or any of `{''.join(_BAD_REF_CHARACTERS)}`"
+        if any(character < " " or character == "\x7f" for character in name):
+            return "must not contain control characters"
+        if ".." in name or "@{" in name or name == "@":
+            return f"is not a valid git ref: `{name}`"
+        if name.startswith("/") or name.endswith("/") or "//" in name:
+            return f"has an empty path component: `{name}`"
+        if name.endswith((".", ".lock")) or name.startswith("."):
+            return f"is not a valid git ref: `{name}`"
+        if any(part.startswith(".") or part.endswith(".lock") for part in name.split("/")):
+            return f"is not a valid git ref: `{name}`"
+        return None
+
+    def __str__(self) -> str:
+        return self.name
+
+
+#: Refused outright in a ref name — git's list, plus the space.
+_BAD_REF_CHARACTERS = (" ", "~", "^", ":", "?", "*", "[", "\\")
+
+#: What a plan integrates on when it does not say. Every existing plan.
+DEFAULT_BASE = Base("main")
+
+
+@dataclass(frozen=True, slots=True)
 class Dependency:
     """One edge, which must name the artifact it waits on.
 
@@ -198,6 +254,9 @@ class Task:
 class TaskGraph:
     plan: str
     tasks: tuple[Task, ...]
+    base: Base = DEFAULT_BASE
+    """The branch this plan's tasks integrate on (D16). Defaults to `main`, so
+    a plan that says nothing behaves exactly as it did before."""
     doc: str | None = None
     """Optional pointer to the document this plan came out of. Prose for the
     agent, never machine-read: it is context, and the issue is the contract."""

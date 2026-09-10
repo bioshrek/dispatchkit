@@ -37,6 +37,13 @@ inform scheduling and may be reported on, but it never holds a veto — see the 
 | `plan` | no       | string          | Plan name. Defaults to the filename stem. Becomes the `plan:<name>` label and the machine block's `plan`, so it is a wire format — renaming a live plan orphans its issues. |
 | `task` | yes      | array of tables | The tasks. At least one.                         |
 | `doc`  | no       | string          | A document the agent should read as background.  |
+| `base` | no       | string          | The branch this plan's tasks integrate on. Defaults to `main`. |
+
+`base` is how a plan becomes a feature branch rather than a stream of increments landing in the
+trunk. Every task in the plan branches from it and targets it, in both lanes, and the finished
+plan is merged into the default branch by a human — once, deliberately. Omit it and the plan
+behaves exactly as it always has. It must be a valid git branch name; a leading `-` is refused
+outright, because it would read as an option rather than a ref.
 
 `doc` is prose for a language model, not a machine key. It renders one line into every issue body
 of the plan, and that line carries its own precedence: **the issue is the contract, the document
@@ -203,7 +210,7 @@ per task and gets no concurrency for it, and `validate` says so (`chain-graph`).
 
 **Errors** stop the push:
 
-`acceptance-not-in-ci`, `cycle`, `dangling-dependency`, `duplicate-capability`, `duplicate-dependency`, `duplicate-id`, `empty-acceptance`, `empty-edge-reason`, `empty-field`, `empty-graph`, `invalid-enum`, `invalid-id`, `invalid-toml`, `invalid-type`, `lane-capability-mismatch`, `missing-key`, `self-dependency`, `unknown-capability`, `unknown-key`.
+`acceptance-not-in-ci`, `cycle`, `dangling-dependency`, `duplicate-capability`, `duplicate-dependency`, `duplicate-id`, `empty-acceptance`, `empty-edge-reason`, `empty-field`, `empty-graph`, `invalid-enum`, `invalid-id`, `invalid-toml`, `invalid-type`, `invalid-value`, `lane-capability-mismatch`, `missing-key`, `self-dependency`, `unknown-capability`, `unknown-key`.
 
 <!-- warnings -->
 

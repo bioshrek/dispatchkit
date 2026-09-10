@@ -13,11 +13,20 @@ import tomllib
 from typing import Any
 
 from dispatchkit.errors import GraphError, GraphIssue
-from dispatchkit.model import Dependency, Lane, Task, TaskGraph, TaskId, Verify
+from dispatchkit.model import (
+    DEFAULT_BASE,
+    Base,
+    Dependency,
+    Lane,
+    Task,
+    TaskGraph,
+    TaskId,
+    Verify,
+)
 
 __all__ = ["GraphError", "GraphIssue", "parse_graph"]
 
-TOP_LEVEL_KEYS = frozenset({"doc", "plan", "task"})
+TOP_LEVEL_KEYS = frozenset({"base", "doc", "plan", "task"})
 REQUIRED_TASK_KEYS = ("id", "title", "milestone", "lane", "acceptance")
 OPTIONAL_TASK_KEYS = (
     "verify",
@@ -85,6 +94,18 @@ def parse_graph(text: str, *, plan: str) -> TaskGraph:
             # nothing, which is worse than no line at all.
             collector.add("invalid-type", plan, "`doc` must be a non-empty string")
 
+    base = DEFAULT_BASE
+    if "base" in document:
+        raw_base = document["base"]
+        if not isinstance(raw_base, str):
+            collector.add("invalid-type", plan, "`base` must be a string")
+        else:
+            problem = Base.check(raw_base)
+            if problem is not None:
+                collector.add("invalid-value", plan, f"`base` {problem}")
+            else:
+                base = Base(raw_base)
+
     raw_tasks = document.get("task", [])
     if not isinstance(raw_tasks, list) or not all(isinstance(item, dict) for item in raw_tasks):
         collector.add("invalid-type", plan, "`task` must be an array of tables")
@@ -96,7 +117,7 @@ def parse_graph(text: str, *, plan: str) -> TaskGraph:
     tasks = [_parse_task(raw, index, collector) for index, raw in enumerate(raw_tasks)]
     if collector.issues:
         raise GraphError(collector.issues)
-    return TaskGraph(plan=plan_name, tasks=tuple(tasks), doc=doc)
+    return TaskGraph(plan=plan_name, tasks=tuple(tasks), base=base, doc=doc)
 
 
 def _parse_task(raw: dict[str, Any], index: int, collector: _Collector) -> Task:

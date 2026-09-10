@@ -136,6 +136,10 @@ def render_raw_block(block: MachineBlock) -> str:
         "depends": "[" + ", ".join(block.depends) + "]",
         "touches": "[" + ", ".join(f'"{pattern}"' for pattern in block.touches) + "]",
     }
+    # Only from the version that introduced it, so a v1 fixture stays a v1
+    # fixture and keeps proving that an older block still reads (D16).
+    if block.version >= 2:
+        values["base"] = str(block.base)
     body = "\n".join(f"{key}: {value}" for key, value in values.items())
     return f"<!-- dispatchkit\n{body}\n-->"
 

@@ -30,12 +30,21 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from dispatchkit.errors import GraphError, GraphIssue
-from dispatchkit.model import CAPABILITIES, SLUG, Lane, Task, TaskId, Verify
+from dispatchkit.model import (
+    CAPABILITIES,
+    DEFAULT_BASE,
+    SLUG,
+    Base,
+    Lane,
+    Task,
+    TaskId,
+    Verify,
+)
 
 #: Wire-format version of the machine block. Bump only for a change an older
 #: reader would misread; additive keys an old reader must ignore are not
 #: expressible in this grammar, so in practice every change bumps it.
-BLOCK_VERSION = 1
+BLOCK_VERSION = 2
 
 OPEN = "<!-- dispatchkit"
 CLOSE = "-->"
@@ -50,7 +59,14 @@ KEYS = (
     "spend",
     "depends",
     "touches",
+    "base",
 )
+
+#: Keys that did not exist in every version, and the version that introduced
+#: them. An older block is missing them legitimately, and the value it would
+#: have carried is the default — a v1 plan predates plan branches, so it
+#: integrates on `main`, which is what `DEFAULT_BASE` is (D16).
+SINCE = {"base": 2}
 
 _PLAIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
 _LINE = re.compile(r"^(?P<key>[a-z_]+):[ ](?P<value>.*)$")
@@ -69,12 +85,15 @@ class MachineBlock:
     spend: bool
     depends: tuple[TaskId, ...]
     touches: tuple[str, ...]
+    #: The branch this task's plan integrates on (D16). Defaulted for the same
+    #: reason `version` is, and because a v1 block does not carry one.
+    base: Base = DEFAULT_BASE
     #: The wire-format version the block was written with. Defaulted so test
     #: and fixture builders need not repeat it; parsing never defaults it.
     version: int = BLOCK_VERSION
 
 
-def render_block(task: Task, *, plan: str) -> str:
+def render_block(task: Task, *, plan: str, base: Base = DEFAULT_BASE) -> str:
     values = {
         "v": str(BLOCK_VERSION),
         "id": _scalar(task.id),
@@ -86,6 +105,7 @@ def render_block(task: Task, *, plan: str) -> str:
         "spend": "true" if task.spend else "false",
         "depends": _list(edge.on for edge in task.depends),
         "touches": _list(task.touches),
+        "base": _scalar(str(base)),
     }
     body = "\n".join(f"{key}: {values[key]}" for key in KEYS)
     return f"{OPEN}\n{body}\n{CLOSE}"
@@ -110,11 +130,10 @@ def parse_block(body: str) -> MachineBlock:
         else:
             raw[key] = match.group("value")
 
-    for key in KEYS:
-        if key not in raw:
-            issues.append(GraphIssue("missing-key", "block", f"missing key `{key}`"))
-
     version = _read_version(raw.get("v"), issues)
+    for key in KEYS:
+        if key not in raw and SINCE.get(key, 1) <= version:
+            issues.append(GraphIssue("missing-key", "block", f"missing key `{key}`"))
     if issues:
         raise GraphError(issues)
 
@@ -172,8 +191,21 @@ def _build(raw: dict[str, str], version: int, issues: list[GraphIssue]) -> Machi
         spend=_read_bool(raw["spend"], issues),
         depends=tuple(TaskId(dep) for dep in depends),
         touches=_read_list(raw["touches"], "touches", issues),
+        base=_read_base(raw.get("base"), issues),
         version=version,
     )
+
+
+def _read_base(raw: str | None, issues: list[GraphIssue]) -> Base:
+    """A v1 block has no `base`, and its plan integrates on `main`."""
+    if raw is None:
+        return DEFAULT_BASE
+    name = _read_scalar(raw, "base", issues)
+    problem = Base.check(name)
+    if problem is not None:
+        issues.append(GraphIssue("invalid-value", "block", f"`base` {problem}"))
+        return DEFAULT_BASE
+    return Base(name)
 
 
 def _extract(body: str) -> list[str]:

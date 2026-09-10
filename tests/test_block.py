@@ -91,7 +91,7 @@ class TestRendering:
         rendered = render_block(make_task(), plan="refactor")
         assert rendered.splitlines() == [
             "<!-- dispatchkit",
-            "v: 1",
+            "v: 2",
             "id: m5a-values",
             "plan: refactor",
             "milestone: M5a",
@@ -101,6 +101,7 @@ class TestRendering:
             "spend: false",
             "depends: [m2-cassette]",
             'touches: ["src/podkit/domain/**"]',
+            "base: main",
             "-->",
         ]
 

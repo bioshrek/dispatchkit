@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from dispatchkit.apply import build_body, desired_labels, execute_plan, plan_apply
-from dispatchkit.block import parse_block
+from dispatchkit.block import BLOCK_VERSION, parse_block
 from dispatchkit.github import CreateIssue, IssueState, RepoState, UpdateIssue
 from dispatchkit.model import Lane, TaskGraph, TaskId, Verify
 from tests.fake_github import FakeGitHub
@@ -124,24 +124,76 @@ class TestIdempotency:
         assert api.calls[0].startswith("ensure_labels")
 
 
+def state_matching(the_graph: TaskGraph) -> RepoState:
+    """The issues a previous `apply` of this graph would have left behind."""
+    return RepoState(
+        tuple(
+            IssueState(
+                number=7 + index,
+                title=each.title,
+                body=build_body(each, plan=the_graph.plan, spec=None),
+                labels=tuple(desired_labels(each, plan=the_graph.plan)),
+                closed=False,
+            )
+            for index, each in enumerate(the_graph.tasks)
+        )
+    )
+
+
 class TestDriftAgainstTheRecordedFixture:
     def test_an_unchanged_task_produces_no_operations(self) -> None:
-        # `ports` in the fixture was recorded from a previous apply of this graph.
-        plan = plan_apply(two_task_graph(), recorded_state())
+        plan = plan_apply(two_task_graph(), state_matching(two_task_graph()))
         assert not any(
             isinstance(op, UpdateIssue) and op.task_id == TaskId("ports") for op in plan.operations
         )
 
     def test_a_changed_task_is_updated_in_place(self) -> None:
+        # Only `adapter` moves: its verify flips, and `ports` is untouched.
         changed = graph(
             task("ports", verify=Verify.AUTO),
-            task("adapter", depends=("ports",), lane=Lane.LOCAL, requires=("gpu",)),
+            task(
+                "adapter",
+                depends=("ports",),
+                lane=Lane.LOCAL,
+                requires=("gpu",),
+                verify=Verify.AUTO,
+            ),
             plan=PLAN,
         )
-        state = recorded_state()
-        plan = plan_apply(changed, state)
+        plan = plan_apply(changed, state_matching(two_task_graph()))
         updates = [op for op in plan.operations if isinstance(op, UpdateIssue)]
         assert [op.task_id for op in updates] == [TaskId("adapter")]
+
+
+class TestABlockVersionBumpMigratesInPlace:
+    """The recorded fixture holds real v1 bodies, from before D16.
+
+    A wire-format bump makes every existing issue out of date by definition:
+    the grammar cannot express a key an old reader ignores, so the version
+    moves and the body changes. That is not drift to be suppressed — it is a
+    migration, and `apply` is the thing that performs it. What must hold is
+    that it performs it *once*.
+    """
+
+    def test_an_older_body_is_rewritten(self) -> None:
+        plan = plan_apply(two_task_graph(), recorded_state())
+        updated = {op.task_id for op in plan.operations if isinstance(op, UpdateIssue)}
+        assert TaskId("ports") in updated
+
+    def test_the_rewrite_is_to_the_current_version(self) -> None:
+        plan = plan_apply(two_task_graph(), recorded_state())
+        update = next(
+            op
+            for op in plan.operations
+            if isinstance(op, UpdateIssue) and op.task_id == TaskId("ports")
+        )
+        assert f"v: {BLOCK_VERSION}" in update.body
+
+    def test_it_happens_once(self) -> None:
+        # Convergence, which is the property that makes a migration safe to
+        # run unattended: re-reading what the migration wrote plans nothing.
+        plan = plan_apply(two_task_graph(), state_matching(two_task_graph()))
+        assert not [op for op in plan.operations if isinstance(op, UpdateIssue)]
 
     def test_update_preserves_labels_it_does_not_own(self) -> None:
         state = RepoState(
