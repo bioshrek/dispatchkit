@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 from dispatchkit.gh_cli import AGENT_LOGIN
 from dispatchkit.github import IssueState, RepoState
+from dispatchkit.model import DEFAULT_BASE, Base
 
 
 @dataclass
@@ -32,6 +33,8 @@ class FakeGitHub:
     #: The local lane's two writes (D6), kept for assertion rather than replay.
     opened: list[dict[str, str]] = field(default_factory=list)
     comments: list[dict[str, str]] = field(default_factory=list)
+    #: The base each cloud dispatch was told to start from (D16).
+    assigned_base: dict[int, Base] = field(default_factory=dict)
     next_pr: int = 900
 
     def open_pr(self, *, head: str, title: str, body: str) -> int:
@@ -82,8 +85,9 @@ class FakeGitHub:
         self.calls.append(f"update_issue({number})")
         self._replace(number, title=title, body=body, labels=tuple(labels))
 
-    def assign_agent(self, *, number: int, node_id: str) -> None:
+    def assign_agent(self, *, number: int, node_id: str, base: Base = DEFAULT_BASE) -> None:
         self.calls.append(f"assign_agent({number})")
+        self.assigned_base[number] = base
         # `replaceActorsForAssignable` replaces rather than appends, so a
         # second assignment of the same actor leaves the state unchanged —
         # which is exactly what makes concurrent passes safe.

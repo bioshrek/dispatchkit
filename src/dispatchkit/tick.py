@@ -209,7 +209,11 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
     for operation in plan.operations:
         match operation:
             case AssignAgent():
-                api.assign_agent(number=operation.number, node_id=operation.node_id)
+                api.assign_agent(
+                    number=operation.number,
+                    node_id=operation.node_id,
+                    base=operation.base,
+                )
                 dispatched += 1
             case UnassignAgent():
                 api.unassign_agent(number=operation.number, assignees=operation.assignees)
@@ -296,7 +300,7 @@ def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:
             "the snapshot carries no GraphQL node id, so the agent cannot be "
             "assigned; re-read the repository state",
         )
-    return AssignAgent(task.ref, task.number, task.node_id)
+    return AssignAgent(task.ref, task.number, task.node_id, task.base)
 
 
 def summarise(plan: TickPlan, *, since: TickPlan | None = None) -> Sequence[str]:

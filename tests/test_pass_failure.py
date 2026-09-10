@@ -31,6 +31,7 @@ import pytest
 
 from dispatchkit.cli import EXIT_OK, main
 from dispatchkit.github import RepoState
+from dispatchkit.model import DEFAULT_BASE, Base
 from tests.fake_github import FakeGitHub
 from tests.items import issue, state_of
 
@@ -54,7 +55,7 @@ class Failing(FakeGitHub):
         self.passes += 1
         return super().fetch_state()
 
-    def assign_agent(self, *, number: int, node_id: str) -> None:
+    def assign_agent(self, *, number: int, node_id: str, base: Base = DEFAULT_BASE) -> None:
         if self.remaining > 0:
             self.remaining -= 1
             raise RuntimeError("gh issue failed: 'dispatch:local' not found")

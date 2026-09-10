@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from dispatchkit.model import Lane, PullRequest, TaskId, TaskRef, Verify
+from dispatchkit.model import DEFAULT_BASE, Base, Lane, PullRequest, TaskId, TaskRef, Verify
 
 MANAGED_LABEL_PREFIXES = ("plan:", "lane:", "verify:")
 DISPATCHKIT_LABEL = "dispatchkit"
@@ -143,6 +143,9 @@ class AssignAgent:
     ref: TaskRef
     number: int
     node_id: str
+    #: The branch the agent starts from and targets (D16). Always set — the
+    #: adapter should never have to decide what an absent base means.
+    base: Base = DEFAULT_BASE
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,7 +258,7 @@ class GitHubApi(Protocol):
         remove_labels: Sequence[str] = (),
     ) -> None: ...
 
-    def assign_agent(self, *, number: int, node_id: str) -> None: ...
+    def assign_agent(self, *, number: int, node_id: str, base: Base) -> None: ...
 
     def unassign_agent(self, *, number: int, assignees: Sequence[str]) -> None: ...
 

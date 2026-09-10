@@ -31,7 +31,7 @@ from dispatchkit.gh_cli import (
     state_command,
     update_issue_command,
 )
-from dispatchkit.model import Checks, PullRequest
+from dispatchkit.model import DEFAULT_BASE, Checks, PullRequest
 
 pytestmark = pytest.mark.replay
 
@@ -277,7 +277,7 @@ class TestAgentAssignment:
         assert parse_agent_actor(payload) is None
 
     def test_the_assignment_names_the_issue_node_and_the_actor(self) -> None:
-        command = assign_command("I_kwDO123", "BOT_9")
+        command = assign_command("I_kwDO123", "BOT_9", base=DEFAULT_BASE)
         assert command[:3] == ["gh", "api", "graphql"]
         assert "-F" in command
         joined = " ".join(command)
@@ -287,12 +287,14 @@ class TestAgentAssignment:
     def test_the_mutation_replaces_rather_than_appends(self) -> None:
         # `replaceActorsForAssignable` is what makes a double-assign a no-op,
         # which is what lets two concurrent passes converge.
-        assert "replaceActorsForAssignable" in " ".join(assign_command("I_1", "BOT_9"))
+        command = assign_command("I_1", "BOT_9", base=DEFAULT_BASE)
+        assert "replaceActorsForAssignable" in " ".join(command)
 
     def test_ids_are_never_interpolated_into_the_query_text(self) -> None:
         # They arrive as `-F` variables, so a hostile id cannot rewrite the
         # mutation body.
-        query = next(part for part in assign_command("I_1", "BOT_9") if part.startswith("query="))
+        command = assign_command("I_1", "BOT_9", base=DEFAULT_BASE)
+        query = next(part for part in command if part.startswith("query="))
         assert "I_1" not in query and "BOT_9" not in query
 
 

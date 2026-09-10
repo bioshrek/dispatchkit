@@ -46,7 +46,7 @@ from dispatchkit.github import (
     RepoState,
     UnassignAgent,
 )
-from dispatchkit.model import Checks, Lane, PullRequest, TaskId, TaskRef, Verify
+from dispatchkit.model import Base, Checks, Lane, PullRequest, TaskId, TaskRef, Verify
 
 #: The cloud agent's own login. GitHub records a second AssignedEvent for the
 #: human who triggered the dispatch, so both the count of attempts and the
@@ -121,6 +121,11 @@ class TaskItem:
     @property
     def verify(self) -> Verify:
         return self.block.verify
+
+    @property
+    def base(self) -> Base:
+        """The branch this task's plan integrates on (D16)."""
+        return self.block.base
 
     @property
     def touches(self) -> tuple[str, ...]:

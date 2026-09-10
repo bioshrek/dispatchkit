@@ -10,7 +10,16 @@ from datetime import UTC, datetime
 
 from dispatchkit.block import MachineBlock
 from dispatchkit.github import IssueState, RepoState
-from dispatchkit.model import Checks, Lane, PullRequest, TaskId, TaskRef, Verify
+from dispatchkit.model import (
+    DEFAULT_BASE,
+    Base,
+    Checks,
+    Lane,
+    PullRequest,
+    TaskId,
+    TaskRef,
+    Verify,
+)
 from dispatchkit.resolve import TaskItem
 
 PLAN = "demo"
@@ -90,6 +99,7 @@ def issue(
     dispatches: tuple[datetime, ...] = (),
     holds: tuple[datetime, ...] = (),
     acceptance: str = "check && verify",
+    base: Base = DEFAULT_BASE,
     node_id: str | None = None,
 ) -> IssueState:
     """The same synthetic task, but as GitHub would hand it back."""
@@ -103,6 +113,7 @@ def issue(
         spend=spend,
         depends=tuple(TaskId(dep) for dep in depends),
         touches=touches,
+        base=base,
     )
     return IssueState(
         number=number,

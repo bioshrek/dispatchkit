@@ -27,7 +27,7 @@ from typing import Any
 
 from dispatchkit.doctor import parse_labels, parse_token_scopes
 from dispatchkit.github import LABEL_HOLD, LABEL_LOCAL_CLAIM, IssueState, RepoState
-from dispatchkit.model import Checks, PullRequest
+from dispatchkit.model import Base, Checks, PullRequest
 
 # The coding agent is a bot actor, so it cannot be assigned with
 # `gh issue edit --add-assignee`: it has to be looked up by capability and
@@ -49,8 +49,12 @@ query($owner: String!, $repo: String!) {
 # `replace`, not `add`: a pass that loses a race re-sends the same single
 # actor, which is a no-op, rather than piling up assignees.
 ASSIGN_MUTATION = """
-mutation($assignableId: ID!, $actorIds: [ID!]!) {
-  replaceActorsForAssignable(input: {assignableId: $assignableId, actorIds: $actorIds}) {
+mutation($assignableId: ID!, $actorIds: [ID!]!, $baseRef: String!) {
+  replaceActorsForAssignable(input: {
+    assignableId: $assignableId,
+    actorIds: $actorIds,
+    agentAssignment: {baseRef: $baseRef}
+  }) {
     assignable { ... on Issue { number } }
   }
 }
@@ -359,8 +363,16 @@ def merge_command(number: int, repo: str) -> list[str]:
     return ["gh", "pr", "merge", str(number), "--squash", "--repo", repo]
 
 
-def assign_command(assignable_id: str, actor_id: str) -> list[str]:
-    # Both ids travel as variables, never spliced into the mutation text.
+def assign_command(assignable_id: str, actor_id: str, *, base: Base) -> list[str]:
+    """Assign the coding agent, and say where it starts.
+
+    `agentAssignment.baseRef` is what lets the cloud lane honour a plan branch
+    (D16): *"The base ref/branch for the repository. Defaults to the default
+    branch if not provided."* Sent explicitly rather than omitted for `main`,
+    so the branch a task integrates on is one decision made in one place.
+
+    Every value travels as a variable, never spliced into the mutation text.
+    """
     return [
         "gh",
         "api",
@@ -371,6 +383,8 @@ def assign_command(assignable_id: str, actor_id: str) -> list[str]:
         f"assignableId={assignable_id}",
         "-F",
         f"actorIds[]={actor_id}",
+        "-F",
+        f"baseRef={base}",
     ]
 
 
@@ -476,14 +490,14 @@ class GhCli:
             stdin=body,
         )
 
-    def assign_agent(self, *, number: int, node_id: str) -> None:
+    def assign_agent(self, *, number: int, node_id: str, base: Base) -> None:
         actor = self._agent_actor()
         if actor is None:
             raise RuntimeError(
                 f"{self.repo} has no `{AGENT_LOGIN}` among its assignable actors; "
                 "enable the coding agent, or route these tasks to the local lane"
             )
-        _run(assign_command(node_id, actor))
+        _run(assign_command(node_id, actor, base=base))
 
     def unassign_agent(self, *, number: int, assignees: Sequence[str]) -> None:
         _run(unassign_command(number, self.repo, assignees))
