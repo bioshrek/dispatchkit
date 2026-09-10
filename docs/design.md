@@ -601,8 +601,10 @@ A task is done when its PR merges with `Closes #N`, which closes the issue, whic
 dependents ready on the next pass. There is no separate "mark complete" step to forget.
 
 That free closure is a property of the *default branch*, not of merging: GitHub interprets closing
-keywords only when a PR targets the default branch. D16 moves plan work onto its own base and so
-must take the closure over — see its design note below.
+keywords only when a PR targets the default branch, and elsewhere ignores them without even
+creating a link. A plan that declares a `base` therefore gets its closure from dispatchkit
+instead: a pass closes the issue when it sees a pull request merged into that plan's base. The
+first sentence above still describes a plan on `main`; see the D16 record below.
 
 The `acceptance` command from the task graph is injected into the issue body as the definition
 of done, so both agent lanes run the same check the reviewer will run. A PR that fails CI leaves
@@ -775,12 +777,12 @@ Shipped, each with a decision record below:
 | D10  | Plan-authoring contract: schema page, body lints, authoring guide | An agent given only the two docs produces a graph `validate --strict` accepts |
 | D11  | The checks close over the fence and a missing `gh`; `init` gated on them | A fence that omits the config is red; `init` over one exits non-zero |
 | D6.6 | The local lane's first live trial, and the seven defects it found  | Live: `wordfreq --version` exists because a local agent wrote it, unattended |
+| D16  | The plan branch: a plan integrates on its own base, merged by a human | Both lanes are handed the base; a merge into it closes the task, and the plan's own PR is never merged |
 
 Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D16  | The plan branch: a plan integrates on its own base, merged by a human | Both lanes branch from `plan/<name>`; a plan's tasks reach `Done` with `main` untouched |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | A finished plan reports its own floor; the numbers come from no schema key |
 
 D14 came first because D13 should not be built against something that is being deleted: the
@@ -830,7 +832,7 @@ is least able to help itself.
 | D11  | Configure branch protection; ratify what a failing check is allowed to stop          | Privileged + UX        |
 | D6.6 | Watch the first unattended local run on your own machine, and say what may run there | Trust                  |
 | D15  | Supply a finished plan to measure, and fold the result back into the skill           | Prerequisite           |
-| D16  | Decide whether a plan is a feature branch or a stream of increments; protect `plan/*` | Philosophy + privileged |
+| D16  | Choose whether a plan declares a `base` at all; protect the branches it merges into | Philosophy + privileged |
 
 The privileged acts are unavoidable and trivial — narrowing a token, setting branch protection so
 `doctor`'s merge-gate check can pass. They need no thought, only an account,
@@ -2929,7 +2931,7 @@ least proof, and five of the seven were unreachable from any test that does not 
 process. The lesson is not to write more doubles. It is that *live proof is per-deliverable* — a
 green suite says the parts behave, and only a real run says the seams do.
 
-### D16 design — the plan branch (designed, unbuilt)
+### D16 design — the plan branch (built; the record follows)
 
 Today every task merges into `main`, so a plan is a stream of independent increments landing in
 the trunk, and a half-finished plan is a half-finished feature in the default branch. The
@@ -2997,6 +2999,101 @@ Two things noticed while confirming the above, recorded because they answer olde
 per-task `model` or `effort` had nowhere to live on the cloud side, and that is where it lives.
 And `targetRepositoryId` means a plan's tasks need not all run in the repository holding the
 issues, which is the beginning of cross-repository plans.
+
+### D16 — the plan branch
+
+Built as designed, and the design's own ordering held: the three "must change" items were the
+whole deliverable, and the first of them was indeed not optional.
+
+**What the base is.** A per-plan `base`, defaulting to `main`, carried in the machine block rather
+than read from disk — `watch` is explicitly allowed to run with no checkout, so anything a pass
+needs must be in the issue. It is a value object because of where it ends up: an argv (`git fetch
+<remote> <base>`) and a GraphQL variable. A leading `-` is refused, because at that point it stops
+being a ref and becomes an option.
+
+The block version went to 2, which cost nothing. Only *future* versions are refused, so a v1 block
+still reads — and a v1 block predates plan branches, so its base is `main`. The default and the
+backward-compatible reading are the same value, which is why there is no migration to write;
+`apply` rewrites the body once, as drift, and that is the whole of it.
+
+**The cloud lane was the feasibility question, and it answered yes.** `agentAssignment.baseRef` on
+the mutation dispatchkit already used. The base is sent explicitly even when it is `main`: omitting
+it means "the default branch", which is the same answer by a different route, and the route is
+what matters, because it is the one an omitted base takes silently.
+
+**Three places had to agree in the local lane, and the last one fails in the direction that looks
+like success.** Branch from the base, push to it, and open the pull request *against* it — and a
+pull request opened with no `--base` goes to the default branch and succeeds. Both
+`create_worktree` and `open_pr` take the base as a required argument rather than reading a field on
+the machine: one `watch` serves every plan in a repository, and two of them may integrate on
+different branches, so a base on the workstation could only ever be right for one. `CliWorkstation.base`
+is gone for that reason.
+
+**A bug found by the change rather than by a test.** `commits()` asked `origin/main..HEAD`, which is
+right only while every worktree is cut from the same branch. On a plan branch that is ahead of
+`main`, the plan's own commits counted as this task's work — so D6.6's finding 6, the gate that
+refuses to open a pull request for an agent that changed nothing, would have passed on an empty
+branch. The fix removes the base from the question instead of threading it through a third place:
+`HEAD --not --remotes=origin`, work here the remote has never seen. That is what every caller was
+actually asking — is there work in this tree that would be lost — and the base was only ever a
+proxy for it.
+
+**Closure.** GitHub honours a closing keyword only on the default branch; elsewhere the keywords
+are ignored and no link is created. So dispatchkit closes the issue itself when it sees a merged
+pull request **whose base is that task's base**. Merged alone is not evidence: any account can open
+a pull request cross-referencing an issue, and if merging one anywhere closed the task, an outsider
+could unblock the graph by merging into a branch of their own. On a `main`-based plan the rule emits
+nothing — not as a special case, but because "the issue is still open" is one of its two conditions
+and GitHub got there first. That same condition is what makes it idempotent.
+
+The closure is `gh issue close` with no `--reason`, which means *completed*. `not planned` satisfies
+no dependency (D13.1), so closing a finished task that way would block everything behind it for
+ever — one flag between working and deadlocked.
+
+**Creating the branch is `ensure`, not an operation.** Like labels, not like issues. The API answers
+"does this ref exist" idempotently, so diffing it would have bought nothing but a way for the
+operation list — which is what the convergence test reads — to be non-empty for ever. It runs
+before any issue is written, because an issue is a dispatchable instruction the moment it exists and
+a concurrent pass could try to cut a worktree from a branch that is not there yet. The adapter checks
+before it creates rather than creating and absorbing the 422: this is a plan's integration branch,
+the one place where getting "already there" wrong would rewind other people's merged work, and that
+case deserves better than an error string. The branch is cut from the repository's *actual* default
+branch, asked for rather than assumed — `DEFAULT_BASE` is dispatchkit's word for "this plan has no
+branch of its own", not a claim about the repository.
+
+**Finishing it, and the refusal that is the point.** When a plan's last task closes, the pass opens
+`plan/<name>` → trunk. It never merges it, not even when every task said `verify: auto`. That
+declaration is about a task: a reviewed unit of a reviewed graph. A plan is the sum, and the sum is
+the thing nobody signed off. Collecting the work on a branch is precisely what buys a human one
+reading of the whole, and merging it here would spend that. `OpenPlanPr` carries no `verify` field,
+because a field is a thing a later change can read.
+
+Idempotency here needed a new read. The plan's pull request is linked to no issue — it proposes the
+branch, not a task — so it cannot be found the way task pull requests are. The state query now
+returns the head branch of every open pull request, which is the only available form of "have I
+opened this already". A payload without the key reads as an absence rather than an error, so every
+recorded fixture still parses.
+
+It is deliberately not gated on CI. Withholding the pull request until the branch is green would
+hide a red plan branch from the only person who can act on it, and being looked at is this pull
+request's entire purpose.
+
+**The merge gate re-anchored, and `protected_branch` was deleted rather than kept.** `doctor` asked
+about `main` when `main` was the only place an unattended merge could land. Left alone it would have
+reported on a branch nothing merges into and stayed quiet about the ones that do — green for a
+repository with a protected `main` and a bare `plan/wordfreq`. That is the wrong direction for a
+check whose premise is that dispatchkit's reading of CI may be the only gate there is. The bases come
+from the plan files, because that is where a base is declared; a plan that will not parse is skipped,
+since `doctor` is what people run when things are broken and `validate` is what reports a broken plan.
+The old field is gone rather than left beside the new one: two ways to answer the same question is how
+the old answer comes back.
+
+**Still owed: a live trial.** D6.6's lesson was that live proof is per-deliverable — five of its seven
+defects were unreachable offline. Nothing here has run against a real repository yet, and the parts
+most likely to be wrong are the two that cannot be tested offline at all: whether `agentAssignment.baseRef`
+does what the schema says when a real agent acts on it, and whether a real merged pull request reports
+the `baseRefName` this closure rule now depends on.
+
 
 ## First real plan
 

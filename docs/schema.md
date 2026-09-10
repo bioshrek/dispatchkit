@@ -45,6 +45,15 @@ plan is merged into the default branch by a human — once, deliberately. Omit i
 behaves exactly as it always has. It must be a valid git branch name; a leading `-` is refused
 outright, because it would read as an option rather than a ref.
 
+Declaring one changes three things you can see. `apply` creates the branch if it is not there.
+GitHub will not close your issues — closing keywords are honoured only on the default branch — so
+dispatchkit closes each task itself when it sees that task's pull request merged into this base.
+And when the last task closes, the pass opens one pull request from this branch to the default
+branch, which it will never merge: that review is the whole point of asking for a branch.
+
+`doctor` will report this branch as unprotected until you add required status checks to it. That
+is not a false alarm — it is where `verify: auto` now merges.
+
 `doc` is prose for a language model, not a machine key. It renders one line into every issue body
 of the plan, and that line carries its own precedence: **the issue is the contract, the document
 is context, and a disagreement between them is reported in the pull request rather than
