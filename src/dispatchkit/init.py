@@ -18,6 +18,13 @@ repository somebody may already be using:
   second plan must be empty.
 - **Nothing that exists is overwritten.** A file that is already there is left
   exactly as it is, because somebody else's config is not ours to rewrite.
+- **Success is a verdict, not a report of effort** (D11). Those last two rules
+  combine into a hole: over an existing config with a fence gap, `init` steps
+  over the file, creates nothing and exits 0, while `doctor` on the same tree
+  exits 1. So `init` ends by re-reading the tree it leaves behind and running
+  the local checks against it. The gate is a postcondition, not a
+  precondition — the labels and the plans directory are a gain whatever else
+  is wrong, and withholding them would only add a second failing check.
 
 The config template below is this repository's own, pinned by a test, so what
 `init` writes into an adopter's tree is the file this repository runs on.

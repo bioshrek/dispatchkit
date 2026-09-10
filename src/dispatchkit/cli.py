@@ -697,7 +697,27 @@ def _init(args: argparse.Namespace) -> int:
     else:
         line += f", {result.labels} label(s)"
     print(line)
-    return EXIT_OK
+
+    # The facts above describe the tree `init` found; these describe the tree
+    # it leaves behind. Re-reading is the whole point — checked against the
+    # stale facts, the directory just created still reads as missing, and the
+    # config just written is never opened at all.
+    after = _facts(args)
+    if isinstance(after, int):
+        return after
+    checks = check_local(after)
+    for check_line in summarise(checks):
+        print(check_line)
+    if healthy(checks):
+        return EXIT_OK
+    sys.stdout.flush()  # or the verdict arrives above the checks it is about
+    print(
+        "init: the repository is set up as far as `init` can take it, but a check "
+        "above is failing; `init` does not overwrite a file that already exists, so "
+        "the fix is yours",
+        file=sys.stderr,
+    )
+    return EXIT_INVALID
 
 
 def _load_state(path: Path) -> RepoState | int:
