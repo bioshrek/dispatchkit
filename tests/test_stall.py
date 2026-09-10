@@ -18,11 +18,11 @@ import pytest
 
 from dispatchkit.config import SchedulerConfig
 from dispatchkit.github import LabelIssue, UnassignAgent
-from dispatchkit.model import Checks, PullRequest, TaskId
+from dispatchkit.model import Checks, PullRequest
 from dispatchkit.resolve import LABEL_STUCK, Status, resolve, stall_ops
 from dispatchkit.tick import execute_tick, plan_tick
 from tests.fake_github import FakeGitHub
-from tests.items import PLAN, issue, item, items_of, state_of
+from tests.items import issue, item, items_of, ref, state_of
 
 pytestmark = pytest.mark.unit
 
@@ -55,7 +55,7 @@ class TestAttemptsAreDerived:
 class TestTheStallItself:
     def test_a_dispatch_with_no_pull_request_is_reclaimed(self) -> None:
         task = item("a", number=7, assignees=AGENT, dispatches=(LONG_AGO,))
-        assert stall_ops(items_of(task), CONFIG, NOW) == (UnassignAgent(TaskId("a"), 7, AGENT),)
+        assert stall_ops(items_of(task), CONFIG, NOW) == (UnassignAgent(ref("a"), 7, AGENT),)
 
     def test_a_recent_dispatch_is_given_more_time(self) -> None:
         task = item("a", assignees=AGENT, dispatches=(RECENT,))
@@ -87,8 +87,8 @@ class TestTheBudget:
         """Reclaiming the third attempt would hand out a fourth, so it stops here."""
         task = item("a", number=7, assignees=AGENT, dispatches=(LONG_AGO,) * 3)
         assert stall_ops(items_of(task), CONFIG, NOW) == (
-            UnassignAgent(TaskId("a"), 7, AGENT),
-            LabelIssue(TaskId("a"), 7, add=(LABEL_STUCK,)),
+            UnassignAgent(ref("a"), 7, AGENT),
+            LabelIssue(ref("a"), 7, add=(LABEL_STUCK,)),
         )
 
     def test_a_stuck_task_is_not_reclaimed_again(self) -> None:
@@ -103,7 +103,7 @@ class TestTheBudget:
     def test_the_budget_is_configurable(self) -> None:
         task = item("a", number=7, assignees=AGENT, dispatches=(LONG_AGO,))
         ops = stall_ops(items_of(task), SchedulerConfig(retry_budget=1), NOW)
-        assert LabelIssue(TaskId("a"), 7, add=(LABEL_STUCK,)) in ops
+        assert LabelIssue(ref("a"), 7, add=(LABEL_STUCK,)) in ops
 
 
 class TestTheReportTellsTheTruthAboutIt:
@@ -115,7 +115,7 @@ class TestTheReportTellsTheTruthAboutIt:
             labels=("dispatchkit", LABEL_STUCK),
         )
         rows = resolve(items_of(task))
-        assert rows[TaskId("a")] is Status.STUCK
+        assert rows[ref("a")] is Status.STUCK
 
 
 class TestReclaimConverges:
@@ -133,7 +133,7 @@ class TestReclaimConverges:
         return api
 
     def _pass(self, api: FakeGitHub) -> None:
-        execute_tick(plan_tick(api.state, plan=PLAN, config=CONFIG, now=NOW), api)
+        execute_tick(plan_tick(api.state, config=CONFIG, now=NOW), api)
 
     def test_a_dispatch_that_stalls_is_handed_out_again(self) -> None:
         api = self._api()

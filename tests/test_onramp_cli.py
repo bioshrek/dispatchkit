@@ -205,7 +205,7 @@ class TestRepositoryUnreachable:
         assert "repository not found" in capsys.readouterr().err
 
 
-class TestTickCannotReachGitHub:
+class TestWatchCannotReachGitHub:
     """A pass that cannot read the repository must say so, not traceback.
 
     This is the scheduler's most likely first failure, and it was found by
@@ -220,7 +220,7 @@ class TestTickCannotReachGitHub:
         def __init__(self, *, repo: str) -> None:
             self.repo = repo
 
-        def fetch_state(self, *, plan: str) -> object:
+        def fetch_state(self) -> object:
             raise RuntimeError(
                 "gh api failed: gh: To use GitHub CLI in a GitHub Actions "
                 "workflow, set the GH_TOKEN environment variable."
@@ -234,9 +234,8 @@ class TestTickCannotReachGitHub:
 
         code = main(
             [
-                "tick",
-                "--plan",
-                "demo",
+                "watch",
+                "--once",
                 "--push",
                 "--repo",
                 "o/n",
@@ -259,9 +258,8 @@ class TestTickCannotReachGitHub:
         # stack trace tells the reader nothing they can act on.
         main(
             [
-                "tick",
-                "--plan",
-                "demo",
+                "watch",
+                "--once",
                 "--push",
                 "--repo",
                 "o/n",

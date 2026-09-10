@@ -388,7 +388,7 @@ class GhCli:
     repo: str  # "owner/name"
     _actor: str | None = field(default=None, init=False)
 
-    def fetch_state(self, *, plan: str) -> RepoState:
+    def fetch_state(self) -> RepoState:
         owner, name = self.repo.split("/", 1)
         return parse_state(json.loads(_run(state_command(owner, name))))
 

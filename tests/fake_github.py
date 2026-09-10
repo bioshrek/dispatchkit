@@ -26,8 +26,8 @@ class FakeGitHub:
     #: stall moves it; everything else never reads it.
     clock: datetime = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
 
-    def fetch_state(self, *, plan: str) -> RepoState:
-        self.calls.append(f"fetch_state({plan})")
+    def fetch_state(self) -> RepoState:
+        self.calls.append("fetch_state()")
         return self.state
 
     def ensure_labels(self, labels: Sequence[str]) -> None:

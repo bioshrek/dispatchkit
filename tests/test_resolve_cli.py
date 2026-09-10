@@ -81,7 +81,7 @@ class TestResolveCommand:
     ) -> None:
         state = write_state(tmp_path, issue_node("a", 1))
         main(["resolve", "--state", str(state), "--plan", PLAN])
-        assert "admit: a" in capsys.readouterr().out
+        assert "admit: demo/a" in capsys.readouterr().out
 
     def test_it_explains_deferrals(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

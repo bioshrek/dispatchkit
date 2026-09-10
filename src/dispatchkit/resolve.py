@@ -43,7 +43,7 @@ from dispatchkit.github import (
     RepoState,
     UnassignAgent,
 )
-from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
+from dispatchkit.model import Checks, Lane, PullRequest, TaskId, TaskRef, Verify
 
 #: The cloud agent's own login. GitHub records a second AssignedEvent for the
 #: human who triggered the dispatch, so both the count of attempts and the
@@ -97,6 +97,11 @@ class TaskItem:
     @property
     def id(self) -> TaskId:
         return self.block.id
+
+    @property
+    def ref(self) -> TaskRef:
+        """How this task is named outside its own plan (D13)."""
+        return TaskRef(self.block.plan, self.block.id)
 
     @property
     def lane(self) -> Lane:
@@ -155,23 +160,31 @@ class TaskItem:
 
 @dataclass(frozen=True, slots=True)
 class Deferral:
-    task_id: TaskId
+    ref: TaskRef
     reason: str
     detail: str = ""
 
     def __str__(self) -> str:
         suffix = f" ({self.detail})" if self.detail else ""
-        return f"{self.task_id}: {self.reason}{suffix}"
+        return f"{self.ref}: {self.reason}{suffix}"
 
 
 @dataclass(frozen=True, slots=True)
 class AdmissionPlan:
-    admitted: tuple[TaskId, ...]
+    admitted: tuple[TaskRef, ...]
     deferred: tuple[Deferral, ...]
 
 
-def build_items(state: RepoState, *, plan: str) -> tuple[tuple[TaskItem, ...], tuple[Notice, ...]]:
-    """Turn a repo snapshot into resolver input, in issue order."""
+def build_items(
+    state: RepoState, *, plan: str | None = None
+) -> tuple[tuple[TaskItem, ...], tuple[Notice, ...]]:
+    """Turn a repo snapshot into resolver input, in issue order.
+
+    `plan` narrows the result to one graph file, which is what a single-plan
+    report wants. A pass passes nothing: `watch` schedules every plan in the
+    repository at once, because the caps bound agents and a machine, neither
+    of which knows what a plan is (D13).
+    """
     items: list[TaskItem] = []
     notices: list[Notice] = []
 
@@ -190,7 +203,7 @@ def build_items(state: RepoState, *, plan: str) -> tuple[tuple[TaskItem, ...], t
                 )
             )
             continue
-        if block.plan != plan:
+        if plan is not None and block.plan != plan:
             continue
         items.append(
             TaskItem(
@@ -207,13 +220,17 @@ def build_items(state: RepoState, *, plan: str) -> tuple[tuple[TaskItem, ...], t
     return tuple(items), tuple(notices)
 
 
-def resolve(items: Sequence[TaskItem]) -> dict[TaskId, Status]:
-    """Derive every task's status from the issues alone."""
-    closed = {task.id for task in items if task.closed}
-    return {task.id: _status_of(task, closed) for task in items}
+def resolve(items: Sequence[TaskItem]) -> dict[TaskRef, Status]:
+    """Derive every task's status from the issues alone.
+
+    Keyed by `TaskRef`, not by `TaskId`: `watch` pools every plan in the
+    repository, and two plans may both contain `ports` (D13).
+    """
+    closed = {task.ref for task in items if task.closed}
+    return {task.ref: _status_of(task, closed) for task in items}
 
 
-def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Status:
+def _status_of(task: TaskItem, closed: frozenset[TaskRef] | set[TaskRef]) -> Status:
     if task.closed:
         return Status.DONE
     if task.stuck:
@@ -245,7 +262,7 @@ def _status_of(task: TaskItem, closed: frozenset[TaskId] | set[TaskId]) -> Statu
         return Status.DISPATCHED
     # A dependency with no issue at all (deleted, or never applied) is not
     # closed, so its dependents stay blocked. Failing safe beats guessing.
-    if all(dep in closed for dep in task.block.depends):
+    if all(task.ref.sibling(dep) in closed for dep in task.block.depends):
         return Status.READY
     return Status.BLOCKED
 
@@ -269,7 +286,7 @@ def ready_ops(items: Sequence[TaskItem]) -> tuple[MarkReady, ...]:
         if task.closed or task.verify is not Verify.AUTO:
             continue
         operations += [
-            MarkReady(task.id, pr.number)
+            MarkReady(task.ref, pr.number)
             for pr in task.open_prs
             if pr.draft and pr.checks is Checks.PASSING
         ]
@@ -309,7 +326,7 @@ def merge_ops(items: Sequence[TaskItem], config: SchedulerConfig) -> tuple[Merge
         if task.closed or task.verify is not Verify.AUTO:
             continue
         operations += [
-            MergePr(task.id, pr.number)
+            MergePr(task.ref, pr.number)
             for pr in task.open_prs
             if not pr.draft
             and pr.mergeable
@@ -342,11 +359,11 @@ def stall_ops(
         if not _stalled(task, config, now):
             continue
         agent = tuple(name for name in task.assignees if name in AGENT_LOGINS)
-        ops.append(UnassignAgent(task.id, task.number, agent or task.assignees))
+        ops.append(UnassignAgent(task.ref, task.number, agent or task.assignees))
         if task.attempts >= config.retry_budget:
             # Handing it back now would spend a fourth attempt on a budget of
             # three, so the reclaim is the last thing that happens to it.
-            ops.append(LabelIssue(task.id, task.number, add=(LABEL_STUCK,)))
+            ops.append(LabelIssue(task.ref, task.number, add=(LABEL_STUCK,)))
     return tuple(ops)
 
 
@@ -404,7 +421,7 @@ def ci_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
 
 def admit(
     items: Sequence[TaskItem],
-    statuses: Mapping[TaskId, Status],
+    statuses: Mapping[TaskRef, Status],
     config: SchedulerConfig,
 ) -> AdmissionPlan:
     """Choose which ready tasks to start now, respecting caps, spend and scope.
@@ -414,25 +431,25 @@ def admit(
     ordering is the tie-break, and the choice is reproducible.
     """
     in_flight: dict[Lane, int] = {}
-    active: list[tuple[TaskId, tuple[str, ...]]] = []
+    active: list[tuple[TaskRef, tuple[str, ...]]] = []
     for task in items:
-        if statuses[task.id] in IN_FLIGHT:
+        if statuses[task.ref] in IN_FLIGHT:
             in_flight[task.lane] = in_flight.get(task.lane, 0) + 1
-            active.append((task.id, task.touches))
+            active.append((task.ref, task.touches))
 
-    admitted: list[TaskId] = []
+    admitted: list[TaskRef] = []
     deferred: list[Deferral] = []
 
     for task in sorted(items, key=lambda task: task.number):
-        if statuses[task.id] is not Status.READY:
+        if statuses[task.ref] is not Status.READY:
             continue
         deferral = _gate(task, config, in_flight, active)
         if deferral is not None:
             deferred.append(deferral)
             continue
-        admitted.append(task.id)
+        admitted.append(task.ref)
         in_flight[task.lane] = in_flight.get(task.lane, 0) + 1
-        active.append((task.id, task.touches))
+        active.append((task.ref, task.touches))
 
     return AdmissionPlan(tuple(admitted), tuple(deferred))
 
@@ -441,29 +458,31 @@ def _gate(
     task: TaskItem,
     config: SchedulerConfig,
     in_flight: Mapping[Lane, int],
-    active: Sequence[tuple[TaskId, tuple[str, ...]]],
+    active: Sequence[tuple[TaskRef, tuple[str, ...]]],
 ) -> Deferral | None:
     if LABEL_STUCK in task.labels:
-        return Deferral(task.id, "stuck", "labelled dispatch:stuck")
+        return Deferral(task.ref, "stuck", "labelled dispatch:stuck")
     if task.attempts >= config.retry_budget:
-        return Deferral(task.id, "stuck", f"{task.attempts} attempts, budget {config.retry_budget}")
+        return Deferral(
+            task.ref, "stuck", f"{task.attempts} attempts, budget {config.retry_budget}"
+        )
     if task.block.spend and LABEL_SPEND_APPROVED not in task.labels:
-        return Deferral(task.id, "awaiting-spend-approval", "add `spend:approved` to release")
+        return Deferral(task.ref, "awaiting-spend-approval", "add `spend:approved` to release")
     cap = config.cap(task.lane)
     if in_flight.get(task.lane, 0) >= cap:
-        return Deferral(task.id, "lane-cap", f"{task.lane.value} cap {cap}")
+        return Deferral(task.ref, "lane-cap", f"{task.lane.value} cap {cap}")
     blocker = _scope_conflict(task, active)
     if blocker is not None:
-        return Deferral(task.id, "file-scope-conflict", f"overlaps {blocker}")
+        return Deferral(task.ref, "file-scope-conflict", f"overlaps {blocker}")
     return None
 
 
 def _scope_conflict(
-    task: TaskItem, active: Iterable[tuple[TaskId, tuple[str, ...]]]
-) -> TaskId | None:
-    for other_id, other_touches in active:
+    task: TaskItem, active: Iterable[tuple[TaskRef, tuple[str, ...]]]
+) -> TaskRef | None:
+    for other_ref, other_touches in active:
         if any(_overlaps(mine, theirs) for mine in task.touches for theirs in other_touches):
-            return other_id
+            return other_ref
     return None
 
 

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 from dispatchkit.block import MachineBlock
 from dispatchkit.github import IssueState, RepoState
-from dispatchkit.model import Checks, Lane, PullRequest, TaskId, Verify
+from dispatchkit.model import Checks, Lane, PullRequest, TaskId, TaskRef, Verify
 from dispatchkit.resolve import TaskItem
 
 PLAN = "demo"
@@ -23,6 +23,7 @@ _LONG_AGO = datetime(2020, 1, 1, tzinfo=UTC)
 def item(
     name: str,
     *,
+    plan: str = PLAN,
     number: int | None = None,
     depends: tuple[str, ...] = (),
     lane: Lane = Lane.CLOUD,
@@ -40,7 +41,7 @@ def item(
     return TaskItem(
         block=MachineBlock(
             id=TaskId(name),
-            plan=PLAN,
+            plan=plan,
             milestone="M",
             lane=lane,
             requires=requires,
@@ -62,10 +63,16 @@ def items_of(*entries: TaskItem) -> tuple[TaskItem, ...]:
     return entries
 
 
+def ref(name: str, plan: str = PLAN) -> TaskRef:
+    """How a task is keyed once every plan is in the room (D13)."""
+    return TaskRef(plan, TaskId(name))
+
+
 def issue(
     name: str,
     number: int,
     *,
+    plan: str = PLAN,
     depends: tuple[str, ...] = (),
     lane: Lane = Lane.CLOUD,
     verify: Verify = Verify.HUMAN,
@@ -80,7 +87,7 @@ def issue(
     """The same synthetic task, but as GitHub would hand it back."""
     block = MachineBlock(
         id=TaskId(name),
-        plan=PLAN,
+        plan=plan,
         milestone="M",
         lane=lane,
         requires=("gpu",) if lane is Lane.LOCAL else (),

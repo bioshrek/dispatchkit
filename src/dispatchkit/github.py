@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from dispatchkit.model import Lane, PullRequest, TaskId, Verify
+from dispatchkit.model import Lane, PullRequest, TaskId, TaskRef, Verify
 
 MANAGED_LABEL_PREFIXES = ("plan:", "lane:", "verify:")
 DISPATCHKIT_LABEL = "dispatchkit"
@@ -97,7 +97,7 @@ class AssignAgent:
     ordering matters: it must land before anything that records the fact.
     """
 
-    task_id: TaskId
+    ref: TaskRef
     number: int
     node_id: str
 
@@ -112,7 +112,7 @@ class UnassignAgent:
     themselves to watch a task keeps their assignment.
     """
 
-    task_id: TaskId
+    ref: TaskRef
     number: int
     assignees: tuple[str, ...]
 
@@ -121,7 +121,7 @@ class UnassignAgent:
 class LabelIssue:
     """Claim a task for the local lane, or clear a claim."""
 
-    task_id: TaskId
+    ref: TaskRef
     number: int
     add: tuple[str, ...] = ()
     remove: tuple[str, ...] = ()
@@ -138,7 +138,7 @@ class MarkReady:
     that has actually passed.
     """
 
-    task_id: TaskId
+    ref: TaskRef
     number: int
 
 
@@ -153,7 +153,7 @@ class MergePr:
     protection, which would merge unreviewed code having consulted nothing.
     """
 
-    task_id: TaskId
+    ref: TaskRef
     number: int
 
 
@@ -196,7 +196,7 @@ class ApplyResult:
 class GitHubApi(Protocol):
     """The port `apply` needs. Adapters live in `gh_cli.py`."""
 
-    def fetch_state(self, *, plan: str) -> RepoState: ...
+    def fetch_state(self) -> RepoState: ...
 
     def ensure_labels(self, labels: Sequence[str]) -> None: ...
 

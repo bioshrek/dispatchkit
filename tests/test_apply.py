@@ -88,23 +88,23 @@ class TestPlanningFromEmpty:
 class TestIdempotency:
     def test_applying_twice_is_a_no_op(self) -> None:
         api = FakeGitHub()
-        first = plan_apply(two_task_graph(), api.fetch_state(plan=PLAN))
+        first = plan_apply(two_task_graph(), api.fetch_state())
         execute_plan(first, api)
 
-        second = plan_apply(two_task_graph(), api.fetch_state(plan=PLAN))
+        second = plan_apply(two_task_graph(), api.fetch_state())
         assert second.operations == ()
         assert second.notices == ()
 
     def test_a_second_run_updates_rather_than_duplicating(self) -> None:
         api = FakeGitHub()
-        execute_plan(plan_apply(two_task_graph(), api.fetch_state(plan=PLAN)), api)
+        execute_plan(plan_apply(two_task_graph(), api.fetch_state()), api)
 
         changed = graph(
             task("ports", verify=Verify.AUTO),
             task("adapter", depends=("ports",), lane=Lane.LOCAL, requires=("gpu", "long-run")),
             plan=PLAN,
         )
-        second = plan_apply(changed, api.fetch_state(plan=PLAN))
+        second = plan_apply(changed, api.fetch_state())
         execute_plan(second, api)
 
         assert [type(op) for op in second.operations] == [UpdateIssue]
@@ -271,17 +271,17 @@ class TestEditingATaskInPlace:
     def _applied(self) -> tuple[FakeGitHub, TaskGraph]:
         api = FakeGitHub()
         first = graph(task("ports", verify=Verify.HUMAN), plan=PLAN)
-        execute_plan(plan_apply(first, api.fetch_state(plan=PLAN)), api)
+        execute_plan(plan_apply(first, api.fetch_state()), api)
         return api, graph(task("ports", verify=Verify.AUTO), plan=PLAN)
 
     def test_the_change_is_planned_as_a_single_issue_update(self) -> None:
         api, changed = self._applied()
-        plan = plan_apply(changed, api.fetch_state(plan=PLAN))
+        plan = plan_apply(changed, api.fetch_state())
         assert [type(op) for op in plan.operations] == [UpdateIssue]
 
     def test_the_verify_label_is_swapped_rather_than_accumulated(self) -> None:
         api, changed = self._applied()
-        execute_plan(plan_apply(changed, api.fetch_state(plan=PLAN)), api)
+        execute_plan(plan_apply(changed, api.fetch_state()), api)
         labels = api.state.issues[0].labels
         assert "verify:auto" in labels
         assert "verify:human" not in labels
@@ -290,10 +290,10 @@ class TestEditingATaskInPlace:
         # The labels are a mirror; the block is what the scheduler reads, so
         # the two must never be allowed to disagree.
         api, changed = self._applied()
-        execute_plan(plan_apply(changed, api.fetch_state(plan=PLAN)), api)
+        execute_plan(plan_apply(changed, api.fetch_state()), api)
         assert parse_block(api.state.issues[0].body).verify is Verify.AUTO
 
     def test_it_converges(self) -> None:
         api, changed = self._applied()
-        execute_plan(plan_apply(changed, api.fetch_state(plan=PLAN)), api)
-        assert plan_apply(changed, api.fetch_state(plan=PLAN)).operations == ()
+        execute_plan(plan_apply(changed, api.fetch_state()), api)
+        assert plan_apply(changed, api.fetch_state()).operations == ()

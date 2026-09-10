@@ -5,7 +5,7 @@
     uv run dispatchkit validate docs/plans/<plan>.tasks.toml
     uv run dispatchkit apply    docs/plans/<plan>.tasks.toml [--push --repo o/n]
     uv run dispatchkit resolve  --state state.json --plan <plan>
-    uv run dispatchkit tick     --plan <plan> [--repo o/n --push]
+    uv run dispatchkit watch    --repo o/n --push [--once --interval 60]
 
 Exit codes: 0 success, 1 the graph is invalid (or `--strict` lints tripped, or
 `doctor` found something wrong), 2 the command could not be carried out
@@ -13,7 +13,7 @@ Exit codes: 0 success, 1 the graph is invalid (or `--strict` lints tripped, or
 from "ran it and the answer is no" matters once this is called from a
 workflow, where the two want different responses.
 
-`apply` and `tick` are dry runs unless `--push` is given, and on a dry run no
+`apply` and `watch` are dry runs unless `--push` is given, and on a dry run no
 client is constructed at all — reconciling a graph into a real tracker is not
 something to do by accident. `init` needs no such gate since D14: it writes
 files that do not exist and creates labels, both idempotent and neither
@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,6 +59,11 @@ from dispatchkit.validate import (
     validate_acceptance,
     validate_graph,
 )
+
+#: Seconds between passes. Long enough not to spend an API rate limit on an
+#: idle backlog, short enough that a pull request going green is picked up
+#: while the person who is watching still has it in mind.
+DEFAULT_INTERVAL = 60
 
 EXIT_OK = 0
 EXIT_INVALID = 1
@@ -105,14 +111,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="scheduler config (default: .github/dispatchkit.toml, then dispatchkit.toml)",
     )
 
-    tick_cmd = sub.add_parser("tick", help="run one scheduler pass (dispatch included)")
-    tick_cmd.add_argument("--plan", required=True, help="plan name to run")
-    tick_cmd.add_argument("--state", type=Path, help="dry run against a recorded snapshot")
-    tick_cmd.add_argument("--repo", help="owner/name; required with --push")
-    tick_cmd.add_argument(
+    watch_cmd = sub.add_parser(
+        "watch", help="the scheduler: run a pass, wait, repeat (every plan in the repository)"
+    )
+    watch_cmd.add_argument(
+        "--once", action="store_true", help="run a single pass and exit, rather than looping"
+    )
+    watch_cmd.add_argument(
+        "--interval",
+        type=int,
+        default=DEFAULT_INTERVAL,
+        help=f"seconds to wait between passes (default: {DEFAULT_INTERVAL})",
+    )
+    watch_cmd.add_argument("--state", type=Path, help="dry run against a recorded snapshot")
+    watch_cmd.add_argument("--repo", help="owner/name; required with --push")
+    watch_cmd.add_argument(
         "--push", action="store_true", help="perform the operations (default: dry run)"
     )
-    tick_cmd.add_argument(
+    watch_cmd.add_argument(
         "--config",
         type=Path,
         default=None,
@@ -138,8 +154,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args)
     if args.command == "init":
         return _init(args)
-    if args.command == "tick":
-        return _tick(args)
+    if args.command == "watch":
+        return _watch(args)
     if args.command == "apply":
         return _apply(args)
     if args.command == "resolve":
@@ -199,7 +215,7 @@ def _apply(args: argparse.Namespace) -> int:
         return EXIT_UNREADABLE
 
     api = GhCli(repo=args.repo)
-    plan = plan_apply(graph, api.fetch_state(plan=graph.plan), specs)
+    plan = plan_apply(graph, api.fetch_state(), specs)
     result = execute_plan(plan, api)
     print(f"applied plan `{graph.plan}`: {result.created} created, {result.updated} updated")
     for notice in plan.notices:
@@ -227,41 +243,87 @@ def _resolve(args: argparse.Namespace) -> int:
     statuses = resolve(items)
     width = max(len(task.id) for task in items)
     for task in items:
-        print(f"  #{task.number:<4} {task.id:<{width}}  {statuses[task.id].value}")
+        print(f"  #{task.number:<4} {task.id:<{width}}  {statuses[task.ref].value}")
 
     plan = admit(items, statuses, config)
-    print("admit: " + (" ".join(plan.admitted) if plan.admitted else "(nothing ready)"))
+    handed = " ".join(str(ref) for ref in plan.admitted)
+    print("admit: " + (handed if plan.admitted else "(nothing ready)"))
     for deferral in plan.deferred:
         print(f"  defer {deferral}")
 
     return EXIT_OK
 
 
-def _tick(args: argparse.Namespace) -> int:
+def _watch(args: argparse.Namespace) -> int:
+    """The scheduler. One pass, wait, repeat — `--once` stops after the first.
+
+    There is no cron and no workflow behind this since D13: the loop runs in a
+    terminal a human is sitting at, which is what lets it hold `gh`'s keychain
+    credential instead of a broad classic PAT in Actions secrets. The accepted
+    cost is that the graph only moves while this is running.
+    """
     config = _config(args)
     if isinstance(config, int):
         return config
+
+    if args.interval < 1:
+        print("dispatchkit: --interval must be at least 1 second", file=sys.stderr)
+        return EXIT_UNREADABLE
 
     if args.push:
         if not args.repo:
             print("dispatchkit: --push requires --repo owner/name", file=sys.stderr)
             return EXIT_UNREADABLE
         api = GhCli(repo=args.repo)
-        try:
-            state = api.fetch_state(plan=args.plan)
-        except RuntimeError as exc:
-            print(f"dispatchkit: cannot read {args.repo}: {exc}", file=sys.stderr)
-            return EXIT_UNREADABLE
     elif args.state is not None:
-        loaded = _load_state(args.state)
-        if isinstance(loaded, int):
-            return loaded
-        api, state = None, loaded
+        api = None
     else:
         print("dispatchkit: a dry run needs --state; use --push to run for real", file=sys.stderr)
         return EXIT_UNREADABLE
 
-    plan = plan_tick(state, plan=args.plan, config=config, now=datetime.now(UTC))
+    # A file cannot change under the loop, so looping over one would reprint
+    # the same pass forever. Saying so beats silently doing something else.
+    once = args.once or api is None
+    if api is None and not args.once:
+        print("NOTE a recorded snapshot cannot change, so this is a single pass")
+
+    # The interrupt is caught around the whole loop, not just the wait:
+    # Ctrl-C is likeliest to land in the seconds a pass is talking to GitHub.
+    # Stopping the scheduler is how you stop the scheduler, and a twelve-frame
+    # traceback would report the ordinary way of using it as a crash. Nothing
+    # needs unwinding, because a half-finished pass leaves only the operations
+    # it already sent, and the next pass re-derives everything.
+    try:
+        while True:
+            code = _pass(args, config, api)
+            if code != EXIT_OK or once:
+                return code
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\nwatch: stopped")
+        return EXIT_OK
+
+
+def _pass(args: argparse.Namespace, config: SchedulerConfig, api: GhCli | None) -> int:
+    """One scheduler pass, from a fresh read.
+
+    Every decision is recomputed here. The process may hold a snapshot for
+    rendering, but nothing survives between passes — which is what keeps the
+    convergence standard true across a restart as well as across a re-run.
+    """
+    if api is not None:
+        try:
+            state = api.fetch_state()
+        except RuntimeError as exc:
+            print(f"dispatchkit: cannot read {args.repo}: {exc}", file=sys.stderr)
+            return EXIT_UNREADABLE
+    else:
+        loaded = _load_state(args.state)
+        if isinstance(loaded, int):
+            return loaded
+        state = loaded
+
+    plan = plan_tick(state, config=config, now=datetime.now(UTC))
     for line in summarise_tick(plan):
         print(line)
 

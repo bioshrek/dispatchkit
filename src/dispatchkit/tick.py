@@ -1,5 +1,14 @@
 """D5: one scheduler pass — load, resolve, report, admit, dispatch.
 
+Every plan in the repository, not one (D13). Readiness is still resolved plan
+by plan — a `depends` edge never crosses a graph file — but the admitted set is
+pooled and the caps are counted once, because what they bound was never a plan:
+`caps.cloud` is review capacity and `caps.local` is a workstation. Three active
+plans under a per-plan cap meant three times the open pull requests a person
+agreed to read. Priority falls out as first-in-first-out by issue number, which
+is repo-global and monotonic — oldest plan first, task order within it, finish
+what you started.
+
 `plan_tick` is pure: snapshot in, operations out. `execute_tick` is the only
 thing that mutates, and the only mutation that matters is assignment, because
 **assignment is the lock**. A task is ready only while unassigned, so the act
@@ -36,7 +45,7 @@ from dispatchkit.github import (
     RepoState,
     UnassignAgent,
 )
-from dispatchkit.model import Lane, TaskId
+from dispatchkit.model import Lane, TaskRef
 from dispatchkit.resolve import (
     LABEL_LOCAL_CLAIM,
     Deferral,
@@ -58,8 +67,8 @@ class TickPlan:
     #: What this pass will have made true by the time it ends, for the report.
     #: Held for rendering only — every decision above is taken from the state
     #: as read, and the next pass derives all of this again from scratch.
-    statuses: Mapping[TaskId, Status]
-    admitted: tuple[TaskId, ...]
+    statuses: Mapping[TaskRef, Status]
+    admitted: tuple[TaskRef, ...]
     deferred: tuple[Deferral, ...]
     notices: tuple[Notice, ...]
 
@@ -83,29 +92,30 @@ class TickResult:
     reclaimed: int = 0
 
 
-def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig, now: datetime) -> TickPlan:
-    items, notices = build_items(state, plan=plan)
+def plan_tick(state: RepoState, *, config: SchedulerConfig, now: datetime) -> TickPlan:
+    items, notices = build_items(state)
     statuses = resolve(items)
     admission = admit(items, statuses, config)
 
-    by_id = {task.id: task for task in items}
+    by_ref = {task.ref: task for task in items}
     dispatch_ops: list[DispatchOperation] = []
-    dispatched: list[TaskId] = []
+    dispatched: list[TaskRef] = []
     blocked_notices: list[Notice] = []
 
-    for task_id in admission.admitted:
-        operation = _dispatch_op(by_id[task_id])
+    for ref in admission.admitted:
+        operation = _dispatch_op(by_ref[ref])
         if isinstance(operation, Notice):
             blocked_notices.append(operation)
             continue
         dispatch_ops.append(operation)
-        dispatched.append(task_id)
+        dispatched.append(ref)
 
     # The report must not say `Ready` for an issue this pass just assigned, so
     # the statuses are advanced for exactly the tasks that were handed out. The
     # next pass derives the same value from the assignee, so the printed line
     # and the repository agree.
-    projected = {**statuses, **dict.fromkeys(dispatched, Status.DISPATCHED)}
+    projected: dict[TaskRef, Status] = {**statuses}
+    projected.update(dict.fromkeys(dispatched, Status.DISPATCHED))
 
     # A reclaimed task is unassigned by the time this pass ends, so the report
     # says what will be true rather than what was: `Ready` for one going back
@@ -115,9 +125,9 @@ def plan_tick(state: RepoState, *, plan: str, config: SchedulerConfig, now: date
     for stall in stalls:
         match stall:
             case UnassignAgent():
-                projected[stall.task_id] = Status.READY
+                projected[stall.ref] = Status.READY
             case LabelIssue():
-                projected[stall.task_id] = Status.STUCK
+                projected[stall.ref] = Status.STUCK
 
     # Planned from the state as read. A draft cleared by this pass becomes
     # `Auto-merging` on the next one, which is the same convergence the whole
@@ -168,7 +178,7 @@ def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:
     if task.lane is Lane.LOCAL:
         # The scheduler cannot reach the workstation; the label *is* the
         # dispatch, and a daemon picks it up on its own schedule.
-        return LabelIssue(task.id, task.number, add=(LABEL_LOCAL_CLAIM,))
+        return LabelIssue(task.ref, task.number, add=(LABEL_LOCAL_CLAIM,))
     if not task.node_id:
         return Notice(
             "missing-node-id",
@@ -176,7 +186,7 @@ def _dispatch_op(task: TaskItem) -> DispatchOperation | Notice:
             "the snapshot carries no GraphQL node id, so the agent cannot be "
             "assigned; re-read the repository state",
         )
-    return AssignAgent(task.id, task.number, task.node_id)
+    return AssignAgent(task.ref, task.number, task.node_id)
 
 
 def summarise(plan: TickPlan) -> Sequence[str]:
@@ -186,8 +196,9 @@ def summarise(plan: TickPlan) -> Sequence[str]:
     explain itself — this is the whole of what a reader gets, so a pass that
     prints nothing has to be a pass that saw nothing.
     """
-    lines = [f"  {task_id}: {status.value}" for task_id, status in plan.statuses.items()]
-    lines.append("dispatch: " + (" ".join(plan.admitted) if plan.admitted else "(nothing)"))
+    lines = [f"  {ref}: {status.value}" for ref, status in plan.statuses.items()]
+    handed = " ".join(str(ref) for ref in plan.admitted)
+    lines.append("dispatch: " + (handed if plan.admitted else "(nothing)"))
     lines += [f"  defer {deferral}" for deferral in plan.deferred]
     lines += [f"NOTE {notice}" for notice in plan.notices]
     return lines

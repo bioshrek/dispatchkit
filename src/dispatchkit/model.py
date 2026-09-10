@@ -142,6 +142,33 @@ class Dependency:
     reason: str
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class TaskRef:
+    """One task, identified across the whole repository (D13).
+
+    `id` is a slug scoped to the graph file it was written in, so two plans may
+    both contain `ports`. That was harmless while a pass took `--plan` and saw
+    one plan's issues; `watch` pools every plan, and from then on the bare id
+    is ambiguous — as a status key it silently drops one of the two, and as a
+    dependency it lets one plan's closed task unblock another's.
+
+    So this is the key everywhere a task is named outside its own graph: the
+    status map, admission, the report, and the worktree paths and branch names
+    D6 will need. `depends` stays a bare `TaskId`, because an edge never
+    crosses a plan; it is resolved against the depending task's own plan.
+    """
+
+    plan: str
+    id: TaskId
+
+    def sibling(self, other: TaskId) -> TaskRef:
+        """Another task in the same plan — how a `depends` edge is resolved."""
+        return TaskRef(self.plan, other)
+
+    def __str__(self) -> str:
+        return f"{self.plan}/{self.id}"
+
+
 @dataclass(frozen=True, slots=True)
 class Task:
     id: TaskId
