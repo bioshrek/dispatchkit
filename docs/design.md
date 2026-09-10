@@ -780,12 +780,22 @@ Shipped, each with a decision record below:
 | D16  | The plan branch: a plan integrates on its own base, merged by a human | Both lanes are handed the base; a merge into it closes the task, and the plan's own PR is never merged |
 | D15  | Plan retrospective: overhead and work measured from the timeline     | Live: two finished plans reported their own floor, and both bought less than 1x |
 
-Nothing remains. That is a statement about the build list, not about the tool: the list was
-always the set of things that had to exist before a plan could be handed over and come back
-finished, and D15 was the last of them because it is the only one that needed a finished plan to
-read. What the retrospective then said about those plans -- that neither bought any speedup at
-all -- is not a leftover deliverable. It is the first real question, and it belongs to whoever
-authors the next graph.
+D15 closed the list the design opened with: everything that had to exist before a plan could be
+handed over and come back finished. What the retrospective then said about those plans -- that
+neither bought any speedup at all -- is not a leftover deliverable. It is the first real question,
+and it belongs to whoever authors the next graph.
+
+Remaining, in build order:
+
+| Step | Deliverable                                                        | Proven by                                                             |
+| ---- | ------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| D17  | Getting the tool to an adopter: version stamp, config pin, the planner skill, and how it is installed | A second repository is planned by an agent that was given the skill and never ran `apply` |
+
+D17 is a different kind of step from D1--D16, which all made dispatchkit do more. This one makes
+it *reachable*: everything above was built and proven inside two repositories that already had a
+checkout of the source. An adopter has neither, and the gap between "it works" and "somebody else
+can run it" is where the wire format, the install story and the authoring contract all turn out
+to be one problem.
 
 D14 came first because D13 should not be built against something that is being deleted: the
 terminal view is what replaces the board, and writing one to feed the other would be work done
@@ -3277,6 +3287,110 @@ watching. A `validate` rule built on that would refuse plans for the shape of th
 afternoon. The deleted `overhead_minutes = 10` guess was not merely unknowable, as D2 argued —
 it was wrong by an order of magnitude in one lane and by a factor of five in the other, in
 opposite directions.
+
+### D17 design — getting the tool to an adopter
+
+D1--D16 all made dispatchkit do more, and all of them were proven inside two repositories that had
+a checkout of the source sitting beside them. An adopter has neither the checkout nor the context,
+and the distance between "it works" and "somebody else can run it" turns out to be a single
+problem with four faces: what version is talking, how the tool arrives, what the planning agent is
+told, and which of those things the adopter's repository is allowed to know.
+
+**The client repository must never depend on dispatchkit.** This is the decision the other three
+hang from. Nothing in an adopter's tree imports the package; the tool operates *on* a repository
+from outside, the way `gh` and `ruff` do. Putting it in the adopter's manifest would force
+adopters to be Python projects at all -- the sandbox being Python is incidental, and the scheduler
+dispatches any repository -- pollute a lockfile with something nothing imports, and worst, install
+the scheduler into the same environment the executor runs acceptance commands in, where an agent's
+own dependency work can shadow or break the thing supervising it. dispatchkit is a binary on PATH.
+
+What the adopter's tree *does* carry is state and contract: the config file, the labels, the plans
+directory, the machine block in every issue body, the plan branches, and (below) the skill. That
+is not an installation, and the distinction is the whole of this deliverable.
+
+Since D13 deleted the workflow, `watch` runs on the operator's machine rather than in the
+adopter's CI, so the adopter's pipeline needs nothing either. Four consumers currently share one
+host -- the planning agent, the operator, the local executor and, notionally, the cloud executor
+which is the one that genuinely runs elsewhere. That co-location is a property of this phase and
+not of the design; the ports already permit separating them, and doing so is out of scope here.
+
+**Installation is `uv tool install`, from a git tag.**
+
+```sh
+uv tool install git+https://github.com/bioshrek/dispatchkit@v0.2.0
+```
+
+An isolated environment, a binary on PATH, upgradable in one command, and available to a non-
+Python adopter. Zero runtime dependencies makes the isolation free rather than a compromise.
+Publishing to an index is deliberately *not* part of D17: a tag installs today with no
+infrastructure, no release workflow, no publishing credentials and no name to claim, and adopter
+number one does not need an index to exist. The question can be answered when there is a second
+adopter to answer it for.
+
+**Pin a tag, never a branch** -- which is what forces the next piece.
+
+**A version has to be sayable, because the issue body is a wire format.** The marker and the block
+grammar are written into other people's issues, and `block.py` parses them with a closed grammar
+that refuses unknown keys -- correctly, and that refusal is exactly the failure an adopter would
+hit if their operator ran an older dispatchkit against issues a newer one wrote. Today there is no
+`dispatchkit --version` at all, so the skew is undiagnosable: the symptom is a parse error on a
+body that looks fine to a human.
+
+Three things follow, and they are one mechanism with three users:
+
+| Needs a version | So that |
+| --- | --- |
+| `dispatchkit --version`, reported by `doctor` | An operator can say what they are running before anything else can be checked |
+| A minimum-version key in the adopter's config | `doctor` goes red on skew instead of `block.py` failing to parse |
+| A stamp in the installed skill | `doctor` can notice the skill is older than the tool |
+
+The config pin is the important one, and it is the D16 pattern: `plan/*` protection is a human act
+that nothing can perform automatically, so `doctor` checks it and goes red. A version floor is the
+same shape -- the adopter states what their issues were written by, and the tool refuses rather
+than misreads. Fails closed, at a human, before anything is written.
+
+**`dispatchkit skill`, and what the skill is allowed to say.** D10 shipped `docs/schema.md` and
+`docs/authoring.md` and proved an agent given only those produces a graph `validate --strict`
+accepts. The content exists; only the delivery is missing, and an adopter cannot read two docs
+that live in this repository. So: `dispatchkit skill --print`, or `--install`, with `init` calling
+it -- a separate command rather than only an `init` step, because `init` runs once and the skill
+needs re-writing whenever the tool is upgraded.
+
+The content rule is the substance of the decision: **the skill carries judgement, never grammar.**
+How to decompose work into independently verifiable tasks, where real parallelism actually hides,
+why a chain is the worst shape -- these age slowly and are the part worth writing. The schema ages
+fast, and a copy of it installed into N repositories at N different versions is exactly the drift
+this project refuses everywhere else. `docs/schema.md` remains the sole authority; the skill points
+at it and defers to `validate`.
+
+Deferring to `validate` is what makes the copy safe at all. A skill that describes a format it
+cannot check is a stale wire format with nothing to correct it; a skill that says "run
+`dispatchkit validate --strict` and iterate until it is clean" cannot go meaningfully stale,
+because the installed tool re-adjudicates every run. Being wrong is self-correcting rather than
+silent.
+
+**The planning agent may run `validate`; only a human runs `apply`.** The line is the one this
+codebase is built on -- pure against mutating -- and not, as it first appears, whether the agent
+knows the tool exists. `validate` takes no `--repo`, opens no socket, reads a file and prints:
+its import closure is `errors` and `model`, and it is no more dangerous than the `ruff` every
+executor already runs in its acceptance commands. `apply` is the adapter; it mutates the state
+store; it stays with the person who is reviewing the plan anyway, which design.md has called
+"one-shot, human-reviewed" since the first page without ever writing it down as a rule.
+
+Forbidding the agent to validate does not move the *decision* to the human -- the decision is
+whether the decomposition is right, and that was always theirs. It moves the *typos* to the human,
+who then pastes lint output back and waits, one round trip per lint. D15 measured what a human in
+that loop costs: forty hours between dispatch and first commit on a single task, and a makespan
+that reports the operator's availability rather than the plan's.
+
+**What is deliberately not solved.** Scoping the skill away from the *executing* agent is left to
+dispatchkit's own prompt, not to the environment. The local executor is spawned on the operator's
+machine and inherits its PATH, so it can reach the binary whether or not it is told to; a
+client-side toggle such as `copilot plugins disable` is user configuration rather than repository
+state, does not travel with a clone, cannot reach the cloud lane, and -- since the planner and the
+local executor are the same CLI on the same machine reading the same config -- would disable the
+skill for both. The boundary that would actually hold is a distribution that omits `gh_cli`
+entirely, which the layering already permits and which is not this deliverable.
 
 ## First real plan
 
