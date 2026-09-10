@@ -121,6 +121,12 @@ class IssueState:
 @dataclass(frozen=True, slots=True)
 class RepoState:
     issues: tuple[IssueState, ...]
+    #: The head branch of every open pull request in the repository (D16).
+    #: A plan's own pull request is linked to no issue -- it proposes the whole
+    #: branch -- so it cannot be found the way task pull requests are, and
+    #: "have I opened this already" is the only question that keeps opening it
+    #: idempotent.
+    open_pr_heads: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,12 +242,38 @@ class CloseIssue:
     number: int
 
 
+@dataclass(frozen=True, slots=True)
+class OpenPlanPr:
+    """Propose a finished plan branch to the branch it came from (D16).
+
+    Opened when the plan's last task closes, and never merged by dispatchkit --
+    not even when every task in it said `verify: auto`. That declaration is
+    about a task: a reviewed unit of a reviewed graph. A plan is the sum, and
+    the sum is the thing no one signed off. Collecting the work on a branch is
+    what buys a human one reading of the whole before it reaches the default
+    branch, and merging it here would spend that.
+
+    There is deliberately no `verify` on this operation. A field is a thing a
+    later change can read.
+    """
+
+    base: Base
+    plan: str
+    #: What the plan branch is proposed *to*: the repository's trunk, which is
+    #: `DEFAULT_BASE` unless a plan branch is itself stacked on another.
+    onto: Base = DEFAULT_BASE
+    #: The task issues this plan shipped, for the body.
+    issues: tuple[int, ...] = ()
+
+
 #: What a scheduler pass may do. Deliberately narrower than `Operation`: a pass
 #: never creates or edits an issue — `apply` owns the graph's shape. It may
 #: close one, but only to record a merge that has already happened (D16). Every
 #: member acts on the repository itself, because since D14 there is nowhere
 #: else to write: status is derived and printed, never stored.
-DispatchOperation = AssignAgent | UnassignAgent | LabelIssue | MarkReady | MergePr | CloseIssue
+DispatchOperation = (
+    AssignAgent | UnassignAgent | LabelIssue | MarkReady | MergePr | CloseIssue | OpenPlanPr
+)
 
 
 @dataclass(frozen=True, slots=True)

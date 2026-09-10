@@ -42,6 +42,9 @@ class FakeGitHub:
     def open_pr(self, *, head: str, title: str, body: str, base: Base) -> int:
         self.calls.append(f"open_pr({head})")
         self.opened.append({"head": head, "title": title, "body": body, "base": str(base)})
+        # GitHub would report it on the next read, and the plan pull request's
+        # idempotency depends on that being true here too (D16).
+        self.state = replace(self.state, open_pr_heads=(*self.state.open_pr_heads, head))
         self.next_pr += 1
         return self.next_pr
 

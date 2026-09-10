@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 import pytest
 
 from dispatchkit.config import SchedulerConfig
+from dispatchkit.github import OpenPlanPr
 from dispatchkit.model import Lane
 from dispatchkit.resolve import Status, admit, resolve
 from dispatchkit.tick import SERVED_LANES, plan_tick, summarise
@@ -77,7 +78,11 @@ class TestAnUnservedLaneIsDeferred:
             config=CONFIG,
             now=NOW,
         )
-        assert [str(operation.ref) for operation in plan.operations] == ["demo/cloud"]
+        assert [
+            str(operation.ref)
+            for operation in plan.operations
+            if not isinstance(operation, OpenPlanPr)
+        ] == ["demo/cloud"]
 
     def test_and_no_longer_eats_the_lane_cap(self) -> None:
         plan = admit(

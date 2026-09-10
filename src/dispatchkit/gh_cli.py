@@ -63,6 +63,9 @@ mutation($assignableId: ID!, $actorIds: [ID!]!, $baseRef: String!) {
 STATE_QUERY = """
 query($owner: String!, $repo: String!, $first: Int!) {
   repository(owner: $owner, name: $repo) {
+    pullRequests(first: 100, states: [OPEN]) {
+      nodes { headRefName }
+    }
     issues(first: $first, labels: ["dispatchkit"], states: [OPEN, CLOSED]) {
       nodes {
         id
@@ -121,8 +124,23 @@ query($owner: String!, $repo: String!, $first: Int!) {
 
 def parse_state(payload: dict[str, Any]) -> RepoState:
     """Turn a recorded GraphQL response into a `RepoState`."""
-    nodes = payload["data"]["repository"]["issues"]["nodes"]
-    return RepoState(tuple(_parse_issue(node) for node in nodes))
+    repository = payload["data"]["repository"]
+    nodes = repository["issues"]["nodes"]
+    return RepoState(
+        tuple(_parse_issue(node) for node in nodes),
+        open_pr_heads=_parse_open_heads(repository),
+    )
+
+
+def _parse_open_heads(repository: dict[str, Any]) -> tuple[str, ...]:
+    """The head branch of every open pull request (D16).
+
+    A missing key is an absence, not an error: every recorded fixture predates
+    the question, and a snapshot that cannot answer it should degrade to "no
+    plan pull request is open" rather than refuse to be read.
+    """
+    nodes = (repository.get("pullRequests") or {}).get("nodes") or []
+    return tuple(node["headRefName"] for node in nodes if node.get("headRefName"))
 
 
 def _parse_issue(node: dict[str, Any]) -> IssueState:

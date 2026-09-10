@@ -573,6 +573,7 @@ def _acted(result: TickResult) -> bool:
         or result.merged
         or result.reclaimed
         or result.closed
+        or result.proposed
         or result.refused
     )
 
@@ -587,6 +588,8 @@ def _completion(result: TickResult) -> str:
         line += f", {result.reclaimed} stalled dispatch(es) reclaimed"
     if result.closed:
         line += f", {result.closed} issue(s) closed"
+    if result.proposed:
+        line += f", {result.proposed} plan(s) proposed for review"
     return line
 
 

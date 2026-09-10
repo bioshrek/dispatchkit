@@ -44,10 +44,12 @@ from dispatchkit.github import (
     MarkReady,
     MergePr,
     Notice,
+    OpenPlanPr,
     RepoState,
     UnassignAgent,
 )
 from dispatchkit.model import (
+    DEFAULT_BASE,
     Base,
     Checks,
     Lane,
@@ -439,6 +441,58 @@ def close_ops(items: Sequence[TaskItem]) -> tuple[CloseIssue, ...]:
         for task in items
         if not task.closed and any(merged.base == task.base for merged in task.merged)
     )
+
+
+def plan_pr_body(plan: str, issues: Sequence[int]) -> str:
+    """What the reviewer reads first.
+
+    It says the one thing dispatchkit cannot do: nothing merges this but a
+    person. Stated where it will actually be read rather than only in a design
+    document, because the tool is otherwise perfectly capable of merging things
+    unattended and the reviewer has no way to know this one is different.
+    """
+    shipped = "\n".join(f"- #{number}" for number in issues)
+    return (
+        f"Plan `{plan}` is finished: every task on this branch is closed.\n\n"
+        f"{shipped}\n\n"
+        "`dispatchkit` opened this and will not merge it. Each task was "
+        "reviewed as a task; the plan as a whole was not, and this is the "
+        "reading it exists for.\n"
+    )
+
+
+def plan_pr_ops(
+    items: Sequence[TaskItem], *, open_bases: Collection[Base] = ()
+) -> tuple[OpenPlanPr, ...]:
+    """Propose each plan whose last task has closed (D16).
+
+    A plan branch accumulates every task's merge and then stops. Without this
+    it is work that shipped nowhere -- the same silence the tool exists to
+    break, one level up.
+
+    Judged per plan, because plans are independent: an unfinished neighbour
+    sharing a repository is not a reason to withhold a finished one.
+
+    Not gated on CI. Withholding the pull request until the branch is green
+    would hide a red plan branch from the only person who can do anything about
+    it, and this pull request's whole purpose is to be looked at.
+    """
+    by_plan: dict[str, list[TaskItem]] = {}
+    for task in items:
+        by_plan.setdefault(task.block.plan, []).append(task)
+
+    operations = []
+    for plan, tasks in by_plan.items():
+        base = tasks[0].base
+        if base == DEFAULT_BASE or base in open_bases:
+            # No branch to propose, or it is already proposed.
+            continue
+        if any(not task.closed for task in tasks):
+            continue
+        operations.append(
+            OpenPlanPr(base, plan, DEFAULT_BASE, tuple(task.number for task in tasks))
+        )
+    return tuple(operations)
 
 
 def merge_ops(

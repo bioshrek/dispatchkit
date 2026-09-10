@@ -50,10 +50,11 @@ from dispatchkit.github import (
     MarkReady,
     MergePr,
     Notice,
+    OpenPlanPr,
     RepoState,
     UnassignAgent,
 )
-from dispatchkit.model import Lane, TaskId, TaskRef
+from dispatchkit.model import Base, Lane, TaskId, TaskRef
 from dispatchkit.resolve import (
     Deferral,
     Status,
@@ -65,6 +66,8 @@ from dispatchkit.resolve import (
     close_ops,
     drift_notices,
     merge_ops,
+    plan_pr_body,
+    plan_pr_ops,
     ready_ops,
     resolve,
     stall_ops,
@@ -118,6 +121,8 @@ class TickResult:
     #: Issues closed because their work landed on a plan branch, where GitHub
     #: ignores a closing keyword (D16).
     closed: int = 0
+    #: Finished plan branches proposed to trunk. Never merged here (D16).
+    proposed: int = 0
 
 
 #: The lanes this build can actually hand work to.
@@ -186,6 +191,7 @@ def plan_tick(
             *ready_ops(items),
             *merge_ops(items, config, dirty=dirty),
             *close_ops(items),
+            *plan_pr_ops(items, open_bases=_open_heads(state)),
         ),
         statuses=projected,
         items=tuple(items),
@@ -211,7 +217,7 @@ def plan_tick(
 
 
 def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
-    dispatched = readied = merged = reclaimed = closed = 0
+    dispatched = readied = merged = reclaimed = closed = proposed = 0
     refused: list[Notice] = []
     for operation in plan.operations:
         match operation:
@@ -241,7 +247,25 @@ def execute_tick(plan: TickPlan, api: GitHubApi) -> TickResult:
             case CloseIssue():
                 api.close_issue(number=operation.number)
                 closed += 1
-    return TickResult(dispatched, readied, merged, tuple(refused), reclaimed, closed)
+            case OpenPlanPr():
+                api.open_pr(
+                    head=str(operation.base),
+                    title=f"Plan: {operation.plan}",
+                    body=plan_pr_body(operation.plan, operation.issues),
+                    base=operation.onto,
+                )
+                proposed += 1
+    return TickResult(dispatched, readied, merged, tuple(refused), reclaimed, closed, proposed)
+
+
+def _open_heads(state: RepoState) -> tuple[Base, ...]:
+    """The open pull requests' head branches, as bases.
+
+    A head that is not a legal base is somebody else's branch and cannot be one
+    of ours, so it is dropped rather than raised on: this is a snapshot of a
+    whole repository, and any account may push a branch to it.
+    """
+    return tuple(Base(head) for head in state.open_pr_heads if Base.check(head) is None)
 
 
 def _unserved_claims(items: Sequence[TaskItem], served: Collection[Lane]) -> tuple[Notice, ...]:
