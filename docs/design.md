@@ -443,6 +443,25 @@ marked costs a dispatch and a comment on somebody's issue. It is opt-in: an adop
 the lane has no runner and is not unhealthy for it, and a check that is red for everybody is a
 check nobody reads.
 
+**Three defects found by running it, none of which a test would have caught unprompted.** The
+whole of D6 was built test-first against fakes, and the fakes were faithful to the design rather
+than to `git`, which is exactly the gap an end-to-end run exists to close.
+
+*`git worktree list` reports the canonical path.* On macOS `/tmp` is a symlink to `/private/tmp`,
+so a worktree created at one is listed at the other and the literal string match found nothing.
+Recovery therefore saw an empty machine: retained worktrees were never cleared, and every retry
+would then have failed on `git worktree add` with the path already in use.
+
+*`--porcelain` does not report commit counts*, so every recovered worktree looked empty — and
+recovery would have discarded the commits it exists to preserve, silently, with no error anywhere.
+The count is now a second command per worktree, which is the price of the only question recovery
+asks.
+
+*A failed `git worktree add` was swallowed.* A leftover branch from a killed run makes it fail, and
+dropping the result launched the agent into a directory that did not exist, so the issue was told
+`[Errno 2] No such file or directory` — true, and useless to whoever reads it. The port returns
+the result now, and the run stops at a `worktree` stage that names git's own message.
+
 **Recovering its own work.** Startup reconciles from the local disk outward. A worktree holding
 commits has its branch pushed and referenced in a comment on the issue; a worktree holding none is
 discarded; either way the mark comes off and the task returns to the ready set, where the next

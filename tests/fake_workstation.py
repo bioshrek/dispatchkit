@@ -37,14 +37,19 @@ class FakeWorkstation:
     removed: list[Path] = field(default_factory=list)
     pushed: list[str] = field(default_factory=list)
     push_fails: bool = False
+    #: git's own message when `worktree add` refuses, or empty for success.
+    create_fails: str = ""
 
     def worktrees(self) -> tuple[Worktree, ...]:
         self.calls.append("worktrees()")
         return self.existing
 
-    def create_worktree(self, *, path: Path, branch: str) -> None:
+    def create_worktree(self, *, path: Path, branch: str) -> RunResult:
         self.calls.append(f"create_worktree({path}, {branch})")
+        if self.create_fails:
+            return RunResult(("git", "worktree", "add"), 128, self.create_fails)
         self.created.append(path)
+        return RunResult(("git", "worktree", "add"), 0)
 
     def remove_worktree(self, *, path: Path) -> None:
         self.calls.append(f"remove_worktree({path})")

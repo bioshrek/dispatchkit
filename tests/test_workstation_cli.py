@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from dispatchkit.model import TaskId, TaskRef
-from dispatchkit.workstation import Worktree
+from dispatchkit.workstation import RunResult, Worktree
 from dispatchkit.workstation_cli import (
     _parse_worktrees,
     add_command,
@@ -149,3 +149,66 @@ class TestTheChildIsSupervised:
         from dispatchkit.workstation_cli import _seconds
 
         assert _seconds(timedelta(hours=2)) == 7200.0
+
+
+class TestThePathGitReportsIsNotThePathWeGaveIt:
+    """Found by running it: `git worktree list` canonicalises.
+
+    On macOS `/tmp` is a symlink to `/private/tmp`, so a worktree created at
+    `/tmp/...` is reported at `/private/tmp/...`. Matching on the literal
+    string found nothing, which meant recovery saw an empty machine: retained
+    worktrees were never cleared, and every retry would then fail on
+    `git worktree add` with the path already in use.
+    """
+
+    def test_a_canonicalised_path_is_still_recognised(self, tmp_path: Path) -> None:
+        root = _symlinked(tmp_path)
+        real = (root / "wordfreq" / "tokenise").resolve()
+        output = f"worktree {real}\nHEAD abc\nbranch refs/heads/dispatchkit/tokenise/1\n\n"
+        assert [tree.ref for tree in _parse_worktrees(output, root)] == [REF]
+
+    def test_the_path_reported_back_is_the_one_git_will_accept(self, tmp_path: Path) -> None:
+        # It is handed straight back to `git worktree remove`, so it has to be
+        # what git said, not what we would have written.
+        root = _symlinked(tmp_path)
+        real = (root / "wordfreq" / "tokenise").resolve()
+        output = f"worktree {real}\nHEAD abc\nbranch refs/heads/dispatchkit/tokenise/1\n\n"
+        assert _parse_worktrees(output, root)[0].path == real
+
+
+def _symlinked(tmp_path: Path) -> Path:
+    """A root reached through a symlink, which is what `/tmp` is on macOS."""
+    actual = tmp_path / "actual"
+    (actual / "wordfreq" / "tokenise").mkdir(parents=True)
+    link = tmp_path / "work"
+    link.symlink_to(actual)
+    return link
+
+
+class TestAWorktreeIsAskedWhatItHolds:
+    """`--porcelain` does not say, and it is the only thing recovery asks.
+
+    Found the same way: `_parse_worktrees` left `commits` at its default, so
+    every recovered worktree looked empty, and recovery would have discarded
+    the commits it exists to preserve -- silently, with no error anywhere.
+    """
+
+    def test_the_count_is_filled_in_for_each_worktree(self) -> None:
+        from dispatchkit.workstation_cli import CliWorkstation
+
+        listed = (
+            "worktree /work/wordfreq/tokenise\n"
+            "HEAD abc\nbranch refs/heads/dispatchkit/tokenise/1\n\n"
+        )
+        seen: list[Path] = []
+
+        class Recording(CliWorkstation):
+            def _git(self, command, *, cwd=None):  # type: ignore[no-untyped-def]
+                if command[1] == "worktree":
+                    return RunResult(tuple(command), 0, listed)
+                seen.append(cwd)
+                return RunResult(tuple(command), 0, "7\n")
+
+        trees = Recording(root=ROOT).worktrees()
+        assert trees[0].commits == 7
+        assert seen == [Path("/work/wordfreq/tokenise")]

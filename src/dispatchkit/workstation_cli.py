@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -83,6 +83,12 @@ def _parse_worktrees(output: str, root: Path) -> tuple[Worktree, ...]:
     the first" but "does this path read back as one of our tasks" — `ref_of`
     answers that, and anything it does not recognise is left alone.
     """
+    # git reports the *canonical* path, which on macOS is not the one we
+    # handed it -- `/tmp` is a symlink to `/private/tmp`. Matching only the
+    # literal string found nothing, so recovery saw an empty machine, retained
+    # worktrees were never cleared, and every retry failed on `git worktree
+    # add` with the path already in use. Found by running it.
+    roots = {root, root.resolve()}
     trees: list[Worktree] = []
     for record in output.split("\n\n"):
         fields: dict[str, str] = {}
@@ -95,7 +101,7 @@ def _parse_worktrees(output: str, root: Path) -> tuple[Worktree, ...]:
         if not raw:
             continue
         path = Path(raw)
-        ref = ref_of(root, path)
+        ref = next((found for found in (ref_of(base, path) for base in roots) if found), None)
         if ref is None:
             continue
         branch = fields.get("branch", "")
@@ -121,19 +127,40 @@ class CliWorkstation:
         return f"{self.remote}/{self.base}"
 
     def worktrees(self) -> tuple[Worktree, ...]:
-        return _parse_worktrees(self._git(list_command()).output, self.root)
+        """Each one, and what it holds.
 
-    def create_worktree(self, *, path: Path, branch: str) -> None:
+        The count is a second command per worktree because `--porcelain` does
+        not report it, and it is the only question recovery asks: commits are
+        the one thing in a worktree that cannot be recreated. Leaving it at
+        zero made every recovered tree look empty, so recovery would have
+        discarded the work it exists to preserve.
+        """
+        listed = _parse_worktrees(self._git(list_command()).output, self.root)
+        return tuple(
+            replace(tree, commits=self.commits(path=tree.path)) for tree in listed
+        )
+
+    def create_worktree(self, *, path: Path, branch: str) -> RunResult:
+        """The result is returned rather than dropped. A leftover branch from
+        a killed run makes this fail, and swallowing it launched the agent
+        into a directory that was not there — reporting the *next* thing to go
+        wrong, which is true and useless to whoever reads the issue."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._git(fetch_command(self.remote, self.base))
-        self._git(add_command(path, branch, self._start))
+        fetched = self._git(fetch_command(self.remote, self.base))
+        if not fetched.ok:
+            return fetched
+        return self._git(add_command(path, branch, self._start))
 
     def remove_worktree(self, *, path: Path) -> None:
         self._git(remove_command(path))
 
     def commits(self, *, path: Path) -> int:
-        if not path.exists():
-            return 0
+        """Ahead of the base, or zero if the question cannot be answered.
+
+        No existence check: a missing directory arrives as an `OSError` from
+        the spawn and becomes a failed result, and one way of saying "there is
+        nothing here" is easier to be right about than two.
+        """
         result = self._git(commits_command(self._start), cwd=path)
         counted = result.output.strip()
         return int(counted) if result.ok and counted.isdigit() else 0

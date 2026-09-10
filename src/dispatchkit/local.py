@@ -119,7 +119,10 @@ def run_local(
             ),
         )
 
-    machine.create_worktree(path=path, branch=branch)
+    made = machine.create_worktree(path=path, branch=branch)
+    if not made.ok:
+        # Nothing to preserve and nothing to remove: there is no tree.
+        return _finish(api, task, _failed(ref, branch, "worktree", made))
 
     agent = machine.run(argv, cwd=path, env=env, timeout=runner.timeout)
     if not agent.ok:

@@ -333,3 +333,33 @@ class TestALocalAttemptCounts:
             datetime(2026, 9, 10, 9, 0, tzinfo=UTC),
             datetime(2026, 9, 10, 10, 0, tzinfo=UTC),
         )
+
+
+class TestWhenTheWorktreeCannotBeMade:
+    """Found by running it: the failure was swallowed and reported as the
+    *next* thing to go wrong.
+
+    A leftover branch from a killed run makes `git worktree add` fail. The
+    result was ignored, so the agent was launched into a directory that did
+    not exist and the issue was told `[Errno 2] No such file or directory` --
+    true, and useless to the person reading it.
+    """
+
+    def test_the_git_error_is_what_the_issue_is_told(self) -> None:
+        api, machine = setup()
+        machine.create_fails = "fatal: a branch named 'dispatchkit/demo/gpu/1' already exists"
+        run = run_local(task_of(api), api=api, machine=machine, config=CONFIG, root=ROOT, now=NOW)
+        assert run.stage == "worktree"
+        assert "already exists" in api.comments[0]["body"]
+
+    def test_the_agent_is_not_launched_into_a_directory_that_is_not_there(self) -> None:
+        api, machine = setup()
+        machine.create_fails = "fatal: nope"
+        run_local(task_of(api), api=api, machine=machine, config=CONFIG, root=ROOT, now=NOW)
+        assert machine.runs == []
+
+    def test_the_mark_still_comes_off(self) -> None:
+        api, machine = setup()
+        machine.create_fails = "fatal: nope"
+        run_local(task_of(api), api=api, machine=machine, config=CONFIG, root=ROOT, now=NOW)
+        assert any("-['dispatch:local']" in call for call in api.calls)
