@@ -19,13 +19,16 @@ def task(
     spend: bool = False,
     requires: tuple[str, ...] = (),
     estimate_minutes: int | None = None,
+    acceptance: str = "true",
+    touches: tuple[str, ...] = (),
 ) -> Task:
     return Task(
         id=TaskId(name),
         title=name,
         milestone="M",
         lane=lane,
-        acceptance="true",
+        acceptance=acceptance,
+        touches=touches,
         verify=verify,
         spend=spend,
         requires=requires,

@@ -11,6 +11,7 @@ ratification of the decomposition informed:
 | `depth` close to `count`                       | `mostly-serial`        |
 | Serial pair, no other dependents, same routing | `merge-candidate`      |
 | Estimated work below ~3x overhead              | `under-economic-floor` |
+| Acceptance runs tests, `touches` names none    | `scope-omits-tests`    |
 
 The cost model behind the last three: makespan is roughly critical-path length
 x (work + overhead), and overhead is fixed and far from free. Splitting a node
@@ -20,6 +21,8 @@ nodes lengthens it by exactly one overhead and buys nothing.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from dispatchkit.errors import GraphIssue
@@ -83,6 +86,85 @@ def lint_graph(graph: TaskGraph, config: LintConfig = DEFAULT_LINTS) -> list[Gra
     if not is_chain:  # on a chain, `chain-graph` already says it, once
         issues.extend(_merge_candidates(graph))
     issues.extend(_economic_floor(graph, config))
+    issues.extend(_scope_omits_tests(graph))
+    return issues
+
+
+#: Commands that pass only when a test does. Matched as whole words, so
+#: `attest`, `latest` and `contest` are not test runners.
+_TEST_RUNNERS = (
+    "pytest",
+    "unittest",
+    "jest",
+    "vitest",
+    "rspec",
+    "tox",
+    "nose2",
+    "phpunit",
+    "ctest",
+    "test",  # `npm test`, `go test`, `cargo test`, `mix test`, `dotnet test`
+)
+
+#: Path fragments that a test lives under, across the ecosystems above.
+_TEST_PATHS = ("test", "tests", "spec", "specs", "__tests__", "_test", "e2e")
+
+
+def _runs_tests(acceptance: str) -> str | None:
+    """The test runner this acceptance invokes, if it invokes one."""
+    words = set(re.findall(r"[a-z0-9_]+", acceptance.lower()))
+    return next((runner for runner in _TEST_RUNNERS if runner in words), None)
+
+
+def _covers_tests(touches: Sequence[str]) -> bool:
+    """Could any declared pattern admit a test file?
+
+    A pattern is read generously — `**` and `src/*` admit anything under them,
+    and refusing to see that would make the lint fire on scopes that are wide
+    rather than wrong.
+    """
+    for pattern in touches:
+        if set(pattern) <= {"*", "/"}:
+            return True
+        parts = re.split(r"[/._-]", pattern.lower())
+        if any(part in _TEST_PATHS for part in parts):
+            return True
+    return False
+
+
+def _scope_omits_tests(graph: TaskGraph) -> list[GraphIssue]:
+    """The plan states its scope twice and the two copies disagree.
+
+    An acceptance that runs a test suite is satisfied by a test file, so a
+    `touches` with no test path in it is a declaration that contradicts the
+    definition of done sitting beside it. `document-flags` shipped exactly
+    that, and its agent -- told the acceptance and never the scope -- wrote
+    the test the acceptance demanded and drifted out of its own declaration.
+
+    Silent on an empty `touches`: there is no second copy to disagree with,
+    and since D9.2 an undeclared scope costs only a weaker exclusion.
+
+    A task that merely re-runs an existing suite without adding to it will
+    trip this, which is why the message says what was observed rather than
+    what to do -- one of the two statements is wrong, and only the author
+    knows which.
+    """
+    issues: list[GraphIssue] = []
+    for task in graph.tasks:
+        if not task.touches or _covers_tests(task.touches):
+            continue
+        runner = _runs_tests(task.acceptance)
+        if runner is None:
+            continue
+        issues.append(
+            GraphIssue(
+                "scope-omits-tests",
+                task.id,
+                f"acceptance runs `{runner}` but `touches` declares no test path "
+                f"({', '.join(task.touches)}); if the task writes the test its acceptance "
+                "needs, the declaration is already wrong and the exclusion will schedule "
+                "on it",
+            )
+        )
     return issues
 
 
