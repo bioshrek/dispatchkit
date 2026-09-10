@@ -358,7 +358,8 @@ So conflicts are handled in four layers, weakest and cheapest first:
    declared `touches`. Drift is reported on the issue, and for `verify = "auto"` tasks it
    withholds auto-merge — an agent that wandered outside its declared blast radius is exactly the
    case a human should look at. Over time this also tells us which planner decompositions were
-   wrong.
+   wrong — which is why the agent is not told its `touches` in the first place. Drift is only
+   evidence about the decomposition while nobody has shown the subject the probe.
 
 A PR that can't be rebased cleanly is returned to the agent as a normal failure: comment,
 unassign — which spends an attempt, because the timeline records the dispatch — and after the
@@ -391,11 +392,15 @@ environment allowlist, so the `gh` credential is not in scope for agent-authored
 commands.
 
 **The executor owns everything but the change.** It fetches, creates the branch, creates the
-worktree, builds the prompt from the issue, invokes the agent, runs `acceptance`, pushes, and
-opens the pull request. The agent is handed a prepared, disposable tree and asked to do exactly
-one thing. `Closes #N` in particular is written by the executor and never left to a prompt — an
-agent that forgot it would merge a pull request while leaving the issue open, stalling every
+worktree, builds the prompt from the issue's prose, invokes the agent, runs `acceptance`, pushes,
+and opens the pull request. The agent is handed a prepared, disposable tree and asked to do
+exactly one thing. `Closes #N` in particular is written by the executor and never left to a prompt
+— an agent that forgot it would merge a pull request while leaving the issue open, stalling every
 dependent with no error anywhere.
+
+The machine block is not part of that prompt. `depends`, `touches`, `verify` and `spend` are
+scheduling inputs the agent cannot act on, and one of them actively misleads — see
+[Constrain the outcome, not the route](#constrain-the-outcome-not-the-route).
 
 The runner itself is named in `.github/dispatchkit.toml` as an argv template with a closed set of
 substitutions and an allowlist of model names; a task may override `model` or `effort` from the
@@ -1911,9 +1916,9 @@ This belongs to D10 rather than D6. "What must a task body contain" is the plann
 the sandbox bodies came out thin because nothing objected: a lint that flags a task whose body is
 only its title makes the contract enforceable, which is what the acceptance-subset-of-CI guardrail
 had to learn the hard way. The consequence for D6 is that the local runner's prompt becomes nearly
-trivial — the body plus the precedence line. A prompt template doing heavy lifting would be
-evidence the issue is under-specified, and the cloud lane, which has no template at all, would be
-getting the worse deal.
+trivial — the body's prose plus the precedence line. A prompt template doing heavy lifting would
+be evidence the issue is under-specified, and the cloud lane, which has no template at all, would
+be getting the worse deal.
 
 ### The economic floor is measured, not estimated
 
@@ -1961,6 +1966,48 @@ from the lint table. The deletion rides with D10, where the graph schema is bein
 anyway; the measurement is D15, which is last because it has nothing to read until a plan has
 finished. The D2 record stands as written — it was a correct decision about a lint that was going
 to have an input.
+
+### Constrain the outcome, not the route
+
+A field constrains the agent only if it reaches the prompt and the agent is expected to obey it.
+By that test the schema splits three ways, not two: `id`, `lane`, `requires`, `verify`, `spend`
+and `depends` are scheduling inputs the agent cannot act on; `acceptance` and the body are outcome
+constraints and are the brief; and `touches` is a scheduling input that reads as a **method**
+constraint the moment an agent sees it. That third category is the bug.
+
+**Showing an agent its `touches` is worse than useless.** The argument is already in this document,
+made for another purpose: file sets cannot be known accurately before an agent starts work, which
+is why the scope is advisory and the merge queue is authoritative. The same fact says an agent
+should not be asked to honour it either. An agent that finds it must edit an adjacent file to do
+the job properly now has a conflict between doing the job right and staying inside its declared
+box, and the compliant resolution — a stub, a duplicated helper, a caller left un-updated —
+produces a diff that looks obedient in review. The cost is invisible precisely where a human would
+look for it.
+
+**And it contaminates the measurement.** Drift is supposed to tell us which decompositions were
+wrong. That only holds while it is unbiased: a pull request inside its `touches` cannot
+distinguish a correctly scoped task from an agent that squeezed itself into the box. The
+scope-drift check is a probe, and the subject must not be shown the probe.
+
+The leak is real today rather than hypothetical. The machine block lives inside the issue body,
+and the local prompt was specified one record above as the body — so `touches` is in the prompt in
+both lanes right now. The fix costs nothing: the prompt is built from the prose above the block,
+and `touches` keeps both of its jobs, admission exclusion and the drift check, because both are
+read by the scheduler.
+
+One leak survives and is named rather than solved. A cloud agent reads the whole issue and cannot
+be stopped from reading the block. It is tolerable because the body contract already forbids
+restating `depends`, `touches` or `verify` in prose, so what a cloud agent sees is an unexplained
+line of YAML rather than a sentence telling it where it may edit. That prohibition was written to
+stop structured data being copied into prose; it turns out to be doing this job too.
+
+Two lesser findings, neither harmful. `milestone` is read by nothing in the scheduler — it keeps
+the milestone/task layering visible, which is argued for, but nothing checks the relationship, so
+it is documentation living in a schema. And the per-task `model` and `effort` overrides are the
+same family as `estimate_minutes`: knobs a planner has to guess at, already earmarked for deletion
+if they go unused. `acceptance` is the counter-example worth keeping in view — it binds the
+outcome tightly and says nothing about method, which is the shape every agent-facing field should
+have.
 
 ## First real plan
 
@@ -2033,6 +2080,10 @@ the phase table, is the fixture worth pinning.
 - **The issue body is the contract; the plan document is context.** The task's own specification is
   inlined because it passed the review gate; the plan is referenced because it is committed,
   reachable from both lanes, and would otherwise be duplicated into every issue that cites it.
+- **Constrain the outcome, not the route.** `acceptance` binds what must be true when the task is
+  done and says nothing about how to get there. The machine block is scheduling input and stays
+  out of the prompt — an agent told its `touches` will comply at the expense of the work, and
+  compliance also destroys the drift signal that says whether the decomposition was right.
 - **Scheduling is local and nowhere else.** One process watches the graph, polls GitHub,
   dispatches, and runs the local lane; no workflow, no cron, no daemon. `lane` still says where a
   _runner_ runs and is still decided in planning — the two axes are independent.
