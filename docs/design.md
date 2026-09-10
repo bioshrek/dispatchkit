@@ -589,10 +589,7 @@ Remaining, in build order:
 
 | Step | Deliverable                                                          | Proven by                                                                  |
 | ---- | -------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| D13.1 | Graph watcher: save → re-plan; hot/cold/refused; `dispatch:hold`     | A save re-plans in place; a dirty graph file degrades `verify: auto`        |
-
-The report half of D13.1 is shipped, ahead of the watcher: a looping pass prints the full picture
-once and thereafter only what moved. Its decision record is below.
+| D13.1 | Intervention and the graph watcher — see below for what of it is shipped | A cancelled task blocks its dependents; a save re-plans in place            |
 | D6   | Local lane executor: worktree, runner invocation, push, PR, recovery | One real capability-gated task end-to-end                                  |
 | D10  | Plan-authoring contract: schema doc, body contract, agent skill      | An agent given only the doc produces a graph `validate` accepts unaided    |
 | D11  | `doctor` completeness, then interactive gated `init`                 | `doctor` red on each defect in turn; `init` refuses to advance past one    |
@@ -606,9 +603,11 @@ looked for them; `tick` went with them, returning as `watch --once` so a termina
 flag rather than a second command. D13 also pooled admission across every plan in the repository,
 which is where the caps stopped being per-plan.
 
-D13.1 is the half held back deliberately. The loop and the pooling needed no taste decision, so
-they shipped; the watcher's report is the first thing in this tool a person looks at all day, and
-designing it before watching a real pass would be guessing. D6 is what makes `caps.local = 1` mean anything: the label nothing consumes finally gets
+D13.1 is the half held back deliberately, and it is being taken in pieces. The **report** is
+shipped: a looping pass prints the full picture once and only what moved thereafter. What remains
+is **intervention** — `Cancelled`, `dispatch:hold`, the clean-tree gate — and the **graph
+watcher**, in that order, because the first is a live correctness bug and the second is a feature.
+D6 is what makes `caps.local = 1` mean anything: the label nothing consumes finally gets
 a consumer, and it is where a per-task `model` or `effort` lands. D10 belongs after them rather
 than before, because the graph a planner has to produce is now one a watcher reloads — and it is
 where `estimate_minutes` leaves the schema. D15 is last because it has nothing to measure until a
