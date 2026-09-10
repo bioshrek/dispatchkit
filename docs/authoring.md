@@ -53,6 +53,12 @@ prefix of it, so `uv run pytest -q tests/test_widget.py` is covered by a CI step
 an acceptance. "The tests pass and it looks right" is not. If you cannot write the command, the
 task is not defined well enough to hand to anyone.
 
+Subset does not mean *narrow*. Every CI step the task's work could fail belongs in the acceptance,
+formatters included. An acceptance that omits one does not make the task easier to pass — it makes
+its failure unactionable: the agent passes its own definition of done, CI fails on something it was
+never asked to run, and `verify: auto` will not merge a red pull request. Nothing lints this for
+you; a subset is exactly what the checker checks for.
+
 **4. Declare `touches` generously.** The globs the task is expected to change, *including the test
 files its acceptance needs*. It is advisory — it improves scheduling and produces a drift report,
 and it does not gate the merge — so over-declaring costs a little parallelism and under-declaring

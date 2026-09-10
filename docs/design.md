@@ -3088,11 +3088,52 @@ since `doctor` is what people run when things are broken and `validate` is what 
 The old field is gone rather than left beside the new one: two ways to answer the same question is how
 the old answer comes back.
 
-**Still owed: a live trial.** D6.6's lesson was that live proof is per-deliverable — five of its seven
-defects were unreachable offline. Nothing here has run against a real repository yet, and the parts
-most likely to be wrong are the two that cannot be tested offline at all: whether `agentAssignment.baseRef`
-does what the schema says when a real agent acts on it, and whether a real merged pull request reports
-the `baseRefName` this closure rule now depends on.
+**The live trial, and the two defects only it could find.** D6.6's lesson was that live proof is
+per-deliverable — five of its seven defects were unreachable offline — so D16 was run end to end
+against `dispatchkit-sandbox`: a three-task plan `mincount` on `base = "plan/mincount"`, taken from
+`apply` to a proposed plan pull request over eleven passes. It found two things, and neither was
+findable from here.
+
+*The base never reached the issue.* `apply` created `plan/mincount` and opened three issues whose
+machine blocks all said `base: main`. `build_body` had never been given a base, so `render_block`
+took its default: the value was parsed, validated, carried through `plan_apply` — and dropped one
+call short of the only place it does any work. Every offline test passed because they read the base
+back out of a fixture that `tests/items.py` renders *itself*; two block renderers, and nothing walked
+graph file → issue body → scheduler until the regression tests written for this did. A second
+renderer in the test suite is a convenience that quietly stops testing the first one.
+
+*A pass closed an issue and dispatched it in the same breath.* The window is small and entirely real:
+between the merge and the close, the issue is open, the pull request is no longer *open* so
+`open_prs` is empty, and merging released the assignment — so every readiness test passes and the
+task rejoins the ready set. On `main` this state never existed, because GitHub closed the issue in
+the instant it merged. Moving closure off GitHub opened a gap GitHub had been closing for us. The
+cost is worse than a wasted run: the re-dispatch spends a retry from a budget meant for failures and
+is *recorded* as an attempt, so a task that succeeded first time carries a failure in its history,
+and a long enough plan could mark a healthy task `Stuck` on the strength of its own successes. The
+fix names the state rather than leaving it between two others — a task whose work has merged into
+its base is `Done` — and `close_ops` and the status now read one shared `landed` property, so the
+two cannot disagree again. It changes the status word only: dependents are released by `_satisfied`,
+which reads the issue's own closure, so a pass that closes and then fails still leaves them blocked.
+
+*Confirmed, each of which was a guess until it ran:* the local worktree cut from and targeted
+`plan/mincount`; the last task's branch was a descendant of a plan tip carrying both predecessors'
+merges, which is the dependency invariant made physical; dispatchkit's own `gh issue close` moved
+every issue to `CLOSED/COMPLETED`, where a closing keyword would have been ignored; the finished plan
+opened `plan/mincount → main` and the next pass merged nothing and proposed nothing; and `doctor`
+correctly failed on `plan/mincount` having no required checks. Advisory scope drift on the first pull
+request was reported and did not block the merge, as D9.2 intends. Still unproven: `agentAssignment.baseRef`
+under a real cloud agent — `mincount` is all `lane = local`, so the cloud lane's base remains
+schema-verified but not exercised.
+
+**A finding that is not ours: acceptance is a subset of CI, and a subset can be too small.** The
+first task's pull request was functionally correct and red, on `ruff format --check` — a CI step its
+`acceptance` did not run. So the agent had no signal: it passed its own definition of done and failed
+the pipeline's, which is the one shape `verify: auto` cannot resolve, because dispatchkit will not
+merge a red pull request and the agent has nothing telling it what to fix. D9.1's lint cannot catch
+this; a subset is exactly what it checks for. The repair is the plan author's — widen `acceptance` to
+everything CI runs — and the next two tasks, with the widened commands, were green first time. Worth
+saying plainly in the authoring guidance: an `acceptance` narrower than CI does not make tasks easier
+to pass, it makes their failures unactionable.
 
 
 ## First real plan

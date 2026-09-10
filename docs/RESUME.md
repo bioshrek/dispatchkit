@@ -7,17 +7,19 @@ and the exact next actions.
 ## Where things stand
 
 D1–D5.7, D7, D9, D9.1/D9.2, D14, D13, D13.1a–e, D6.0–D6.6, D10, D11 and D16 are implemented and
-green offline. 1027 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
+green offline. 1038 tests, `ruff`, `mypy --strict`, `lint-imports` all clean via `make check`.
 
 **Only D15 remains** — the plan retrospective, measuring dispatch overhead and work from the
 timeline rather than from a schema key. It is unblocked: the sandbox's `wordfreq` plan is
 finished and there is a real timeline to read.
 
-**D16 is built but not yet proven live**, and D6.6's lesson was that live proof is
-per-deliverable — five of its seven defects were unreachable offline. Two things here cannot be
-tested offline at all: whether `agentAssignment.baseRef` behaves as the schema says when a real
-agent acts on it, and whether a real merged pull request reports the `baseRefName` the closure
-rule now depends on. Run a plan with a `base` through the sandbox before treating it as done.
+**D16 is proven live.** The `mincount` plan ran end to end on `plan/mincount` in the sandbox —
+`apply` through a proposed plan pull request — and found two defects nothing offline could reach:
+the base never reached the issue body (`build_body` never took one, and a second block renderer in
+the test suite hid it), and a pass closed an issue and dispatched it again in the same breath,
+through the window between merge and close that only exists once closure stops being GitHub's job.
+Both are fixed and recorded. Still unexercised: `agentAssignment.baseRef` under a real cloud
+agent — `mincount` is all `lane = local`.
 
 A human act D16 leaves outstanding: **protect `plan/*`**. `doctor` now checks the branches a
 `verify: auto` merge actually targets, which are the plans' bases, so it will go red on an
@@ -63,7 +65,7 @@ against the patterns, and `init` will not exit 0 over a failing local check. See
 | D9.2 | Scope drift advises; the repo fence keeps the merge authority | done |
 | D10 | Plan-authoring contract: `docs/schema.md`, body lints, `docs/authoring.md` | done; an agent given only the two docs produced a `--strict`-clean plan |
 | D11 | `doctor` closes over the fence and a missing `gh`; `init` gated on the local checks | done; the fence override discarded every self-protection |
-| D16 | The plan branch: a plan integrates on its own base, merged by a human | done; **not yet proven live** — see above |
+| D16 | The plan branch: a plan integrates on its own base, merged by a human | done; proven live by the sandbox's `mincount` plan |
 | D15 | Plan retrospective: overhead and work from the timeline | designed, unbuilt |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
