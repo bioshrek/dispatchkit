@@ -215,11 +215,33 @@ def _merge_candidates(graph: TaskGraph) -> list[GraphIssue]:
 #: them while still catching `tests/test_readme.py`, which is the case that
 #: prompted the lint. A bare `README.md` in prose is missed, deliberately: the
 #: alternative is a list of file extensions, which is a list of guesses.
-_PATH_IN_PROSE = re.compile(r"`([^`\s]+/[^`\s]+)`")
+#: The token is matched whole and the slash tested afterwards, rather than
+#: written as `[^`\s]+/[^`\s]+`. That form has two greedy runs that both
+#: admit a slash, so an unterminated backtick followed by a long run of them
+#: backtracks quadratically. Nothing here is attacker-reachable -- a
+#: `body_file` is local, unlike an issue body -- but a linear pattern costs
+#: nothing and removes the question.
+_PATH_IN_PROSE = re.compile(r"`([^`\s]+)`")
+
+
+def _paths_in(prose: str) -> list[str]:
+    """Backticked tokens holding an interior slash, in order, deduplicated.
+
+    Interior: a slash with at least one character on each side, which is what
+    the two-run form matched. `/etc` and `a/` are not paths by this rule.
+    """
+    return list(dict.fromkeys(t for t in _PATH_IN_PROSE.findall(prose) if "/" in t[1:-1]))
 
 #: Fenced blocks are illustration -- worked examples, commands, diffs -- and
 #: the paths inside them are things to read, not things the task will change.
-_FENCE = re.compile(r"^```.*?^```", re.M | re.S)
+#:
+#: Leading whitespace is allowed on both fences because a code block under a
+#: numbered step is ordinary markdown, and it is the shape the body contract's
+#: "definition of done" section invites. An unterminated fence runs to the end
+#: of the body: a dropped closing fence is a typo in the brief, and reading the
+#: rest of a code block as prose turns that typo into a lint failure under
+#: `--strict`.
+_FENCE = re.compile(r"^[ \t]*```.*?(?:^[ \t]*```|\Z)", re.M | re.S)
 
 
 def _body_lints(graph: TaskGraph, specs: Mapping[TaskId, str]) -> list[GraphIssue]:
@@ -253,10 +275,9 @@ def _named_paths_outside_scope(task: Task, prose: str) -> list[GraphIssue]:
     """
     if not task.touches:
         return []
-    named = dict.fromkeys(_PATH_IN_PROSE.findall(_FENCE.sub("", prose)))
     missing = [
         path
-        for path in named
+        for path in _paths_in(_FENCE.sub("", prose))
         if "://" not in path and not any(fnmatch(path, pattern) for pattern in task.touches)
     ]
     if not missing:

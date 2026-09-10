@@ -24,9 +24,12 @@ looked and found nothing.
 
 from __future__ import annotations
 
+import re
+import time
+
 import pytest
 
-from dispatchkit.lints import lint_graph
+from dispatchkit.lints import _paths_in, lint_graph
 from dispatchkit.model import Task, TaskId
 
 from .graphs import graph, task
@@ -151,3 +154,81 @@ class TestAPathNamedInProseButNotInScope:
         )
         assert message.count("src/a.py") == 1
         assert "src/b.py" in message
+
+
+class TestTheFenceIsStrippedHowever:
+    """A fence is illustration, and the three ways a real brief writes one all
+    have to count. Only the tidiest was handled: a paired, unindented fence.
+
+    The indented case is the one that bites. A code block under a numbered
+    step is ordinary markdown, and it is exactly the shape the body contract's
+    "definition of done" section invites -- so a brief could fail
+    `validate --strict` for a path its task never touches.
+    """
+
+    def test_a_plain_fence_is_illustration(self) -> None:
+        body = "Change `src/a.py`.\n\n```sh\ncat `docs/notes.md`\n```\n"
+
+        assert codes(task("a", touches=("src/a.py",)), *spread(), specs=written(body)) == []
+
+    def test_an_indented_fence_is_illustration_too(self) -> None:
+        body = "1. Run it:\n\n   ```sh\n   see `docs/notes.md`\n   ```\n"
+
+        assert codes(task("a", touches=("src/a.py",)), *spread(), specs=written(body)) == []
+
+    def test_an_unterminated_fence_runs_to_the_end(self) -> None:
+        # A dropped closing fence is a typo in the brief, not a licence to
+        # start reading a code block as prose.
+        body = "Change `src/a.py`.\n\n```sh\ncat `docs/notes.md`\n"
+
+        assert codes(task("a", touches=("src/a.py",)), *spread(), specs=written(body)) == []
+
+    def test_prose_after_a_closed_fence_is_still_prose(self) -> None:
+        # The fix must not swallow the rest of the document.
+        body = "```sh\necho hi\n```\n\nThen edit `docs/notes.md`.\n"
+
+        assert codes(task("a", touches=("src/a.py",)), *spread(), specs=written(body)) == [
+            "scope-omits-named-path"
+        ]
+
+    def test_two_fences_do_not_swallow_the_prose_between_them(self) -> None:
+        body = "```sh\na\n```\n\nEdit `docs/notes.md`.\n\n```sh\nb\n```\n"
+
+        assert codes(task("a", touches=("src/a.py",)), *spread(), specs=written(body)) == [
+            "scope-omits-named-path"
+        ]
+
+
+def written(body: str) -> dict[TaskId, str]:
+    """`a` gets the body under test; the two shape-lint fillers get a plain one."""
+    return {TaskId("a"): body, TaskId("b"): "Written.", TaskId("c"): "Written too."}
+
+
+class TestThePathPatternIsLinear:
+    """The old pattern was `[^`\\s]+/[^`\\s]+` -- two greedy runs both
+    admitting a slash, which backtracks quadratically on an unterminated
+    backtick followed by a long run of them. Not attacker-reachable, since a
+    `body_file` is local rather than an issue body, but the rewrite has to be
+    proven equivalent rather than assumed to be."""
+
+    def test_it_agrees_with_the_pattern_it_replaced(self) -> None:
+        old = re.compile(r"`([^`\s]+/[^`\s]+)`")
+        corpus = [
+            "edit `src/a.py` then `tests/b.py`",
+            "run `uv run pytest -q` and pass `--top`",
+            "see `https://example.com/x` for `v1.2/3`",
+            "`/etc/passwd` and `a/` and `a/b/` and `/a`",
+            "no backticks at all, src/a.py bare",
+            "`a` `b/c` `` `d/e`",
+            "unterminated `a/b/c/d",
+        ]
+
+        for text in corpus:
+            assert _paths_in(text) == list(dict.fromkeys(old.findall(text))), text
+
+    def test_it_does_not_blow_up_on_a_long_unterminated_run(self) -> None:
+        started = time.monotonic()
+
+        _paths_in("`" + "a/" * 20000)
+
+        assert time.monotonic() - started < 1.0

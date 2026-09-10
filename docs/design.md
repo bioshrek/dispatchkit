@@ -2676,6 +2676,25 @@ had to be widened for the same reason, one commit earlier. That both examples in
 out as chains is worth noticing: the chain is the shape a plan falls into when nobody is thinking
 about width, which is precisely why the lint exists.
 
+**A review of the above found the fence-stripping too literal.** `_FENCE` required a paired
+closing fence at column zero, so two ordinary markdown shapes were not stripped at all: an
+unterminated block, and — the one that matters — a fence indented under a numbered step. That
+second shape is exactly what the body contract's "definition of done" section invites, so a
+correctly written brief could fail `validate --strict` over a path its task never touches. A lint
+that fires on the shape the guide recommends would have been turned off within a week, which is
+the outcome the `scope-omits-named-path` design was already trying to avoid when it chose to
+under-match rather than guess at file extensions. Both fences now allow leading whitespace, and an
+unterminated one runs to the end of the body: a dropped backtick is a typo in a brief, not a
+licence to start reading a code block as prose.
+
+The same review found `_PATH_IN_PROSE` backtracking quadratically — `[^`\s]+/[^`\s]+` is two
+greedy runs that both admit a slash, so an unterminated backtick before a long run of them costs
+about half a second at 8 KB. Not reachable by an attacker, since a `body_file` is local rather
+than an issue body, and worth fixing anyway: the token is now matched whole and the slash tested
+afterwards, which is linear and reads better. Equivalence to the pattern it replaced is asserted
+against a corpus rather than assumed, because "obviously the same" is how the interior-slash rule
+(`a/b` yes, `/etc` and `a/` no) would have been lost silently.
+
 **The optional `doc` key** points at the document the plan came from. It renders one line into
 every issue body, and the line carries its own precedence: the issue is the contract, the document
 is context, and a disagreement between them goes in the pull request rather than being reconciled
