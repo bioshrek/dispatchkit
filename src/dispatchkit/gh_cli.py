@@ -104,6 +104,7 @@ query($owner: String!, $repo: String!, $first: Int!) {
                   isDraft
                   mergeable
                   files(first: 100) { nodes { path } }
+                  mergedAt
                   first_commit: commits(first: 1) {
                     nodes { commit { committedDate } }
                   }
@@ -258,6 +259,7 @@ def _parse_merged_prs(node: dict[str, Any]) -> tuple[MergedPr, ...]:
                 Base(name),
                 first_commit_at=_first_commit(source),
                 ci=_ci_elapsed(source),
+                merged_at=_stamp(source.get("mergedAt")),
             )
         )
     return tuple(merged)

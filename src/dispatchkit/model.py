@@ -209,6 +209,11 @@ class MergedPr:
     #: Elapsed rather than summed, because suites run concurrently and adding
     #: them would report a duration no clock ever measured.
     ci: timedelta | None = None
+    #: When the work landed (D15). The end of `work`, in preference to the
+    #: issue's own close: since D16 the close is dispatchkit's bookkeeping on
+    #: a later pass, so it carries a poll interval of scheduler latency that
+    #: is not the task's duration.
+    merged_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

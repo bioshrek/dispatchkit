@@ -57,6 +57,7 @@ def landed(
     dispatched: tuple[datetime, ...] = (),
     first_commit: datetime | None = None,
     ci: timedelta | None = None,
+    merged_at: datetime | None = None,
     closed_at: datetime | None = None,
     depends: tuple[str, ...] = (),
 ) -> IssueState:
@@ -68,7 +69,15 @@ def landed(
         closed=True,
         closed_at=closed_at,
         dispatches=dispatched,
-        merged=(MergedPr(number + 100, DEFAULT_BASE, first_commit_at=first_commit, ci=ci),),
+        merged=(
+            MergedPr(
+                number + 100,
+                DEFAULT_BASE,
+                first_commit_at=first_commit,
+                ci=ci,
+                merged_at=merged_at,
+            ),
+        ),
     )
 
 
@@ -185,6 +194,47 @@ class TestTheTwoDurations:
 
         assert report.outcomes[0].overhead is None
         assert report.outcomes[0].measured is False
+
+
+class TestWhereWorkEnds:
+    """Work ends when the work landed, not when the bookkeeping caught up.
+
+    Before D16 the two were the same moment: GitHub closed the issue in the
+    instant it merged the pull request. Now dispatchkit closes it itself, on a
+    later pass, so `closedAt` carries up to one poll interval of the
+    scheduler's own latency -- and on a hand-driven `watch --once`, up to
+    however long the operator was away. That is not the task's duration.
+    """
+
+    def test_it_ends_at_the_merge_when_there_is_one(self) -> None:
+        report = retro_of(
+            landed(
+                "one",
+                1,
+                dispatched=(at(12, 0),),
+                first_commit=at(12, 5),
+                ci=timedelta(minutes=5),
+                merged_at=at(12, 40),
+                closed_at=at(15, 0),
+            )
+        )
+
+        assert report.outcomes[0].work == timedelta(minutes=40)
+
+    def test_it_falls_back_to_the_close_when_nothing_merged(self) -> None:
+        """A hand-finished task has no merge, and the close is all there is."""
+        report = retro_of(
+            landed(
+                "one",
+                1,
+                dispatched=(at(12, 0),),
+                first_commit=at(12, 5),
+                ci=timedelta(minutes=5),
+                closed_at=at(12, 40),
+            )
+        )
+
+        assert report.outcomes[0].work == timedelta(minutes=40)
 
 
 class TestWhatCannotBeMeasured:

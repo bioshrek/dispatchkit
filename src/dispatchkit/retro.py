@@ -66,7 +66,23 @@ class TaskOutcome:
     dispatched_at: datetime | None
     first_commit_at: datetime | None
     ci: timedelta | None
+    #: When the work landed, if it did. Preferred to `closed_at` as the end of
+    #: `work`: since D16 the close is dispatchkit's own act on a later pass,
+    #: so it carries a poll interval of scheduler latency -- and on a
+    #: hand-driven `watch --once`, however long the operator was away. That is
+    #: not the task's duration. Before D16 the two were the same moment,
+    #: because GitHub closed the issue in the instant it merged.
+    merged_at: datetime | None
     closed_at: datetime | None
+
+    @property
+    def finished_at(self) -> datetime | None:
+        """When the task was done. The merge, or failing that the close.
+
+        A task finished by hand has no merge, and then the close is all there
+        is -- one imperfect answer being better than no answer.
+        """
+        return self.merged_at or self.closed_at
 
     @property
     def overhead(self) -> timedelta | None:
@@ -81,10 +97,11 @@ class TaskOutcome:
 
     @property
     def work(self) -> timedelta | None:
-        """Dispatch to close: the elapsed span of the attempt that succeeded."""
-        if self.dispatched_at is None or self.closed_at is None:
+        """Dispatch to landing: the elapsed span of the attempt that succeeded."""
+        finished = self.finished_at
+        if self.dispatched_at is None or finished is None:
             return None
-        return _positive(self.closed_at - self.dispatched_at)
+        return _positive(finished - self.dispatched_at)
 
     @property
     def measured(self) -> bool:
@@ -158,7 +175,7 @@ class Retrospective:
 
     @property
     def makespan(self) -> timedelta | None:
-        """First dispatch to last close: what the plan actually took."""
+        """First dispatch to last landing: what the plan actually took."""
         spans = _spans(self.outcomes)
         if not spans:
             return None
@@ -243,6 +260,7 @@ def _outcome(item: TaskItem) -> TaskOutcome:
         dispatched_at=_producing_dispatch(item.dispatches, first_commit),
         first_commit_at=first_commit,
         ci=landed.ci if landed else None,
+        merged_at=landed.merged_at if landed else None,
         closed_at=item.closed_at,
     )
 
@@ -267,9 +285,9 @@ def _producing_dispatch(
 
 def _spans(outcomes: Sequence[TaskOutcome]) -> list[tuple[datetime, datetime]]:
     return [
-        (outcome.dispatched_at, outcome.closed_at)
+        (outcome.dispatched_at, finished)
         for outcome in outcomes
-        if outcome.dispatched_at is not None and outcome.closed_at is not None
+        if outcome.dispatched_at is not None and (finished := outcome.finished_at) is not None
     ]
 
 

@@ -65,9 +65,12 @@ def merged_pr(
     number: int = 90,
     base: str = "plan/wordfreq",
     first_commit: str | None = "2026-09-10T12:05:00Z",
+    merged_at: str | None = None,
     suites: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     source: dict[str, Any] = {"number": number, "state": "MERGED", "baseRefName": base}
+    if merged_at is not None:
+        source["mergedAt"] = merged_at
     if first_commit is not None:
         source["first_commit"] = {"nodes": [{"commit": {"committedDate": first_commit}}]}
     if suites is not None:
@@ -97,6 +100,9 @@ class TestTheQueryAsks:
         """
         assert "first_commit: commits(first: 1)" in STATE_QUERY
         assert "commits(last: 1)" in STATE_QUERY
+
+    def test_it_asks_when_the_pull_request_merged(self) -> None:
+        assert "mergedAt" in STATE_QUERY
 
     def test_it_asks_when_the_check_suites_ran(self) -> None:
         assert "checkSuites" in STATE_QUERY
@@ -134,6 +140,23 @@ class TestWhenTheWorkStarted:
         state = parse_state(payload(issue_node(prs=[merged_pr(first_commit=None)])))
 
         assert state.issues[0].merged[0].first_commit_at is None
+
+
+class TestWhenTheWorkLanded:
+    """Since D16 the close is dispatchkit's own act on a later pass, so the
+    merge is the moment the work was actually done."""
+
+    def test_the_merge_time_is_read(self) -> None:
+        state = parse_state(
+            payload(issue_node(prs=[merged_pr(merged_at="2026-09-10T12:20:00Z")]))
+        )
+
+        assert state.issues[0].merged[0].merged_at == datetime(2026, 9, 10, 12, 20, tzinfo=UTC)
+
+    def test_a_payload_that_predates_the_question_reads_as_absent(self) -> None:
+        state = parse_state(payload(issue_node(prs=[merged_pr()])))
+
+        assert state.issues[0].merged[0].merged_at is None
 
 
 class TestHowLongCiTook:
