@@ -122,7 +122,7 @@ def run_local(
             ),
         )
 
-    made = machine.create_worktree(path=path, branch=branch)
+    made = machine.create_worktree(path=path, branch=branch, base=task.base)
     if not made.ok:
         # Nothing to preserve and nothing to remove: there is no tree.
         return _finish(api, task, _failed(ref, branch, "worktree", made))
@@ -178,6 +178,7 @@ def run_local(
             head=branch,
             title=task.title,
             body=f"{prompt_for(task.title, task.body)}\n\nCloses #{task.number}\n",
+            base=task.base,
         )
     except RuntimeError as exc:
         # `gh_cli` raises for any non-zero `gh`. Every machine stage above is

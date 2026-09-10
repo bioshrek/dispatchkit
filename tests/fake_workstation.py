@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 
+from dispatchkit.model import Base
 from dispatchkit.workstation import RunResult, Worktree
 
 ROOT = Path("/work")
@@ -34,6 +35,8 @@ class FakeWorkstation:
     calls: list[str] = field(default_factory=list)
     runs: list[tuple[tuple[str, ...], Path, Mapping[str, str]]] = field(default_factory=list)
     created: list[Path] = field(default_factory=list)
+    #: The base each worktree was cut from (D16).
+    bases: list[str] = field(default_factory=list)
     removed: list[Path] = field(default_factory=list)
     pushed: list[str] = field(default_factory=list)
     push_fails: bool = False
@@ -60,8 +63,9 @@ class FakeWorkstation:
         self.calls.append("branches()")
         return self.branches_
 
-    def create_worktree(self, *, path: Path, branch: str) -> RunResult:
+    def create_worktree(self, *, path: Path, branch: str, base: Base) -> RunResult:
         self.calls.append(f"create_worktree({path}, {branch})")
+        self.bases.append(str(base))
         if self.create_fails:
             return RunResult(("git", "worktree", "add"), 128, self.create_fails)
         self.created.append(path)

@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Protocol
 
 from dispatchkit.block import CLOSE, OPEN
-from dispatchkit.model import TaskId, TaskRef
+from dispatchkit.model import Base, TaskId, TaskRef
 
 #: Where worktrees live. One directory per task, so a run's evidence is
 #: findable by name, and the whole tree is walkable at startup — recovery
@@ -205,11 +205,22 @@ class Workstation(Protocol):
         """Every local branch, so a retry can step over the ones a failed run
         kept (D6.6)."""
 
-    def create_worktree(self, *, path: Path, branch: str) -> RunResult: ...
+    def create_worktree(self, *, path: Path, branch: str, base: Base) -> RunResult:
+        """Cut from `<remote>/<base>`.
+
+        The base is an argument rather than a property of the machine because
+        it belongs to the plan, not to this disk: one `watch` serves every plan
+        in the repository, and two of them may integrate on different branches
+        (D16). Required, so a caller cannot silently fall back to `main` --
+        which is the failure that looks like success, since branching from and
+        targeting the default branch is exactly what worked before.
+        """
 
     def remove_worktree(self, *, path: Path) -> None: ...
 
-    def commits(self, *, path: Path) -> int: ...
+    def commits(self, *, path: Path) -> int:
+        """Commits here the remote has not got. Takes no base: see
+        `commits_command` (D16)."""
 
     def commit(self, *, path: Path, message: str) -> RunResult:
         """Everything the agent left, including files it added.

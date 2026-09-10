@@ -37,9 +37,9 @@ class FakeGitHub:
     assigned_base: dict[int, Base] = field(default_factory=dict)
     next_pr: int = 900
 
-    def open_pr(self, *, head: str, title: str, body: str) -> int:
+    def open_pr(self, *, head: str, title: str, body: str, base: Base) -> int:
         self.calls.append(f"open_pr({head})")
-        self.opened.append({"head": head, "title": title, "body": body})
+        self.opened.append({"head": head, "title": title, "body": body, "base": str(base)})
         self.next_pr += 1
         return self.next_pr
 

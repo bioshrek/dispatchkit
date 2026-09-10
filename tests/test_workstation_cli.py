@@ -49,7 +49,7 @@ class TestEveryCommandIsAnArgvList:
             add_command(ROOT / "a", "dispatchkit/tokenise/1", "origin/main"),
             remove_command(ROOT / "a"),
             list_command(),
-            commits_command("origin/main"),
+            commits_command(),
             push_command("origin", "dispatchkit/tokenise/1"),
         ]
         for command in commands:
@@ -92,12 +92,16 @@ class TestEveryCommandIsAnArgvList:
             "dispatchkit/tokenise/1:refs/heads/dispatchkit/tokenise/1",
         ]
 
-    def test_commits_are_counted_against_the_remote_base(self) -> None:
-        assert commits_command("origin/main") == [
+    def test_commits_are_counted_against_the_remote(self) -> None:
+        # Against every `origin` ref rather than a named base: the worktree is
+        # cut from whichever branch its plan integrates on (D16).
+        assert commits_command() == [
             "git",
             "rev-list",
             "--count",
-            "origin/main..HEAD",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
         ]
 
 

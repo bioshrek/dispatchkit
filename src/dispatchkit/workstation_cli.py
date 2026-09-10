@@ -30,6 +30,7 @@ from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 
+from dispatchkit.model import Base
 from dispatchkit.workstation import RunResult, Worktree, dirty_plans, ref_of
 
 #: How much of a child's output is kept. The agent is chatty and the tail is
@@ -57,8 +58,20 @@ def list_command() -> list[str]:
     return ["git", "worktree", "list", "--porcelain"]
 
 
-def commits_command(base: str) -> list[str]:
-    return ["git", "rev-list", "--count", f"{base}..HEAD"]
+def commits_command() -> list[str]:
+    """Work in this tree that `origin` has never seen.
+
+    Not `<base>..HEAD`, which was right only while every worktree was cut from
+    the same branch. A plan branch (D16) is ahead of `main`, so counting from
+    `main` counted the plan's own commits as this task's -- and the gate that
+    refuses to open a pull request for an agent that changed nothing (D6.6)
+    would have passed on an empty branch.
+
+    Asking the remote instead removes the base from the question rather than
+    threading it through a third place. It is also the question actually being
+    asked everywhere `commits` is used: is there work here that would be lost.
+    """
+    return ["git", "rev-list", "--count", "HEAD", "--not", "--remotes=origin"]
 
 
 def stage_command() -> list[str]:
@@ -151,11 +164,6 @@ class CliWorkstation:
     #: the ones about a worktree, except the two that must run *inside* it.
     repo: Path = field(default_factory=Path.cwd)
     remote: str = "origin"
-    base: str = "main"
-
-    @property
-    def _start(self) -> str:
-        return f"{self.remote}/{self.base}"
 
     def dirty(self, *, plans: Path) -> frozenset[str]:
         """Which plans have uncommitted changes (D13.1).
@@ -182,16 +190,16 @@ class CliWorkstation:
             replace(tree, commits=self.commits(path=tree.path)) for tree in listed
         )
 
-    def create_worktree(self, *, path: Path, branch: str) -> RunResult:
+    def create_worktree(self, *, path: Path, branch: str, base: Base) -> RunResult:
         """The result is returned rather than dropped. A leftover branch from
         a killed run makes this fail, and swallowing it launched the agent
         into a directory that was not there — reporting the *next* thing to go
         wrong, which is true and useless to whoever reads the issue."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        fetched = self._git(fetch_command(self.remote, self.base))
+        fetched = self._git(fetch_command(self.remote, str(base)))
         if not fetched.ok:
             return fetched
-        return self._git(add_command(path, branch, self._start))
+        return self._git(add_command(path, branch, f"{self.remote}/{base}"))
 
     def remove_worktree(self, *, path: Path) -> None:
         self._git(remove_command(path))
@@ -203,7 +211,7 @@ class CliWorkstation:
         the spawn and becomes a failed result, and one way of saying "there is
         nothing here" is easier to be right about than two.
         """
-        result = self._git(commits_command(self._start), cwd=path)
+        result = self._git(commits_command(), cwd=path)
         counted = result.output.strip()
         return int(counted) if result.ok and counted.isdigit() else 0
 

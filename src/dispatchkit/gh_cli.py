@@ -309,13 +309,17 @@ def parse_protection(payload: dict[str, Any]) -> bool:
     return bool(checks.get("contexts"))
 
 
-def open_pr_command(repo: str, head: str, title: str) -> list[str]:
+def open_pr_command(repo: str, head: str, title: str, base: Base) -> list[str]:
     """Open the pull request for a local run.
 
     The body arrives on stdin rather than in the argv, because it is built from
     an issue body an agent may have influenced and there is no length a
     command line is guaranteed to carry. `--head` is a branch this process
     pushed a moment ago, so it is ours to name.
+
+    `--base` is passed even when it is `main`. Omitting it means "the default
+    branch", which is the same answer by a different route -- and the route
+    matters, because it is the one an omitted base takes silently (D16).
     """
     return [
         "gh",
@@ -323,6 +327,8 @@ def open_pr_command(repo: str, head: str, title: str) -> list[str]:
         "create",
         "--repo",
         repo,
+        "--base",
+        str(base),
         "--head",
         head,
         "--title",
@@ -517,8 +523,8 @@ class GhCli:
 
     # --- the local lane (D6) -----------------------------------------------
 
-    def open_pr(self, *, head: str, title: str, body: str) -> int:
-        output = _run(open_pr_command(self.repo, head, title), stdin=body)
+    def open_pr(self, *, head: str, title: str, body: str, base: Base) -> int:
+        output = _run(open_pr_command(self.repo, head, title, base), stdin=body)
         return _pr_number(output)
 
     def comment(self, *, number: int, body: str) -> None:

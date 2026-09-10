@@ -268,7 +268,10 @@ class GitHubApi(Protocol):
 
     # The local lane (D6). The cloud agent opens its own pull request and
     # comments for itself; here the executor is the agent's hands.
-    def open_pr(self, *, head: str, title: str, body: str) -> int: ...
+    def open_pr(self, *, head: str, title: str, body: str, base: Base) -> int:
+        """Against the branch the plan integrates on (D16). Required for the
+        same reason as `create_worktree`: an omitted base is `main`, and a
+        pull request opened against `main` succeeds."""
 
     def comment(self, *, number: int, body: str) -> None: ...
 
