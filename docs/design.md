@@ -354,12 +354,15 @@ So conflicts are handled in four layers, weakest and cheapest first:
    queue means every PR is rebased onto the tip and re-tested in order before it lands. A textual
    conflict becomes a mechanical failure; a semantic conflict becomes a red test. This is the
    layer that actually guarantees correctness, and it is why layer 2 can stay advisory.
-4. **Scope drift check.** After a PR opens, the scheduler diffs its changed files against the
-   declared `touches`. Drift is reported on the issue, and for `verify = "auto"` tasks it
-   withholds auto-merge — an agent that wandered outside its declared blast radius is exactly the
-   case a human should look at. Over time this also tells us which planner decompositions were
-   wrong — which is why the agent is not told its `touches` in the first place. Drift is only
-   evidence about the decomposition while nobody has shown the subject the probe.
+4. **Scope drift report.** After a PR opens, the scheduler diffs its changed files against the
+   declared `touches` and reports the difference. It does **not** withhold the merge: a file list
+   predicted before the work began cannot hold merge authority, and trying it produced a green
+   pull request that was refused for ever — see [D9.2](#d92--the-scope-check-gives-back-the-authority-it-should-never-have-had).
+   What the report is for is layer 2: the exclusion admitted the task on a declaration reality has
+   contradicted, and only the author can fix the graph. Over time this also tells us which planner
+   decompositions were wrong — which is why the agent is not told its `touches` in the first
+   place. Drift is only evidence about the decomposition while nobody has shown the subject the
+   probe.
 
 A PR that can't be rebased cleanly is returned to the agent as a normal failure: comment,
 unassign — which spends an attempt, because the timeline records the dispatch — and after the
@@ -764,6 +767,7 @@ Shipped, each with a decision record below:
 | D6.5 | `watch --local`: the lane served, without holding up a pass    | A running task starts nothing else and stops no merge; `doctor --local` |
 | D13.1d | The clean-tree gate: `verify: auto` needs a committed graph file | A dirty plan degrades to `human`; a clean one merges as before          |
 | D13.1e | The graph watcher: a save cuts the wait short and re-plans      | A saved graph re-plans in place; nothing is written, and a typo is not fatal |
+| D9.2 | Scope drift advises rather than vetoes; the fence keeps the authority | A drifting green pull request merges and is reported; a fenced one still refuses |
 
 Remaining, in build order:
 
@@ -1617,6 +1621,116 @@ An empty `touches` refuses to merge. It reads as "conflicts with nothing" for th
 exclusion, which is the right permissive answer to a scheduling question; here it is an
 unanswerable question about whether an agent stayed where it said it would, and the answer to
 those is no.
+
+### D9.2 — the scope check gives back the authority it should never have had
+
+**This is a walk-back, and the argument against it was already written down.** The section on
+[parallel work and file conflicts](#parallel-work-and-file-conflicts) opens by ruling out exactly
+what D9.1 then built:
+
+> Non-overlapping file scope is **not** a hard requirement, and trying to make it one would be a
+> mistake. File sets can't be known accurately before an agent starts work, so a declared scope is
+> either over-broad (serialising everything and destroying the parallelism we're buying) or
+> under-broad (giving false confidence).
+
+That is why the four layers are ordered as they are, why layer 2 is labelled *advisory*, and why
+layer 3 is "the layer that actually guarantees correctness, and it is why layer 2 can stay
+advisory". Layer 4 then took layer 2's guess and made it a merge gate. The promotion is the
+defect. A hint whose worst case was stated as "extra serialisation, never a bad merge" acquired a
+much worse one: **a green pull request refused for ever, because a prediction made before the
+work was narrower than the work.**
+
+**It fired within a day.** `document-flags` declared `touches = ["README.md"]` while its own body,
+in prose, asked the agent to add `tests/test_readme.py` — and the acceptance was
+`pytest -q -k readme`, which cannot pass without it. The plan stated its scope twice and
+contradicted itself, and the gate sided with the copy the agent had never been shown, since
+[the prompt](#the-prompt) withholds `touches` deliberately: it "is an advisory exclusion hint, not
+a permission boundary, so handing it over invites an agent to treat a scheduling guess as a
+constraint on its work". We refused an agent for breaking a rule we had decided, on purpose, not
+to tell it.
+
+**The remedy never fitted the incident it was built for.** D9.1 closed by saying the drift check
+"would have prevented this conflict rather than merely reporting it afterwards". That is not true.
+`stopwords` and `top-n` collided because both were *dispatched*, and the merge gate runs long after
+both branches exist. Nothing about withholding the second merge unmakes the first collision;
+decomposition (layer 1) prevents it and the merge queue (layer 3) catches it. What the incident
+really showed is that the declaration the exclusion trusted was wrong — which is an argument for
+telling somebody, not for a veto.
+
+**So the authority moves to the boundary that can carry it.** The blast-radius fence stays, and is
+now the only scope condition on an unattended merge. The two differ in every way that matters
+here:
+
+| | `touches` | the fence |
+| --- | --- | --- |
+| What it is | a prediction about work not yet done | a standing rule about this repository |
+| Where it is declared | per task, in the graph | once, in `.github/dispatchkit.toml` |
+| Drifts with the implementation | yes, necessarily | no |
+| Widenable from an issue body | yes — it is parsed out of one | no |
+
+That last row is the security argument on its own. `touches` arrives through the machine block of
+an attacker-influencable issue; a permission boundary that its subject can edit is not one. What
+guards an unattended merge is what the design always said guarded it: a green pipeline on a branch
+the merge queue rebased, plus the fence.
+
+**Losing the veto is not losing the signal.** `drift_notices` still reports every pull request that
+went outside its declared scope, because the fact remains true and actionable: the exclusion
+admitted this task on a declaration reality has contradicted, and only the author can correct the
+graph. Three details fall out of it being advice rather than a gate:
+
+- It is **not** a `withheld-merge`. Filing it there would report a refusal that no longer happens,
+  and `withheld-merge` is a count someone greps.
+- It is reported for `verify: human` tasks too. The exclusion does not care who merges.
+- It is reported for held tasks. A hold means "do not act on this task"; the notice does not ask
+  anyone to act on the task, it says the plan is wrong, which a pause does not change.
+- It waits for checks to settle. An agent still pushing has no final file list, and drift measured
+  against a half-written branch reports a scope the pull request may never end up having.
+
+An empty `touches` now reports nothing and merges normally, which is the same reading the rest of
+the system gives it. A task that *should* have declared a scope is a question to ask once, at
+authoring time, not a line in every pass for ever.
+
+**And the contradiction is caught where it was written.** `document-flags` declared
+`touches = ["README.md"]` beside an acceptance of `uv run pytest -q -k readme`. Those cannot both
+be right — an acceptance that runs a suite is satisfied by a test file, and no test file was in
+scope. The plan stated its scope twice and disagreed with itself, and the gate downstream sided
+with the copy the agent had never seen. `scope-omits-tests` is a D2-style warning over the two
+halves the graph already holds, and it fires on the original file:
+
+```
+WARN scope-omits-tests: [document-flags] acceptance runs `pytest` but `touches` declares no test
+path (README.md); if the task writes the test its acceptance needs, the declaration is already
+wrong and the exclusion will schedule on it
+```
+
+It reports what it observed rather than what to do, because a task that only re-runs an existing
+suite will also trip it and only the author knows which of the two statements is the wrong one.
+The generalisation worth keeping: **wherever a plan states something twice, check the copies
+agree.** The prose half is not checked yet — a body naming `` `tests/test_readme.py` `` in
+English is the same claim in a third place — because the body lives in a separate file that
+`lint_graph` does not read, and giving a pure function a file to open is a bigger change than the
+signal is worth today.
+
+**What was rejected: an agent as the merge gate.** The obvious alternative to a rigid rule is
+judgment — have a reviewing agent read the diff and decide. It cannot work here, for a reason
+particular to this design: *idempotency is proven, not asserted*. Every mutating behaviour must
+satisfy the convergence test, and a non-deterministic gate cannot — pass N withholds, pass N+1
+merges, and the property that lets concurrent passes converge without a lock is gone. On top of
+that it would be an agent auditing an agent from the same attacker-influencable brief, and it
+would put a network call, a third-party dependency and a new trust boundary inside the component
+that holds assignment authority. Model judgment belongs where a human ratifies it anyway:
+advising a `verify: human` reviewer, or reviewing a plan before it is pushed.
+
+**GitHub's own PR review is advisory too.** It produces comments, not a machine-readable verdict a
+gate can read, and it has no knowledge of the plan, so it cannot judge scope against intent. It is
+useful to a `verify: human` reviewer and cannot be the `auto` gate.
+
+**The general lesson, which is bigger than `touches`.** The graph mixes two kinds of key.
+`lane`, `verify` and `milestone` are **authority** — the author's decision, true the moment it is
+written. `touches`, `depends` and `estimate_minutes` are **forecasts** — claims about work that
+has not happened yet. Only the second kind can drift, and enforcing the two identically is the
+category error behind this whole episode. A forecast may inform scheduling and may be reported on;
+it may not hold a veto.
 
 ### Decisions taken about work not yet built
 

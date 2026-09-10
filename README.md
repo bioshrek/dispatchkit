@@ -13,7 +13,7 @@ title = "Define the application ports"
 milestone = "M2"
 verify = "auto"
 acceptance = "uv run pytest tests/unit -q"
-touches = ["src/app/ports/**"]
+touches = ["src/app/ports/**", "tests/unit/**"]
 
 [[task]]
 id = "adapter"
@@ -43,6 +43,13 @@ Settings live in `.github/dispatchkit.toml` (a root `dispatchkit.toml` is still 
 per-lane concurrency caps, the retry budget, where task graphs live, and the blast-radius fence —
 the paths auto-merge may never touch unattended, which defaults to the config and the graph files,
 so the pipeline cannot rewrite its own rules while nobody is looking.
+
+The fence is the *only* path rule an unattended merge answers to. A task's own `touches` is a
+scheduling hint: it keeps two tasks that would edit the same files from running at once, and a
+pull request that goes outside it is reported so you can correct the graph — but it never
+withholds a merge. A file list written before the work is a prediction, and predictions belong in
+the scheduler rather than in a gate. What guards an unattended merge is green CI on a rebased
+branch, plus the fence.
 
 ## What it actually does
 

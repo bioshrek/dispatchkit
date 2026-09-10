@@ -60,6 +60,7 @@ from dispatchkit.resolve import (
     blocking,
     build_items,
     ci_notices,
+    drift_notices,
     merge_ops,
     ready_ops,
     resolve,
@@ -196,6 +197,7 @@ def plan_tick(
             *_unserved_claims(items, served),
             *_dirty_plan_notices(items, config, dirty),
             *withheld_merges(items, config, dirty=dirty),
+            *drift_notices(items),
         ),
         blocked_on=blocking(items),
     )

@@ -14,6 +14,12 @@ thing is *named*, never left looking merely unfinished.
 
 Nothing here changes what merges. It changes only what is said about what did
 not.
+
+The scope half of this was later walked back: drift no longer withholds a
+merge, and `tests/test_scope_advisory.py` (D9.2) owns that behaviour and the
+reasoning. What is left here are the three refusals that survived, all of them
+about the pull request itself rather than about a prediction made before it
+existed.
 """
 
 from __future__ import annotations
@@ -56,50 +62,7 @@ def kinds(*issues: IssueState) -> tuple[str, ...]:
     return tuple(notice.code for notice in plan.notices)
 
 
-class TestScopeDrift:
-    def test_a_file_the_task_never_declared_is_named(self) -> None:
-        # The live case. The body asked the agent for a test; the graph said
-        # only `README.md`; the fence held and nobody was told.
-        reported = notices(
-            issue(
-                "a",
-                number=1,
-                verify=Verify.AUTO,
-                touches=("README.md",),
-                open_prs=(green(12, files=("README.md", "tests/test_readme.py")),),
-            )
-        )
-        assert any("tests/test_readme.py" in line for line in reported)
-        assert any("scope-drift" in line for line in reported)
-
-    def test_it_says_what_to_do_about_it(self) -> None:
-        # A notice that only reports a refusal leaves the reader to guess
-        # which of the two fixes is theirs. Both are named: widen `touches`
-        # if the drift was legitimate, or merge it yourself.
-        reported = notices(
-            issue(
-                "a",
-                number=1,
-                verify=Verify.AUTO,
-                touches=("README.md",),
-                open_prs=(green(12, files=("README.md", "tests/test_readme.py")),),
-            )
-        )
-        assert any("touches" in line for line in reported)
-
-    def test_a_pull_request_inside_its_scope_says_nothing(self) -> None:
-        assert "scope-drift" not in kinds(
-            issue(
-                "a",
-                number=1,
-                verify=Verify.AUTO,
-                touches=("README.md",),
-                open_prs=(green(12, files=("README.md",)),),
-            )
-        )
-
-
-class TestTheOtherWithheldReasons:
+class TestTheWithheldReasons:
     def test_a_fenced_path_is_named(self) -> None:
         # The pipeline rewriting its own workflow is the case the fence exists
         # for, and the one most likely to be mistaken for a bug in dispatchkit.
@@ -219,30 +182,13 @@ class TestTheStatusAgrees:
 
     `_status_of` already refuses to say `Auto-merging` over a pipeline that
     cannot decide — a stalled check, a draft, a conflict — for one reason each
-    time: the report would be asserting something false. Scope drift and a
-    fenced path are the same lie by two more routes. The task is green and
-    will sit there for ever, and only a person can move it, which is what
-    `In review` means.
+    time: the report would be asserting something false. A fenced path is the
+    same lie by another route. The task is green and will sit there for ever,
+    and only a person can move it, which is what `In review` means.
 
     The status and the notice therefore come from one decision rather than
     two, so they cannot drift apart.
     """
-
-    def test_a_drifting_pull_request_is_in_review_not_auto_merging(self) -> None:
-        plan = plan_tick(
-            state_of(
-                issue(
-                    "a",
-                    number=1,
-                    verify=Verify.AUTO,
-                    touches=("README.md",),
-                    open_prs=(green(12, files=("README.md", "tests/test_readme.py")),),
-                )
-            ),
-            config=CONFIG,
-            now=NOW,
-        )
-        assert list(plan.statuses.values()) == [Status.IN_REVIEW]
 
     def test_a_fenced_pull_request_is_in_review(self) -> None:
         plan = plan_tick(

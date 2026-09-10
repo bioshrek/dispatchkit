@@ -421,12 +421,12 @@ def merge_ops(
       absence of evidence and is the state an unconfigured repository sits in
       forever.
     - Nothing inside the blast-radius fence, so the pipeline cannot rewrite its
-      own workflow, config or task graph unattended.
-    - No scope drift: every file is one the task declared it would touch. An
-      agent outside its blast radius is the case the design says not to merge
-      unattended, and it is not hypothetical — a drifting pull request caused a
-      real collision here, because the concurrency exclusion reasons about
-      *declared* scope and had nothing to go on.
+      own workflow, config or task graph unattended. This is the *only* scope
+      condition, and deliberately so (D9.2). `touches` is not one: a per-task
+      file list is a prediction made before the work, and the design fixed it
+      as an advisory scheduling hint rather than a permission boundary. The
+      fence is the boundary — repo-level, declared in config, unable to drift
+      with an implementation, and unable to be widened by an issue body.
     - A clean graph file (D13.1). `verify: auto` is merge authority, and
       apply-on-save deleted the human review that used to grant it. The
       replacement is git: a plan whose file is dirty in the working tree
@@ -449,7 +449,6 @@ def merge_ops(
             and pr.checks is Checks.PASSING
             and pr.files
             and not any(config.is_fenced(path) for path in pr.files)
-            and _within_scope(pr.files, task.touches)
         ]
     return tuple(operations)
 
@@ -491,17 +490,19 @@ def _stalled(task: TaskItem, config: SchedulerConfig, now: datetime) -> bool:
     return now - max(task.dispatches) >= config.stall_after
 
 
-def _within_scope(files: Sequence[str], touches: Sequence[str]) -> bool:
-    """Did this pull request stay inside the scope its task declared?
+def _drifted(files: Sequence[str], touches: Sequence[str]) -> tuple[str, ...]:
+    """The files a pull request changed that its task never declared.
 
-    An empty `touches` means unknown scope. For the concurrency exclusion that
-    reads as "conflicts with nothing", which is the right permissive answer to
-    a scheduling question. Here it is an unanswerable question about whether an
-    agent stayed where it said it would, and the answer to those is no.
+    Empty `touches` yields no drift rather than total drift. "Unknown scope"
+    is the reading the design gives it everywhere else — it excludes nothing
+    for the concurrency hint — and the opposite reading here would make the
+    most permissive declaration behave as the strictest.
     """
     if not touches:
-        return False
-    return all(any(fnmatch(path, pattern) for pattern in touches) for path in files)
+        return ()
+    return tuple(
+        path for path in files if not any(fnmatch(path, pattern) for pattern in touches)
+    )
 
 
 def withheld_merges(
@@ -532,7 +533,7 @@ def withheld_merges(
     and then the line that matters goes unread with the rest.
     """
     return tuple(
-        Notice("withheld-merge", str(task.ref), _why(pr, task, config))
+        Notice("withheld-merge", str(task.ref), _why(pr, config))
         for task, pr in _withheld(items, config, dirty=dirty)
     )
 
@@ -565,7 +566,7 @@ def _withheld(
     return tuple(found)
 
 
-def _why(pr: PullRequest, task: TaskItem, config: SchedulerConfig) -> str:
+def _why(pr: PullRequest, config: SchedulerConfig) -> str:
     """The one thing standing between a green pull request and `main`.
 
     Each answer opens with a short tag, so one grep finds every instance of a
@@ -573,9 +574,14 @@ def _why(pr: PullRequest, task: TaskItem, config: SchedulerConfig) -> str:
     the code stays `withheld-merge`, which is the thing a reader wants to
     count.
 
-    First reason only. A pull request that conflicts *and* drifted needs
-    rebasing before the scope question can even be asked, and a list of every
-    gate it failed reads as an argument rather than an instruction.
+    First reason only. A pull request that conflicts *and* sits on a fenced
+    path needs rebasing before the fence question can even be asked, and a
+    list of every gate it failed reads as an argument rather than an
+    instruction.
+
+    Total by construction: a green, undrafted, unheld pull request that
+    `merge_ops` declined failed exactly one of the three conditions below, so
+    the last needs no test of its own.
     """
     if not pr.mergeable:
         return (
@@ -588,27 +594,52 @@ def _why(pr: PullRequest, task: TaskItem, config: SchedulerConfig) -> str:
             "trivially, so it is never merged unattended; close it, and the task will be "
             "dispatched again."
         )
-    fenced = [path for path in pr.files if config.is_fenced(path)]
-    if fenced:
-        return (
-            f"fenced-path: #{pr.number} is green but touches {', '.join(sorted(fenced))}, "
-            "which is inside the blast-radius fence: the pipeline does not rewrite its own "
-            "workflow, config or task graph unattended. Review and merge it yourself."
-        )
-    drifted = [
-        path for path in pr.files if not any(fnmatch(path, pattern) for pattern in task.touches)
-    ]
-    if not task.touches:
-        return (
-            f"no-scope: #{pr.number} is green, but {task.ref} declares no `touches`, so "
-            "there is nothing to check its scope against. Declare the files it may change, "
-            "or merge it yourself."
-        )
+    fenced = sorted(path for path in pr.files if config.is_fenced(path))
     return (
-        f"scope-drift: #{pr.number} is green but also changed "
-        f"{', '.join(sorted(drifted))}, which {task.ref} did not declare in `touches`. "
-        "Widen `touches` if that was the intent, or merge it yourself."
+        f"fenced-path: #{pr.number} is green but touches {', '.join(fenced)}, "
+        "which is inside the blast-radius fence: the pipeline does not rewrite its own "
+        "workflow, config or task graph unattended. Review and merge it yourself."
     )
+
+
+#: Checks that will not change without a new push, so the file list is final.
+_SETTLED = frozenset({Checks.PASSING, Checks.FAILING})
+
+
+def drift_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:
+    """Report pull requests that went outside the scope their task declared.
+
+    Advisory, and only advisory (D9.2). Drift withheld the merge until this
+    was reviewed, which promoted a hint the design had deliberately kept
+    advisory into merge authority — and a prediction made before the work is
+    the wrong thing to hold authority. What remains is the part that was
+    always true: the concurrency exclusion admitted this task against a
+    declaration reality has since contradicted, and the graph is now wrong in
+    a way only its author can fix.
+
+    Reported for `human` tasks too, because the exclusion does not care who
+    merges, and for held tasks, because it does not ask anyone to act on the
+    task — it says the plan is wrong, which a pause does not change.
+
+    Only once the checks have settled. An agent that is still pushing has no
+    final file list, and drift measured against a half-written branch would
+    report a scope the pull request may never end up having.
+    """
+    return tuple(
+        Notice(
+            "scope-drift",
+            str(task.ref),
+            f"#{pr.number} also changed {', '.join(drifted)}, which {task.ref} did not "
+            "declare in `touches`. The exclusion scheduled it on that declaration, so "
+            "widen it in the graph if the drift was the intent.",
+        )
+        for task in items
+        if not task.closed
+        for pr in task.open_prs
+        if pr.checks in _SETTLED and (drifted := sorted(_drifted(pr.files, task.touches)))
+    )
+
+
 
 
 def stranded_notices(items: Sequence[TaskItem]) -> tuple[Notice, ...]:

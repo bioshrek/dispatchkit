@@ -379,10 +379,9 @@ class TestMarkingAutoPrsReady:
                 number=3,
                 verify=verify,
                 assignees=("copilot",),
-                # A declared scope the pull request stays inside, so the only
-                # thing these fixtures vary is the draft flag. Without it the
-                # merge would be withheld for scope reasons and the status
-                # would say `In review`, which is a different test.
+                # A declared scope the pull request stays inside, so nothing
+                # here reports drift and the only thing these fixtures vary is
+                # the draft flag.
                 touches=("src/*",),
                 open_prs=(
                     PullRequest(7, checks, draft=draft, mergeable=True, files=("src/a.py",)),
@@ -435,10 +434,9 @@ class TestMarkReadyConverges:
                 number=3,
                 verify=Verify.AUTO,
                 assignees=("copilot",),
-                # A declared scope the pull request stays inside, so the only
-                # thing these fixtures vary is the draft flag. Without it the
-                # merge would be withheld for scope reasons and the status
-                # would say `In review`, which is a different test.
+                # A declared scope the pull request stays inside, so nothing
+                # here reports drift and the only thing these fixtures vary is
+                # the draft flag.
                 touches=("src/*",),
                 open_prs=(
                     PullRequest(

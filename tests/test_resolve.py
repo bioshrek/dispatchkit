@@ -614,19 +614,24 @@ class TestConflictBlocksAutoMerging:
         assert self._status(False) is Status.IN_REVIEW
 
 
-class TestScopeDrift:
-    """A pull request that wandered outside its declared `touches` is not merged.
+class TestScopeIsNotAMergeGate:
+    """D9.2: `touches` advises the exclusion; it does not gate the merge.
 
-    The live failure behind this: `stopwords` declared
-    `touches = ["src/wordfreq/count.py", "tests/test_count.py"]` and its pull
-    request edited `src/wordfreq/cli.py` and `tests/test_cli.py`, which `top-n`
-    was editing at the same time. The file-scope exclusion reasons about
-    *declared* scope, so it never fired; the two ran concurrently and collided,
-    and a human had to resolve the conflict by hand.
+    This class used to assert the opposite, added after a live collision:
+    `stopwords` declared `touches = ["src/wordfreq/count.py",
+    "tests/test_count.py"]`, edited `src/wordfreq/cli.py` as well, and raced
+    `top-n` into a conflict a human untangled by hand.
 
-    An agent outside its blast radius is exactly the case the design says not
-    to merge unattended, and the declaration is the only thing the exclusion
-    had to work with.
+    The remedy did not fit the incident. Withholding the merge fires *after*
+    the two branches already exist, so it could not have prevented that
+    collision; what prevents it is decomposition, and what catches it is the
+    merge queue. What the gate added instead was a new way to stall: a green
+    pull request refused for ever because a prediction made before the work
+    was narrower than the work.
+
+    The behaviour now lives in `tests/test_scope_advisory.py`, and what is
+    left of the incident is a report, which is the part that would actually
+    have helped — the declaration the exclusion trusted was wrong.
     """
 
     @staticmethod
@@ -644,19 +649,18 @@ class TestScopeDrift:
             MergePr(ref("a"), 7),
         )
 
-    def test_a_pr_that_drifted_is_not_merged(self) -> None:
-        assert self._ops(touches=("src/a.py",), files=("src/a.py", "src/b.py")) == ()
-
-    def test_touches_may_be_a_glob(self) -> None:
-        assert self._ops(touches=("src/**",), files=("src/deep/a.py",)) == (
+    def test_a_pr_that_drifted_merges_too(self) -> None:
+        assert self._ops(touches=("src/a.py",), files=("src/a.py", "src/b.py")) == (
             MergePr(ref("a"), 7),
         )
 
-    def test_an_undeclared_scope_cannot_be_checked_and_so_does_not_merge(self) -> None:
-        # Empty `touches` excludes nothing for the concurrency fence, where the
-        # permissive reading is right. Here it is an unanswerable question, and
-        # the answer to those is no.
-        assert self._ops(touches=(), files=("src/a.py",)) == ()
+    def test_an_undeclared_scope_merges(self) -> None:
+        assert self._ops(touches=(), files=("src/a.py",)) == (MergePr(ref("a"), 7),)
+
+    def test_the_fence_still_refuses(self) -> None:
+        # The boundary that kept its authority, and the one `touches` was
+        # standing in front of.
+        assert self._ops(touches=("**",), files=(".github/workflows/ci.yml",)) == ()
 
 
 class TestTwoPlansInOneRepository:
