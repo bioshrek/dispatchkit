@@ -44,8 +44,14 @@ argv = [
 # The model used when a task names none, and what a task may name instead.
 # An empty `models` means tasks may not choose at all — graph files are
 # agent-authorable, so this list is the whole of that trust boundary.
-model = "claude-opus-5"
-models = ["claude-opus-5", "claude-sonnet-5"]
+#
+# `auto` lets the runner pick one your account can actually use. Naming a
+# specific model here is a promise about availability, which varies by plan and
+# by org policy: the first live local run died on a `claude-opus-5` that this
+# machine's CLI would not accept, and `doctor` had reported the runner `ok`
+# because it checks for the binary and not for the argv it will be given.
+model = "auto"
+models = ["auto", "claude-opus-5", "claude-sonnet-5"]
 
 # Extra environment variables the runner needs, added to the floor of
 # PATH, HOME, LANG, LC_ALL, TERM, TMPDIR, SHELL, USER, LOGNAME.

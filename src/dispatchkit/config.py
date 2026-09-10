@@ -81,7 +81,15 @@ DEFAULT_RUNNER_ARGV = (
     "--max-autopilot-continues",
     "20",
 )
-DEFAULT_MODELS = ("claude-opus-5", "claude-sonnet-5")
+#: `auto` first, because the first is the default and a default is a promise
+#: made to an account its author cannot see (D6.6). Model availability varies
+#: by plan, by org policy and by month -- the local lane's first live agent run
+#: died on `Model "claude-opus-5" is not available` -- so no specific name can
+#: keep that promise, and `auto` is the CLI's documented way to ask for one
+#: that works. The specific names stay, because this tuple is also the
+#: allowlist a task's own `model` is checked against, and that is a trust
+#: boundary for agent-authored graphs rather than a convenience.
+DEFAULT_MODELS = ("auto", "claude-opus-5", "claude-sonnet-5")
 
 
 def find_config(root: Path = Path()) -> Path:
@@ -337,10 +345,17 @@ def _read_runner(
     argv = _read_argv(runner, path, issues)
     models = _read_strings(runner, "models", DEFAULT_MODELS, path, issues)
     env = _read_env(runner, path, issues)
-    model = runner.get("model", DEFAULT_MODELS[0])
+    # An explicit `models` supplies the default as well as the allowlist
+    # (D6.6): narrowing the list and leaving `model` alone is the obvious way
+    # to say "only these", and taking the global default here would turn that
+    # into `runner.model is not listed by runner.models` — the config being
+    # made to disagree with itself by a key the author never wrote. An empty
+    # list means "a task may not choose" and names nothing, so it cannot.
+    fallback = models[0] if models else DEFAULT_MODELS[0]
+    model = runner.get("model", fallback)
     if not isinstance(model, str) or not model:
         issues.append(GraphIssue("invalid-type", str(path), "`runner.model` must be a string"))
-        model = DEFAULT_MODELS[0]
+        model = fallback
     elif models and model not in models:
         # A default outside its own allowlist is the config disagreeing with
         # itself, and it fails on the first local task rather than here.

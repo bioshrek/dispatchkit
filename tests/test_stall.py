@@ -17,9 +17,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from dispatchkit.config import SchedulerConfig
-from dispatchkit.github import LabelIssue, UnassignAgent
+from dispatchkit.github import LABEL_STUCK, LabelIssue, UnassignAgent
 from dispatchkit.model import Checks, PullRequest
-from dispatchkit.resolve import LABEL_STUCK, Status, resolve, stall_ops
+from dispatchkit.resolve import Status, resolve, stall_ops
 from dispatchkit.tick import execute_tick, plan_tick
 from tests.fake_github import FakeGitHub
 from tests.items import issue, item, items_of, ref, state_of

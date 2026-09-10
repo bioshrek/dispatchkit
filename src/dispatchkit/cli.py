@@ -345,9 +345,17 @@ def _watch(args: argparse.Namespace) -> int:
             while True:
                 number += 1
                 code, plan = _pass(args, config, api, local=local, since=previous, number=number)
-                if code != EXIT_OK:
-                    return code
-                previous = plan
+                if code == EXIT_OK:
+                    previous = plan
+                else:
+                    # A failed pass is a wait, not an exit (D6.6). The
+                    # scheduler is meant to be left running, and the failures
+                    # it meets overnight are transient by nature; there is no
+                    # stored state to be left inconsistent, so the next pass
+                    # re-derives everything. `previous` is deliberately not
+                    # advanced: the next report must be a full one rather than
+                    # a diff against a pass that did not finish.
+                    previous = None
                 saved = watcher.wait(args.interval)
                 if saved:
                     for line in _saved(saved, config):
@@ -469,8 +477,21 @@ def _pass(
         report.append(f"dry run: {len(plan.operations)} operation(s); re-run with --push to apply")
         return _emit(report, number), plan
 
-    result = execute_tick(plan, api)
-    report += _local(local, plan, now=now, first=since is None)
+    try:
+        result = execute_tick(plan, api)
+    except RuntimeError as exc:
+        # The adapter's contract, held up (D6.6). Everything `gh` does to an
+        # unattended process arrives here — a rate limit, a 502, an expiring
+        # token, and the unknown label that found this — and the plan is
+        # re-derived from the issues every pass, so the operations already sent
+        # are all a half-finished pass leaves behind.
+        _emit(report, number)
+        sys.stdout.flush()
+        print(f"dispatchkit: pass failed: {exc}", file=sys.stderr)
+        return EXIT_UNREADABLE, plan
+    report += _local(
+        local, plan, now=now, first=since is None, finish=getattr(args, "once", False)
+    )
     if report or _acted(result):
         report.append(_completion(result))
         report += [f"NOTE {notice}" for notice in result.refused]
@@ -478,13 +499,25 @@ def _pass(
 
 
 def _local(
-    local: LocalDispatcher | None, plan: TickPlan, *, now: datetime, first: bool
+    local: LocalDispatcher | None,
+    plan: TickPlan,
+    *,
+    now: datetime,
+    first: bool,
+    finish: bool = False,
 ) -> list[str]:
     """Give the dispatcher its turn, and say what it did.
 
     The dispatcher reads the same items the pass just resolved rather than
     re-fetching: they were read a moment ago, and a second read would be a
     second answer to a question that already has one.
+
+    `finish` is `--once`, and it is what makes that mode work at all (D6.6).
+    Returning while the run is in flight is right in the loop and only in the
+    loop: there, the next pass is what a long task must not hold up. With no
+    next pass the process exits, the daemon thread dies with it, and the task
+    is left claimed, unstarted and one attempt poorer — while the report says
+    it was dispatched.
     """
     if local is None:
         return []
@@ -497,8 +530,16 @@ def _local(
     if finished is not None:
         lines.append(_finished(finished))
     started = local.serve(plan.items, now=now, marked=plan.marked_local)
-    if started is not None:
+    if started is None:
+        return lines
+    if not finish:
         lines.append(f"local: started {started.ref}")
+        return lines
+
+    lines.append(f"local: running {started.ref}")
+    local.wait()
+    ran = local.take_finished()
+    lines.append(_finished(ran) if ran is not None else f"local: {started.ref} did not report")
     return lines
 
 

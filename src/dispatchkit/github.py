@@ -34,15 +34,38 @@ LABEL_HOLD = "dispatch:hold"
 #: mark, not an assignment, so the mark is the event `attempts` derives from.
 LABEL_LOCAL_CLAIM = "dispatch:local"
 
-#: Labels the pipeline filters on, and the only thing `init` has to create on
-#: the repository itself. `dispatchkit` is the important one: the state query
-#: selects by it, so a repository without it returns nothing and a pass is a
-#: silent no-op. The lane and verify labels mirror the machine block, which is
-#: what makes a saved issue-list URL a live view of a plan.
+#: The retry budget's terminal state (D7). Moved down here from `resolve` in
+#: D6.6: every other `dispatch:` label already lived in this module, and having
+#: one of them somewhere else is how all three came to be left out of
+#: `REQUIRED_LABELS`. `resolve` imports it from here now.
+LABEL_STUCK = "dispatch:stuck"
+
+#: Labels `init` has to create on the repository itself, in two families.
+#:
+#: The ones the pipeline **filters on**: `dispatchkit` is the important one,
+#: because the state query selects by it, so a repository without it returns
+#: nothing and a pass is a silent no-op. The lane and verify labels mirror the
+#: machine block, which is what makes a saved issue-list URL a live view of a
+#: plan.
+#:
+#: And the ones the pipeline **writes** — added in D6.6, after the local lane's
+#: first live run died marking an issue with a `dispatch:local` that no
+#: repository had. A label the scheduler applies is as much a precondition as a
+#: label it reads: `gh issue edit --add-label` fails on a name that does not
+#: exist, so the miss is not a degraded pass, it is no pass at all. The cloud
+#: lane never found this because a cloud dispatch is an assignment rather than
+#: a label, and no live task had yet exhausted its retry budget.
+#:
+#: `dispatch:hold` is created even though only a human writes it: a label the
+#: repository does not offer cannot be picked from the issue UI, and picking it
+#: is the whole of that feature.
 REQUIRED_LABELS: tuple[str, ...] = (
     DISPATCHKIT_LABEL,
     *(f"lane:{lane.value}" for lane in Lane),
     *(f"verify:{verify.value}" for verify in Verify),
+    LABEL_LOCAL_CLAIM,
+    LABEL_STUCK,
+    LABEL_HOLD,
 )
 
 

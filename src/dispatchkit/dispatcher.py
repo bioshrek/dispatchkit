@@ -39,21 +39,40 @@ from dispatchkit.workstation import Workstation
 
 
 class Running(Protocol):
-    """The only thing the dispatcher asks of whatever it started."""
+    """The two things the dispatcher asks of whatever it started."""
 
     def is_alive(self) -> bool: ...
 
+    def wait(self) -> None:
+        """Block until it is finished. Only `--once` calls this (D6.6)."""
 
-def _thread(target: Callable[[], None]) -> threading.Thread:
-    """A daemon, so Ctrl-C stops `watch` now rather than in two hours.
 
-    The run is lost when that happens. The mark stays on, and the next
-    startup sweep releases it — which is precisely what recovery is for, and
-    why this does not need to be graceful.
+class _Thread:
+    """A daemon thread, plus the one way to wait for it.
+
+    Daemon so that Ctrl-C stops `watch` now rather than in two hours. The run
+    is lost when that happens: the mark stays on, and the next startup sweep
+    releases it, which is precisely what recovery is for and why an interrupt
+    does not need to be graceful.
+
+    But finishing normally is not an interrupt, and `--once` was relying on the
+    daemon flag to end a run it had just started and reported as dispatched
+    (D6.6). `wait` is what that mode needed and did not have.
     """
-    thread = threading.Thread(target=target, name="dispatchkit-local", daemon=True)
-    thread.start()
-    return thread
+
+    def __init__(self, target: Callable[[], None]) -> None:
+        self.thread = threading.Thread(target=target, name="dispatchkit-local", daemon=True)
+        self.thread.start()
+
+    def is_alive(self) -> bool:
+        return self.thread.is_alive()
+
+    def wait(self) -> None:
+        self.thread.join()
+
+
+def _thread(target: Callable[[], None]) -> Running:
+    return _Thread(target)
 
 
 def served_lanes(dispatcher: object | None) -> frozenset[Lane]:
@@ -84,6 +103,16 @@ class LocalDispatcher:
     @property
     def busy(self) -> bool:
         return self._running is not None and self._running.is_alive()
+
+    def wait(self) -> None:
+        """Block until the run in flight is done. A no-op when there is none.
+
+        Called only where there is no next pass for a running task to hold up,
+        which is exactly `--once`. In the loop this is never called, because
+        not waiting is the whole of D6.5.
+        """
+        if self._running is not None:
+            self._running.wait()
 
     def take_finished(self) -> LocalRun | None:
         """The last run, once. Reported by the next pass and then forgotten,

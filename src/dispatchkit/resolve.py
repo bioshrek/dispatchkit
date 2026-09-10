@@ -38,6 +38,7 @@ from dispatchkit.github import (
     DISPATCHKIT_LABEL,
     LABEL_HOLD,
     LABEL_LOCAL_CLAIM,
+    LABEL_STUCK,
     LabelIssue,
     MarkReady,
     MergePr,
@@ -54,7 +55,6 @@ from dispatchkit.model import Checks, Lane, PullRequest, TaskId, TaskRef, Verify
 #: human. Confirmed live: issue #3 carried `copilot-swe-agent` and `bioshrek`.
 AGENT_LOGINS = frozenset({"copilot-swe-agent", "Copilot"})
 
-LABEL_STUCK = "dispatch:stuck"
 LABEL_SPEND_APPROVED = "spend:approved"
 
 _WILDCARD = "*?["

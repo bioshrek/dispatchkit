@@ -48,6 +48,9 @@ def here(target: Callable[[], None]) -> Running:
         def is_alive(self) -> bool:
             return False
 
+        def wait(self) -> None:
+            """Already finished before it was ever asked."""
+
     return Immediate()
 
 
@@ -59,6 +62,12 @@ class Never:
 
     def is_alive(self) -> bool:
         return True
+
+    def wait(self) -> None:
+        # Nothing in the loop may wait, and this double exists only for the
+        # loop's busy case. Blocking for ever is the honest simulation and a
+        # useless failure, so say which rule was broken instead.
+        raise AssertionError("the loop waited for a running local task")
 
 
 def dispatcher(
@@ -176,13 +185,28 @@ class TestTheThread:
         # So Ctrl-C stops `watch` immediately rather than waiting hours for an
         # agent. The run is lost, the mark stays on, and the next startup
         # sweep releases it -- which is what recovery is for.
-        from dispatchkit.dispatcher import _thread
+        #
+        # D6.6 wrapped the thread rather than changing it: the daemon flag is
+        # still what makes an interrupt immediate, and is still asserted here.
+        from dispatchkit.dispatcher import _Thread, _thread
 
         started = threading.Event()
-        thread = _thread(started.set)
-        assert isinstance(thread, threading.Thread)
-        assert thread.daemon
+        running = _thread(started.set)
+        assert isinstance(running, _Thread)
+        assert running.thread.daemon
         started.wait(timeout=5)
+
+    def test_the_real_spawn_can_be_waited_for(self) -> None:
+        # What `--once` needed and did not have: finishing normally is not an
+        # interrupt, so the run it just started has to be seen through.
+        from dispatchkit.dispatcher import _thread
+
+        done = threading.Event()
+        running = _thread(done.set)
+        running.wait()
+
+        assert done.is_set()
+        assert not running.is_alive()
 
 
 def _ref(api: FakeGitHub) -> TaskRef:
