@@ -28,6 +28,7 @@ from typing import Any
 
 from dispatchkit.config import DEFAULT_LOCATIONS, GRAPH_SUFFIX, SchedulerConfig
 from dispatchkit.github import missing_labels
+from dispatchkit.version import __version__, at_least
 
 #: Scopes a human must grant. Just the one since D14: issues, labels, pull
 #: requests and the assignment mutation are all `repo`, and there is no board
@@ -96,7 +97,11 @@ def check_remote(diagnostics: Diagnostics) -> tuple[Check, ...]:
 
 def check_local(facts: LocalFacts) -> tuple[Check, ...]:
     """The checks the working tree can answer on its own, offline."""
-    checks = [_config(facts), _plans(facts)]
+    checks = [
+        check_version(facts.config.requires_version if facts.config else None),
+        _config(facts),
+        _plans(facts),
+    ]
     if facts.config is not None:
         checks.append(check_fence(facts.config, facts.config_in_repo or facts.config_path))
     return tuple(checks)
@@ -287,6 +292,38 @@ def _labels(labels: Sequence[str]) -> Check:
             "dispatchkit init --repo owner/name",
         )
     return Check("labels", True, "every label the pipeline filters on exists")
+
+
+def check_version(floor: str | None) -> Check:
+    """What is running, and whether the repository agrees it is new enough.
+
+    Offline and credential-free on purpose: it is most useful to an adopter
+    who has not authenticated yet, and an operator asking what they are
+    running is the question every other answer depends on.
+
+    An unreadable pin fails. `at_least` returns `None` rather than guessing,
+    and passing silently here would be the reassuring wrong answer -- a pin
+    nobody can parse is a pin nobody is protected by.
+    """
+    if floor is None:
+        return Check("version", True, f"dispatchkit {__version__}")
+
+    satisfied = at_least(__version__, floor)
+    if satisfied:
+        return Check("version", True, f"dispatchkit {__version__}, and this repo wants >= {floor}")
+    detail = (
+        f"this repo wants dispatchkit >= {floor} and this is {__version__}"
+        if satisfied is False
+        else f"this repo's `requires_version` is `{floor}`, which is not a version "
+        f"(running {__version__})"
+    )
+    return Check(
+        "version",
+        False,
+        detail,
+        "uv tool install --force git+https://github.com/bioshrek/dispatchkit@v"
+        f"{floor}, or correct `requires_version` if the pin is the thing that is wrong",
+    )
 
 
 def _config(facts: LocalFacts) -> Check:

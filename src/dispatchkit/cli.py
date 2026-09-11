@@ -68,6 +68,7 @@ from dispatchkit.validate import (
     validate_acceptance,
     validate_graph,
 )
+from dispatchkit.version import __version__
 from dispatchkit.watcher import GraphWatcher, Save
 from dispatchkit.workstation import work_root
 from dispatchkit.workstation_cli import CliWorkstation
@@ -135,6 +136,9 @@ def build_parser() -> argparse.ArgumentParser:
     which is how the Makefile's two dead invocations were finally caught.
     """
     parser = argparse.ArgumentParser(prog="dispatchkit", description=__doc__)
+    # Before the required subcommand, and deliberately: an operator asking
+    # what they are running has, by definition, nothing else to go on yet.
+    parser.add_argument("--version", action="version", version=f"dispatchkit {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     validate = sub.add_parser("validate", help="check a task graph file")

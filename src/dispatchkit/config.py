@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 
 from dispatchkit.errors import GraphError, GraphIssue
 from dispatchkit.model import Lane
+from dispatchkit.version import parse_version
 
 DEFAULT_CAPS: Mapping[Lane, int] = {Lane.CLOUD: 3, Lane.LOCAL: 1}
 
@@ -38,7 +39,7 @@ DEFAULT_LOCATIONS = (Path(".github/dispatchkit.toml"), Path("dispatchkit.toml"))
 DEFAULT_PLANS = Path("docs/plans")
 GRAPH_SUFFIX = ".tasks.toml"
 
-TOP_LEVEL_KEYS = frozenset({"caps", "retry", "paths", "fence", "runner"})
+TOP_LEVEL_KEYS = frozenset({"caps", "retry", "paths", "fence", "runner", "requires_version"})
 RETRY_KEYS = frozenset({"budget"})
 PATHS_KEYS = frozenset({"plans"})
 FENCE_KEYS = frozenset({"paths"})
@@ -188,6 +189,13 @@ class SchedulerConfig:
         default_factory=lambda: default_fence(DEFAULT_LOCATIONS[0], DEFAULT_PLANS)
     )
     runner: RunnerConfig = field(default_factory=RunnerConfig)
+    #: The oldest dispatchkit that may operate on this repository (D17).
+    #: `None` -- the default -- means the adopter has not asked, which is a
+    #: legitimate answer until the first time a version skew bites them. The
+    #: reason to set it is that the machine block is a wire format: `block.py`
+    #: refuses keys it does not know, so an operator on an older release meets
+    #: a parse error rather than a sentence about versions.
+    requires_version: str | None = None
 
     def cap(self, lane: Lane) -> int:
         """A lane with no configured cap admits nothing — fail closed."""
@@ -228,12 +236,46 @@ def load_config(path: Path | None = None) -> SchedulerConfig:
     plans = _read_plans(document, path, issues)
     fence = _read_fence(document, path, plans, issues)
     runner = _read_runner(document, path, issues)
+    requires = _read_requires_version(document, path, issues)
 
     if issues:
         raise GraphError(issues)
     return SchedulerConfig(
-        caps=caps, retry_budget=budget, plans=plans, fence=fence, runner=runner
+        caps=caps,
+        retry_budget=budget,
+        plans=plans,
+        fence=fence,
+        runner=runner,
+        requires_version=requires,
     )
+
+
+def _read_requires_version(
+    document: Mapping[str, object], path: Path, issues: list[GraphIssue]
+) -> str | None:
+    value = document.get("requires_version")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        # `requires_version = 0.3` is TOML for the float 0.3, which is both a
+        # plausible typo and a different thing from the string "0.3".
+        issues.append(
+            GraphIssue(
+                "invalid-type", str(path), "`requires_version` must be a string like \"0.3\""
+            )
+        )
+        return None
+    if parse_version(value) is None:
+        issues.append(
+            GraphIssue(
+                "invalid-version",
+                str(path),
+                f"`requires_version` is `{value}`, which is not a version. "
+                "Three integers at most, like `0.3` or `0.3.1`.",
+            )
+        )
+        return None
+    return value
 
 
 def _read_caps(

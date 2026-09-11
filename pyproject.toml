@@ -1,6 +1,8 @@
 [project]
 name = "dispatchkit"
-version = "0.2.0"
+# Dynamic, read from `src/dispatchkit/version.py`, so the wheel, `--version`,
+# the adopter's config pin and the skill stamp cannot disagree (D17).
+dynamic = ["version"]
 description = "Dispatch a dependency-ordered task graph to GitHub coding agents, idempotently"
 requires-python = ">=3.12"
 readme = "README.md"
@@ -22,6 +24,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/dispatchkit/version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dispatchkit"]
@@ -84,4 +89,5 @@ layers = [
     "dispatchkit.config",
     "dispatchkit.model",
     "dispatchkit.errors",
+    "dispatchkit.version",
 ]

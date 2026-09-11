@@ -39,6 +39,7 @@ from typing import Protocol
 
 from dispatchkit.doctor import LocalFacts
 from dispatchkit.github import Notice, missing_labels
+from dispatchkit.version import __version__
 
 
 class LabelApi(Protocol):
@@ -102,7 +103,7 @@ def plan_init(labels: Sequence[str], facts: LocalFacts) -> InitPlan:
     if not facts.plans_exists:
         operations.append(MakeDirectory(facts.plans))
     if not facts.config_exists:
-        operations.append(WriteFile(facts.config_path, CONFIG_TEMPLATE))
+        operations.append(WriteFile(facts.config_path, config_template()))
 
     return InitPlan(tuple(operations), tuple(notices))
 
@@ -185,6 +186,32 @@ def _subject(operation: InitOperation) -> str:
 
 
 #: This repository's own config, and what `init` writes. Pinned by a test.
+def config_template() -> str:
+    """The config file an adopter is handed, pinned to the tool writing it.
+
+    The pin goes in at bootstrap rather than being left for later, and it is
+    the *running* version rather than a floor somebody has to choose. That is
+    the reading with no friction in it: a newer dispatchkit always satisfies
+    an older floor, so this never obstructs an upgrade. It goes red only on a
+    downgrade below the version that wrote this repository's issue bodies,
+    which is the one case where `block.py` would otherwise refuse a body that
+    looks fine to a human.
+
+    Top-level keys have to precede the first table, which is also where a
+    reader should meet it.
+    """
+    return VERSION_TEMPLATE.format(version=__version__) + CONFIG_TEMPLATE
+
+
+VERSION_TEMPLATE = """# The oldest `dispatchkit` that may operate on this repository. Written at
+# `init` time as the version that bootstrapped it: the machine block in an
+# issue body is a wire format, and an older release meets a parse error rather
+# than a sentence. Raise it when you start relying on something newer; a newer
+# tool always satisfies it, so it never gets in the way of an upgrade.
+requires_version = "{version}"
+
+"""
+
 CONFIG_TEMPLATE = r"""# Scheduler settings for `dispatchkit`. Every key here has a default, so this
 # file is optional — it exists to make the defaults visible and reviewable.
 #
