@@ -1,7 +1,7 @@
 # Authoring a plan
 
 For an agent or a person turning a piece of work into a `dispatchkit` plan. The key reference is
-[schema.md](schema.md); this page is the judgement that reference cannot encode.
+what `dispatchkit schema` prints; this page is the judgement that reference cannot encode.
 
 Your output is one `*.tasks.toml` file plus one Markdown brief per task. It must pass:
 

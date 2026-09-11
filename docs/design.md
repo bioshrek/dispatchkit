@@ -3288,7 +3288,7 @@ afternoon. The deleted `overhead_minutes = 10` guess was not merely unknowable, 
 it was wrong by an order of magnitude in one lane and by a factor of five in the other, in
 opposite directions.
 
-### D17 design — getting the tool to an adopter
+### D17 design — getting the tool to an adopter (built; the record follows)
 
 D1--D16 all made dispatchkit do more, and all of them were proven inside two repositories that had
 a checkout of the source sitting beside them. An adopter has neither the checkout nor the context,
@@ -3391,6 +3391,110 @@ state, does not travel with a clone, cannot reach the cloud lane, and -- since t
 local executor are the same CLI on the same machine reading the same config -- would disable the
 skill for both. The boundary that would actually hold is a distribution that omits `gh_cli`
 entirely, which the layering already permits and which is not this deliverable.
+
+### D17 — getting the tool to an adopter
+
+Built as designed, with one thing the design did not see and two smaller corrections. Nothing here
+was found by a live plan, because there is no live adopter yet; it was found by building a wheel
+and installing it into an empty environment, which is the cheapest possible imitation of being
+somebody else.
+
+**One version, or the whole deliverable argues with itself.** `pyproject.toml` held `version =
+"0.2.0"` and nothing else did. A pin, a stamp and a `--version` flag that disagree with the wheel
+are worse than having none of them, because each becomes evidence for a different answer. The
+version moved into `src/dispatchkit/version.py`, `pyproject.toml` declares it dynamic and points
+hatchling at that file, and a test asserts exactly that arrangement -- the drift this deliverable
+exists to prevent would otherwise be sitting in the deliverable.
+
+`parse_version` is three integers and deliberately not PEP 440. Supporting `1.0.0rc1` or `~=`
+ranges means either a dependency, of which there are none, or a hand-rolled parser for a
+specification with real corner cases, in order to express something no adopter has asked for. It
+returns `None` on nonsense rather than raising, because the interesting caller is an adopter's
+config file, and a bad pin has to be reportable beside every other config problem in the single
+pass this codebase reports problems in. `at_least` returns `None` for the same reason and refuses
+to guess: assuming "satisfied" hides a broken pin, assuming "unsatisfied" refuses a working
+install over a typo.
+
+**The pin is written at bootstrap, as the version doing the bootstrapping.** Not a floor somebody
+has to choose, which is a decision an adopter has no information to make on day one. A newer tool
+always satisfies an older floor, so the pin never obstructs an upgrade; it goes red only on a
+downgrade below the version that wrote this repository's issue bodies, which is the single case
+where `block.py`'s closed grammar refuses a body that looks fine to a human. Friction only where
+there is a real hazard.
+
+**The thing the design missed: an adopter cannot read `docs/`.** The note said "`docs/schema.md`
+remains the sole authority; the skill points at it", which is incoherent the moment you write it
+down -- the adopter installs a wheel and has no `docs/`. Both `schema.md` and `authoring.md`
+therefore moved into `src/dispatchkit/_docs/`, and the move is the honest statement: they are
+product, not notes about the product. `dispatchkit schema` prints the reference, which also turns
+out to be a better answer than a link ever was, because what it prints is always whichever version
+is installed.
+
+That is what lets the rule survive intact. **Judgement travels; grammar defers.** The authoring
+guide goes inline into the skill, because an agent reads a skill as one document and a pointer to
+prose it cannot fetch is a pointer to nothing. The schema does not, and the skill says
+`dispatchkit schema` instead -- so an installed skill cannot go stale about a format it never
+claims to know. A test asserts the schema's reference tables are *absent* from the skill, which is
+an unusual thing to test for and the correct one.
+
+The same reasoning caught a defect a grep found rather than a person: the authoring guide opened
+with `[schema.md](schema.md)`, a relative link that resolved perfectly in this repository and
+points at nothing in anybody else's. A test now refuses any relative markdown link in the emitted
+skill. The class matters more than the instance -- a link that works here and nowhere else is
+worse than no link, because an agent will either follow it and find nothing or quietly invent what
+it would have said.
+
+**The privilege split, written down rather than left as a habit.** The planning agent may run
+`validate`: it takes no `--repo`, opens no socket, its import closure is `errors` and `model`, and
+it is no more dangerous than the `ruff` every executor already runs inside its acceptance command.
+It must never run `apply`, which mutates the only state store this system has. The line is pure
+against mutating -- the one the codebase is built on everywhere else -- and not, as it first
+appears, whether the agent knows the tool exists.
+
+Forbidding the agent to validate would not move the *decision* to the human; the decision is
+whether the decomposition is right, and that was always theirs. It would move the *typos* to them,
+one round trip per lint, and D15 has already measured what a human in a loop costs. The skill also
+says what to do instead of applying -- hand the file to a human -- because a prohibition with no
+alternative reads as an obstacle to route around.
+
+**`init` writes the skill, and still converges.** The first version wrote it unconditionally,
+which broke the convergence standard every mutating thing here is held to: apply, re-read, re-plan,
+and the second plan must be empty. It now writes when the skill is absent or its stamp differs,
+which required `LocalFacts` to carry both `skill_exists` and `skill_stamp` -- `None` for the stamp
+covers both "no file" and "a file that is not ours", and those want opposite treatment. An
+existing file with no stamp is left alone and `doctor` says nothing about it. It is somebody
+else's.
+
+`doctor` fails in **both** directions. Behind is the expected case. Ahead is the more dangerous one
+and the one a stamp alone would miss: it means a downgrade, or two people running different
+versions against one repository, and the skill may be teaching a shape this binary cannot parse.
+
+**Installation is a tool, never a dependency**, and this is the decision the other three hang from.
+Nothing in an adopter's tree imports the package. Putting it in their manifest would oblige them to
+be a Python project at all -- the sandbox being Python is incidental -- add something to a lockfile
+that nothing imports, and install the scheduler into the same environment the executor runs
+acceptance commands in, where an agent's own dependency work can shadow or break the thing
+supervising it. `uv tool install git+...@v0.3.0` avoids all three, and zero runtime dependencies
+makes the isolation free rather than a compromise.
+
+**No index release, deliberately.** A tag installs today with no release workflow, no publishing
+credentials, no name to claim and no supply chain to defend. One adopter does not need an index to
+exist, and the question is better answered when there is a second one to answer it for.
+
+**How it was verified, and why that mattered.** Everything above passes offline against the source
+tree, and every bit of that proves only that the code agrees with itself -- the lesson D16 paid
+for and D15 paid for again. The failure mode this deliverable is uniquely exposed to is the one
+that appears at *install* time: a file that is present in the checkout and absent from the wheel.
+So the wheel was built and installed into an empty environment with no source tree reachable, and
+the adopter's whole path was walked: `--version`, `schema`, `skill --print`, `init` into a bare
+`git init`, `doctor` green, then a hand-edited stamp and an impossible pin to confirm both go red
+with a remedy that repairs them. The wheel does carry `_docs/`, which is hatchling's default for
+files under a packaged directory and therefore a thing worth checking rather than assuming.
+
+What is still unproven is the part no amount of local verification can reach: an agent in a
+*different* repository, given only the installed skill, producing a graph a human accepts. D10
+proved the prose works; D17 proves the prose arrives. That it works on arrival is the first thing
+an adopter will find out.
 
 ## First real plan
 

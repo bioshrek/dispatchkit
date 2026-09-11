@@ -126,3 +126,23 @@ class TestTheStamp:
 class TestWhereItGoes:
     def test_the_default_path_is_conventional(self) -> None:
         assert DEFAULT_SKILL_PATH == Path(".github/skills/dispatchkit-planning/SKILL.md")
+
+
+class TestNothingInItPointsAtThisRepository:
+    """A link that resolves here and nowhere else is worse than no link.
+
+    The skill is read inside somebody else's tree, by an agent that will
+    either follow the link and find nothing or, worse, quietly invent what it
+    would have said. Every reference has to be a command it can run.
+    """
+
+    def test_it_contains_no_relative_markdown_links(self) -> None:
+        import re
+
+        links = re.findall(r"\[[^\]]*\]\((?!https?://|#)([^)]+)\)", skill_text())
+
+        assert links == []
+
+    def test_the_schema_is_reached_by_command(self) -> None:
+        """Which is also the version-proof way to reach it."""
+        assert "dispatchkit schema" in skill_text()

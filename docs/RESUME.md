@@ -17,24 +17,19 @@ The one to carry forward: **the overhead figure is only comparable within a lane
 cloud agent commits within seconds of being assigned and a local run commits when it finishes, so
 dispatch-to-first-commit measures opposite things in the two lanes.
 
-**D17 is the one thing designed and unbuilt** — getting the tool to an adopter. Not more
-capability: everything above was proven inside two repositories that had a checkout of the source
-beside them, and an adopter has neither. Four faces of one problem, in build order:
+**D17 is done** — getting the tool to an adopter, and the first deliverable that made dispatchkit
+*reachable* rather than more capable. `--version` (there was none), a `requires_version` pin
+`init` writes and `doctor` enforces, `dispatchkit schema`, and `dispatchkit skill --print` /
+`--install` with a stamp `doctor` reads in both directions. `schema.md` and `authoring.md` now
+live in `src/dispatchkit/_docs/` rather than `docs/`, because an adopter installs a wheel and not
+a checkout — they are product. Verified from a built wheel in a clean environment with no source
+tree present.
 
-1. `dispatchkit --version`, reported by `doctor`. It does not exist, so version skew is currently
-   undiagnosable — the symptom is `block.py` refusing a body that looks fine to a human.
-2. A minimum-version key in the adopter's config, so `doctor` goes red on skew rather than the
-   parser failing. Same shape as D16's `plan/*` check: fails closed, at a human.
-3. `dispatchkit skill` (`--print` / `--install`, stamped, called by `init`). Carries decomposition
-   judgement, never a copy of the schema; `docs/schema.md` stays the authority. The planning agent
-   may run `validate --strict` and iterate — pure, no `--repo`, no socket, closure is
-   `{errors, model}` — and must never run `apply`.
-4. Install is `uv tool install git+https://github.com/bioshrek/dispatchkit@vX.Y.Z`. A tool on PATH,
-   never an adopter dependency. **Publishing to an index is explicitly out of scope** — a tag
-   installs today with no infrastructure, and one adopter does not need an index.
+Install is `uv tool install git+https://github.com/bioshrek/dispatchkit@v0.3.0`. **Publishing to
+an index is deliberately out of scope** — a tag installs today with no release workflow, no
+credentials and no name to claim. Revisit when there is a second adopter.
 
-See the D17 design note in `docs/design.md`. The other open question belongs to whoever authors
-the next graph: both plans promised more width than they achieved, and `mincount` promised 2 while
+The open question belongs to whoever authors the next graph: both plans promised more width than they achieved, and `mincount` promised 2 while
 running under `caps.local = 1`.
 
 **D16 is proven live.** The `mincount` plan ran end to end on `plan/mincount` in the sandbox —
@@ -87,11 +82,11 @@ against the patterns, and `init` will not exit 0 over a failing local check. See
 | D6.2–D6.5 | The `Workstation` port, the executor, recovery, `watch --local` | done |
 | D6.6 | First live trial of the local lane | done and proven live; found 7 defects, 5 invisible offline |
 | D9.2 | Scope drift advises; the repo fence keeps the merge authority | done |
-| D10 | Plan-authoring contract: `docs/schema.md`, body lints, `docs/authoring.md` | done; an agent given only the two docs produced a `--strict`-clean plan |
+| D10 | Plan-authoring contract: the schema page, body lints, the authoring guide | done; an agent given only the two docs produced a `--strict`-clean plan (both now ship inside the package — D17) |
 | D11 | `doctor` closes over the fence and a missing `gh`; `init` gated on the local checks | done; the fence override discarded every self-protection |
 | D16 | The plan branch: a plan integrates on its own base, merged by a human | done; proven live by the sandbox's `mincount` plan |
 | D15 | Plan retrospective: overhead and work from the timeline | done; proven live against both finished sandbox plans |
-| D17 | Version stamp, config pin, `dispatchkit skill`, install by git tag | designed, unbuilt |
+| D17 | Version stamp, config pin, `dispatchkit schema`/`skill`, install by git tag | done; proven from a wheel in a clean environment |
 
 This repo was extracted from `~/Documents/py_repos/art_strategy` (where it lived as
 `tools/dispatch/`) on 2026-09-08. `art_strategy` is intended to become adopter #1.

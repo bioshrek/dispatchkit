@@ -45,8 +45,34 @@ dispatchkit watch    --repo o/n                       # the scheduler; Ctrl-C st
 
 ## Getting started
 
-Setup is `gh auth login` and nothing else: `repo` scope, no personal access token pasted into a
-secrets page, no board to provision. `init` is idempotent and safe to re-run; it never overwrites
+Install it as a tool, not as a dependency:
+
+```sh
+uv tool install git+https://github.com/bioshrek/dispatchkit@v0.3.0    # or pipx install
+cd <your repo>
+gh auth login          # repo scope
+dispatchkit init       # labels, config, plans directory, planning skill
+dispatchkit doctor     # what is still missing, and the command for each
+```
+
+**Nothing in your repository depends on dispatchkit.** It operates on a repository from the
+outside, the way `gh` and `ruff` do, and nothing in your tree imports it — so it does not belong
+in your manifest. Putting it there would oblige you to be a Python project at all, add something
+to your lockfile that nothing imports, and install the scheduler into the same environment your
+coding agents run their tests in, where their own dependency work can break the thing supervising
+them. An isolated tool install avoids all three, and dispatchkit has no runtime dependencies to
+isolate it from.
+
+Pin a tag rather than a branch. The machine block in an issue body is a wire format, so `init`
+writes `requires_version` into your config as the version that bootstrapped the repository, and
+`doctor` goes red if somebody later runs an older release against issues a newer one wrote. A
+newer tool always satisfies an older floor, so the pin never obstructs an upgrade.
+
+There is no package index release yet, and that is deliberate: a tag installs today with no
+release workflow, no publishing credentials and no name to claim.
+
+Beyond the install, setup is `gh auth login` and nothing else: `repo` scope, no personal access
+token pasted into a secrets page, no board to provision. `init` is idempotent and safe to re-run; it never overwrites
 a file that already exists. `doctor` reports what is still missing and, for each failure, the
 command that fixes it — with no `--repo` it checks the working tree alone and never opens a
 socket.
@@ -161,19 +187,23 @@ third-party code.
 
 ## Status
 
-Early, and honest about it. Applying a graph, dispatching to the cloud agent, the retry budget and
-`verify: auto` auto-merge are built and have run live against a real repository. The Project board
-is retired, so `repo` scope is all any command needs (D14), and the scheduler is now `watch` on
-your own machine rather than a workflow holding a token (D13). Intervention landed with D13.1: a
-task closed as not planned no longer unblocks its dependents, and `dispatch:hold` says "not now"
-without spending a retry. Being built next: the graph watcher that re-plans on save, and the local
-lane executor (D6) — until D6 lands a `lane = "local"` task
-is deferred with `no-executor` and reserves nothing, rather than being marked for a listener that
-is not there.
-[docs/schema.md](docs/schema.md) is the reference for what may appear in a plan, and
-[docs/authoring.md](docs/authoring.md) is the guide for writing one — including what the warnings
-are actually telling you to change. [docs/design.md](docs/design.md) carries the reasoning and a
-decision record per deliverable; [docs/RESUME.md](docs/RESUME.md) has the next actions.
+Early, and honest about it. Both lanes have run live against a real repository, end to end:
+plans have been applied, dispatched, executed, merged and closed without a human in the loop
+except where one was asked for. The Project board is retired, so `repo` scope is all any command
+needs (D14), and the scheduler is `watch` on your own machine rather than a workflow holding a
+token (D13). The local lane executes on your machine in a worktree (D6); a plan integrates on its
+own `plan/*` branch, and only a human merges that branch into trunk (D16).
+
+What is honest about "early" is smaller and more specific: the two plans run so far were both
+*slower* than doing their tasks one after another. `dispatchkit retro <graph>` measures that from
+the issue timeline (D15) — overhead, work, and the width a plan actually achieved against the
+width it promised — and it is worth running on your first plan before trusting the arithmetic.
+
+`dispatchkit schema` is the reference for what may appear in a plan, and `dispatchkit skill
+--print` is the guide to writing one, including what each warning is telling you to change.
+`dispatchkit skill --install` puts that guide where a coding agent will find it.
+[docs/design.md](docs/design.md) carries the reasoning and a decision record per deliverable;
+[docs/RESUME.md](docs/RESUME.md) has the next actions.
 
 ## Development
 
