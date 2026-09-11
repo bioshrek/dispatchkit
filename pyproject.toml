@@ -89,5 +89,6 @@ layers = [
     "dispatchkit.config",
     "dispatchkit.model",
     "dispatchkit.errors",
+    "dispatchkit.skill",
     "dispatchkit.version",
 ]

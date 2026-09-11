@@ -70,6 +70,18 @@ class LocalFacts:
     #: is compared against. Differs from `config_path` whenever `--root` points
     #: somewhere other than the working directory.
     config_in_repo: Path | None = None
+    #: The version stamped into an installed planning skill, or `None` when
+    #: there is no skill or it carries no stamp (D17). An installed skill is a
+    #: copy, and the only thing that makes a copy tolerable is being able to
+    #: see when it has fallen behind the tool it defers to.
+    skill_stamp: str | None = None
+    #: Whether a planning skill is present at all, which `skill_stamp` alone
+    #: cannot say: `None` there covers both "no file" and "a file that is not
+    #: ours". `init` may write over the first and must not touch the second.
+    skill_exists: bool = False
+    #: The repository root the paths above were resolved against, which is
+    #: what `--root` moves and what `init` writes the skill relative to.
+    root: Path = Path(".")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +111,7 @@ def check_local(facts: LocalFacts) -> tuple[Check, ...]:
     """The checks the working tree can answer on its own, offline."""
     checks = [
         check_version(facts.config.requires_version if facts.config else None),
+        check_skill(facts.skill_stamp),
         _config(facts),
         _plans(facts),
     ]
@@ -324,6 +337,33 @@ def check_version(floor: str | None) -> Check:
         "uv tool install --force git+https://github.com/bioshrek/dispatchkit@v"
         f"{floor}, or correct `requires_version` if the pin is the thing that is wrong",
     )
+
+
+def check_skill(stamp: str | None) -> Check:
+    """Is the installed planning skill the one this tool would write?
+
+    Silent when there is nothing to say: no skill is a legitimate state --
+    installing it is opt-in, and a repository planned somewhere else never
+    needs one -- and so is a skill with no stamp, which is somebody's own.
+
+    Both directions fail. Behind is the expected one. *Ahead* is the more
+    dangerous and the one a stamp alone would miss: it means a downgrade, or
+    two people running different versions against one repository, and the
+    skill may be teaching a shape this binary cannot parse.
+    """
+    if stamp is None:
+        return Check("skill", True, "no planning skill installed, or none written by dispatchkit")
+    if stamp == __version__:
+        return Check("skill", True, f"planning skill written by this version ({__version__})")
+
+    current = at_least(stamp, __version__)
+    if current is None:
+        detail = f"the installed planning skill is stamped `{stamp}`, which is not a version"
+    elif current:
+        detail = f"the installed planning skill is from {stamp}, ahead of this tool ({__version__})"
+    else:
+        detail = f"the installed planning skill is from {stamp}, behind this tool ({__version__})"
+    return Check("skill", False, detail, "dispatchkit skill --install")
 
 
 def _config(facts: LocalFacts) -> Check:

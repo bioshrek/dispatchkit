@@ -60,6 +60,7 @@ from dispatchkit.recover import DispatcherBusy, hold_dispatcher
 from dispatchkit.resolve import admit, build_items, resolve
 from dispatchkit.retro import DEFAULT_FLOOR_MULTIPLE, retrospective
 from dispatchkit.retro import summarise as summarise_retro
+from dispatchkit.skill import DEFAULT_SKILL_PATH, installed_stamp, schema_text, skill_text
 from dispatchkit.tick import TickPlan, TickResult, execute_tick, plan_tick
 from dispatchkit.tick import summarise as summarise_tick
 from dispatchkit.validate import (
@@ -234,6 +235,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor_cmd.add_argument("--config", type=Path, default=None, help="scheduler config")
 
+    sub.add_parser("schema", help="print the task graph format reference")
+
+    skill_cmd = sub.add_parser(
+        "skill", help="print or install the planning skill for a coding agent"
+    )
+    # Printing is the default, and deliberately: the other half writes into
+    # somebody's working tree, and a command that can do that should say so.
+    skill_cmd.add_argument(
+        "--print", action="store_true", help="write the skill to stdout (the default)"
+    )
+    skill_cmd.add_argument(
+        "--install", action="store_true", help=f"write it to {DEFAULT_SKILL_PATH}"
+    )
+    skill_cmd.add_argument("--path", type=Path, help="install somewhere other than the default")
+    skill_cmd.add_argument("--root", type=Path, default=Path("."), help="repository root")
+
     init_cmd = sub.add_parser("init", help="create the labels, the config and the plans dir")
     init_cmd.add_argument("--root", type=Path, default=Path(), help="repository root")
     init_cmd.add_argument("--repo", help="owner/name; creates the labels too when given")
@@ -256,7 +273,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _resolve(args)
     if args.command == "retro":
         return _retro(args)
+    if args.command == "schema":
+        return _schema()
+    if args.command == "skill":
+        return _skill(args)
     return _validate(args)
+
+
+def _schema() -> int:
+    """The format reference, printed rather than linked.
+
+    An adopter has a wheel and not a checkout of this repository, so a link
+    into `docs/` is a link to nothing. Printing it also means the reference is
+    always whichever version is installed, which is the property that lets the
+    planning skill carry judgement and defer the grammar.
+    """
+    print(schema_text(), end="")
+    return EXIT_OK
+
+
+def _skill(args: argparse.Namespace) -> int:
+    text = skill_text()
+    if not args.install:
+        print(text, end="")
+        return EXIT_OK
+
+    target: Path = args.path if args.path is not None else args.root / DEFAULT_SKILL_PATH
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"could not write {target}: {exc}", file=sys.stderr)
+        return EXIT_UNREADABLE
+    print(f"wrote {target}")
+    return EXIT_OK
 
 
 def _validate(args: argparse.Namespace) -> int:
@@ -739,7 +789,23 @@ def _facts(args: argparse.Namespace) -> LocalFacts | int:
         plans_exists=plans.is_dir(),
         config=config,
         config_in_repo=_in_repo(config_path, root),
+        skill_stamp=_skill_stamp(root),
+        skill_exists=(root / DEFAULT_SKILL_PATH).exists(),
+        root=root,
     )
+
+
+def _skill_stamp(root: Path) -> str | None:
+    """The version that wrote the installed skill, if there is one to read.
+
+    Unreadable is treated as absent. A skill nobody can open is one `doctor`
+    has nothing to say about, and a permissions error on a documentation file
+    is not a reason to refuse to report on the fence.
+    """
+    try:
+        return installed_stamp((root / DEFAULT_SKILL_PATH).read_text(encoding="utf-8"))
+    except OSError:
+        return None
 
 
 def _in_repo(config_path: Path, root: Path) -> Path:

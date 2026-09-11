@@ -39,6 +39,7 @@ from typing import Protocol
 
 from dispatchkit.doctor import LocalFacts
 from dispatchkit.github import Notice, missing_labels
+from dispatchkit.skill import DEFAULT_SKILL_PATH, skill_text
 from dispatchkit.version import __version__
 
 
@@ -104,6 +105,18 @@ def plan_init(labels: Sequence[str], facts: LocalFacts) -> InitPlan:
         operations.append(MakeDirectory(facts.plans))
     if not facts.config_exists:
         operations.append(WriteFile(facts.config_path, config_template()))
+    # Unlike the config, this is rewritten when it falls behind: the skill is
+    # a copy of something that moves with the tool, and an adopter should not
+    # have to discover a second command to get the thing that teaches an agent
+    # to use the first one. Still idempotent -- a current stamp plans nothing.
+    #
+    # An existing file with no stamp is left alone. It is not ours, and the
+    # difference between "absent" and "somebody else's" is exactly what
+    # `skill_exists` is for.
+    if not facts.skill_exists or (
+        facts.skill_stamp is not None and facts.skill_stamp != __version__
+    ):
+        operations.append(WriteFile(facts.root / DEFAULT_SKILL_PATH, skill_text()))
 
     return InitPlan(tuple(operations), tuple(notices))
 

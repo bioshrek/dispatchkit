@@ -33,7 +33,7 @@ from dispatchkit.validate import validate_graph
 
 pytestmark = pytest.mark.unit
 
-SCHEMA = Path(__file__).resolve().parent.parent / "docs" / "schema.md"
+SCHEMA = Path(__file__).resolve().parent.parent / "src" / "dispatchkit" / "_docs" / "schema.md"
 
 
 def text() -> str:

@@ -36,6 +36,7 @@ from dispatchkit.init import (
     summarise,
 )
 from dispatchkit.model import Lane
+from dispatchkit.skill import DEFAULT_SKILL_PATH, installed_stamp
 
 pytestmark = pytest.mark.unit
 
@@ -60,13 +61,23 @@ class FakeRepository:
 
 
 def facts(root: Path) -> LocalFacts:
+    """Gathered from the tree, the way `cli._facts` does it.
+
+    Re-reading is the point: the convergence test applies a plan, gathers the
+    facts again and requires the second plan to be empty, which only means
+    anything if the gathering sees what the first pass wrote.
+    """
     config = root / ".github" / "dispatchkit.toml"
     plans = root / "docs" / "plans"
+    skill = root / DEFAULT_SKILL_PATH
     return LocalFacts(
         config_path=config,
         config_exists=config.exists(),
         plans=plans,
         plans_exists=plans.exists(),
+        skill_exists=skill.exists(),
+        skill_stamp=installed_stamp(skill.read_text(encoding="utf-8")) if skill.exists() else None,
+        root=root,
     )
 
 
@@ -84,7 +95,7 @@ class TestPlanning:
         written = {op.path.name for op in plan.operations if isinstance(op, WriteFile)}
         made = {op.path.name for op in plan.operations if isinstance(op, MakeDirectory)}
 
-        assert written == {"dispatchkit.toml"}
+        assert written == {"dispatchkit.toml", "SKILL.md"}
         assert made == {"plans"}
 
     def test_no_workflow_is_written_any_more(self, tmp_path: Path) -> None:
@@ -124,7 +135,7 @@ class TestExecution:
         result = execute_init(plan_init(api.fetch_labels(), facts(tmp_path)), api)
 
         assert result.labels == len(REQUIRED_LABELS)
-        assert result.files == 1
+        assert result.files == 2
         assert result.directories == 1
         assert (tmp_path / ".github" / "dispatchkit.toml").exists()
         assert (tmp_path / "docs" / "plans").is_dir()
