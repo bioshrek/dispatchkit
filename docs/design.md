@@ -3477,6 +3477,18 @@ acceptance commands in, where an agent's own dependency work can shadow or break
 supervising it. `uv tool install git+...@v0.3.0` avoids all three, and zero runtime dependencies
 makes the isolation free rather than a compromise.
 
+**The drift was worse than the design assumed.** `pyproject.toml` read `0.2.0`, so `version.py`
+was written as `0.3.0` -- and a `v0.3.0` tag already existed, cut for D7 against a tree whose
+`pyproject.toml` still said `0.2.0`. The README's install command was therefore pointing an
+adopter at D7. This is the deliverable's own thesis arriving as a bug: a version nobody could say
+is a version nobody keeps true, and the repository had been publishing tags that named releases
+its metadata had never heard of. The fix is 0.4.0 and a tag cut from the commit that declares it;
+the durable fix is that there is now only one place to change.
+
+Nothing guards the tag against the file, because a test cannot see tags -- an installed wheel has
+no git history, and shelling to `git` in a test would break the offline guarantee for a check that
+works only in a clone. It is a release step, not an invariant.
+
 **No index release, deliberately.** A tag installs today with no release workflow, no publishing
 credentials, no name to claim and no supply chain to defend. One adopter does not need an index to
 exist, and the question is better answered when there is a second one to answer it for.

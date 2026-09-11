@@ -49,7 +49,7 @@ pull request.
 ---
 
 For an agent or a person turning a piece of work into a `dispatchkit` plan. The key reference is
-[schema.md](schema.md); this page is the judgement that reference cannot encode.
+what `dispatchkit schema` prints; this page is the judgement that reference cannot encode.
 
 Your output is one `*.tasks.toml` file plus one Markdown brief per task. It must pass:
 
@@ -203,4 +203,4 @@ Depth 3 instead of 4, width 3 instead of 1. Same total work, and the middle rank
 - Every `acceptance` is a command you could paste into a terminal.
 - Every `verify = "auto"` is one you would be comfortable never reading.
 
-<!-- written by dispatchkit 0.3.0 -->
+<!-- written by dispatchkit 0.4.0 -->

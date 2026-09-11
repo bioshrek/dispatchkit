@@ -18,7 +18,7 @@ what everything else needs before it can decide whether it can trust anything.
 
 from __future__ import annotations
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 #: Major, minor, patch. A `NewType` would be the usual move here, but this is
 #: a comparison key and never crosses a boundary as a value.

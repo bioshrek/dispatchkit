@@ -25,7 +25,7 @@ live in `src/dispatchkit/_docs/` rather than `docs/`, because an adopter install
 a checkout — they are product. Verified from a built wheel in a clean environment with no source
 tree present.
 
-Install is `uv tool install git+https://github.com/bioshrek/dispatchkit@v0.3.0`. **Publishing to
+Install is `uv tool install git+https://github.com/bioshrek/dispatchkit@v0.4.0`. **Publishing to
 an index is deliberately out of scope** — a tag installs today with no release workflow, no
 credentials and no name to claim. Revisit when there is a second adopter.
 

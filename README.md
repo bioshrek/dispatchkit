@@ -48,7 +48,7 @@ dispatchkit watch    --repo o/n                       # the scheduler; Ctrl-C st
 Install it as a tool, not as a dependency:
 
 ```sh
-uv tool install git+https://github.com/bioshrek/dispatchkit@v0.3.0    # or pipx install
+uv tool install git+https://github.com/bioshrek/dispatchkit@v0.4.0    # or pipx install
 cd <your repo>
 gh auth login          # repo scope
 dispatchkit init       # labels, config, plans directory, planning skill
